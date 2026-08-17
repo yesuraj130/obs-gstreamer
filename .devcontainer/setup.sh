@@ -10,6 +10,8 @@ sudo apt-get update
 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
     build-essential \
     gcc \
+    gdb \
+    valgrind \
     git \
     pkg-config \
     meson \
@@ -32,6 +34,14 @@ sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
     tigervnc-tools \
     novnc \
     websockify
+
+echo
+echo "========================================"
+echo "Cleaning up package cache"
+echo "========================================"
+
+sudo apt-get clean
+sudo rm -rf /var/lib/apt/lists/*
 
 echo
 echo "========================================"
