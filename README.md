@@ -111,3 +111,40 @@ E.g.
 meson setup build --buildtype=release --prefix=/usr --libdir=lib/obs-plugins
 ```
 will install at `/usr/lib/obs-plugins`.
+
+
+## Codespace Development Environment
+
+This project includes a reproducible GitHub Codespaces development environment.
+
+### Build
+
+After creating or reopening a Codespace:
+
+    meson setup build --buildtype=release
+    ninja -C build
+    ninja -C build install
+
+### OBS GUI via noVNC
+
+Start the graphical XFCE desktop, TigerVNC, and noVNC:
+
+    ./start-vnc.sh
+
+Then open forwarded port 6080 in the GitHub Codespaces Ports panel and open `/vnc.html`.
+
+The VNC password is provided through the `VNC_PASSWORD` Codespaces secret and is never stored in this repository.
+
+### Fresh Codespace
+
+Development dependencies are installed automatically by:
+
+    .devcontainer/setup.sh
+
+Container configuration:
+
+    .devcontainer/devcontainer.json
+
+The plugin is installed to:
+
+    ~/.config/obs-studio/plugins/obs-gstreamer/bin/64bit/obs-gstreamer.so
