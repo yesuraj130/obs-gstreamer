@@ -6,7 +6,7 @@
         "ghcr.io/devcontainers/features/common-utils:2": {}
     },
     "postCreateCommand": "bash .devcontainer/setup.sh",
-    "postStartCommand": "bash .devcontainer/start-vnc.sh",
+    "postAttachCommand": "bash .devcontainer/start-vnc.sh",
     "customizations": {
         "vscode": {
             "extensions": [
