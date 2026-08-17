@@ -8,6 +8,20 @@ LOG_FILE="$HOME/.vnc/startup.log"
 
 mkdir -p "$HOME/.vnc"
 
+# Ensure TigerVNC has an XFCE startup script
+if [ ! -x "$HOME/.vnc/xstartup" ]; then
+    echo "Creating VNC xstartup script..."
+    cat > "$HOME/.vnc/xstartup" <<'EOF'
+#!/bin/sh
+unset SESSION_MANAGER
+unset DBUS_SESSION_BUS_ADDRESS
+exec startxfce4
+EOF
+    chmod +x "$HOME/.vnc/xstartup"
+else
+    echo "VNC xstartup script already exists"
+fi
+
 {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting VNC server"
 
