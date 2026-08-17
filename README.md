@@ -135,6 +135,22 @@ Then open forwarded port 6080 in the GitHub Codespaces Ports panel and open `/vn
 
 The VNC password is provided through the `VNC_PASSWORD` Codespaces secret and is never stored in this repository.
 
+### OBS GUI via noVNC and RealVNC via Tailscale
+
+After creating or rebuilding the Codespace, authenticate Tailscale:
+
+    sudo tailscale up
+
+### Restart VNC if necessary:
+
+    vncserver -kill :1 2>/dev/null || true
+    rm -f /tmp/.X1-lock /tmp/.X11-unix/X1
+    .devcontainer/start-vnc.sh
+
+### Restart VNC if necessary:
+
+    ss -ltn | grep 5901
+
 ### Fresh Codespace
 
 Development dependencies are installed automatically by:

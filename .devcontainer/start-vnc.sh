@@ -40,7 +40,7 @@ fi
         vncserver ":${DISPLAY_NUM}" \
             -geometry 1280x800 \
             -depth 24 \
-            -localhost yes
+            -localhost no
 
         # Verify vncserver started
         sleep 1

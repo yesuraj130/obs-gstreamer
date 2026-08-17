@@ -10,7 +10,6 @@
         "ghcr.io/tailscale/codespace/tailscale": {}
     },
     "postCreateCommand": "bash .devcontainer/setup.sh",
-    "postAttachCommand": "bash .devcontainer/start-vnc.sh",
     "customizations": {
         "vscode": {
             "extensions": [
