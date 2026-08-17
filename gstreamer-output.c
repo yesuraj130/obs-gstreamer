@@ -38,7 +38,7 @@ typedef struct {
 
 static gboolean bus_callback(GstBus *bus, GstMessage *message, gpointer user_data)
 {
-	obs_log(LOG_INFO, "bus_callback = called");
+	blog(LOG_INFO, "bus_callback = called");
 	data_t *data = user_data;
 
 	switch (GST_MESSAGE_TYPE(message)) {
@@ -46,7 +46,7 @@ static gboolean bus_callback(GstBus *bus, GstMessage *message, gpointer user_dat
 			GError *err;
 			gst_message_parse_error(message, &err, NULL);
 			const char *source_name = "obs_source_get_name(data->source)";
-			obs_log(LOG_ERROR, "[obs-gstreamer] %s: %s", source_name, err->message);
+			blog(LOG_ERROR, "[obs-gstreamer] %s: %s", source_name, err->message);
 			g_error_free(err);
 			break;
 		}
@@ -54,7 +54,7 @@ static gboolean bus_callback(GstBus *bus, GstMessage *message, gpointer user_dat
 			GError *err;
 			gst_message_parse_warning(message, &err, NULL);
 			const char *source_name = "obs_source_get_name(data->source)";
-			obs_log(LOG_WARNING, "[obs-gstreamer] %s: %s", source_name, err->message);
+			blog(LOG_WARNING, "[obs-gstreamer] %s: %s", source_name, err->message);
 			g_error_free(err);
 		} break;
 		default:
@@ -75,7 +75,7 @@ void *gstreamer_output_create(obs_data_t *settings, obs_output_t *output)
 
 	data->output = output;
 	data->settings = settings;
-	obs_log(LOG_INFO, "gstreamer_output_create = called");
+	blog(LOG_INFO, "gstreamer_output_create = called");
 	return data;
 }
 
@@ -98,17 +98,17 @@ void gstreamer_output_destroy(void *p)
 	//	data->audio = NULL;
 	//	data->pipe = NULL;
 
-	//	obs_log(LOG_INFO, "gstreamer_output_destroy = unreferenced");
+	//	blog(LOG_INFO, "gstreamer_output_destroy = unreferenced");
 	//}
 
 	g_free(data);
-	obs_log(LOG_INFO, "gstreamer_output_destroy = end");
+	blog(LOG_INFO, "gstreamer_output_destroy = end");
 }
 
 bool gstreamer_output_start(void *p)
 {
 
-	obs_log(LOG_INFO, "gstreamer_output_start = called");
+	blog(LOG_INFO, "gstreamer_output_start = called");
 	data_t *data = (data_t *)p;
 
 	struct obs_video_info ovi;
@@ -187,7 +187,7 @@ bool gstreamer_output_start(void *p)
 
 	if (err) {
 		
-		obs_log(LOG_ERROR, "gstreamer_output_start = gst_parse_launch error %s = %s", pipe_string, err->message);
+		blog(LOG_ERROR, "gstreamer_output_start = gst_parse_launch error %s = %s", pipe_string, err->message);
 		g_error_free(err);
 		g_free(data);
 		return NULL;
@@ -207,33 +207,33 @@ bool gstreamer_output_start(void *p)
 	gst_element_set_state(data->pipe, GST_STATE_PLAYING);
 
 	if (!obs_output_can_begin_data_capture(data->output, 0)) {
-		obs_log(LOG_INFO, "output obs_output_can_begin_data_capture = false");
+		blog(LOG_INFO, "output obs_output_can_begin_data_capture = false");
 		return false;
 	}
 	else if (!obs_output_initialize_encoders(data->output, 0)) {
-		obs_log(LOG_INFO, "output obs_output_initialize_encoders = true");
+		blog(LOG_INFO, "output obs_output_initialize_encoders = true");
 		return false;
 	} else {
-		obs_log(LOG_INFO, "output obs_output_can_begin_data_capture = true");
+		blog(LOG_INFO, "output obs_output_can_begin_data_capture = true");
 	}
 	obs_output_begin_data_capture(data->output, 0);
-	obs_log(LOG_INFO, "obs_output_begin_data_capture = end");
+	blog(LOG_INFO, "obs_output_begin_data_capture = end");
 
 	return true;
 }
 
 void gstreamer_output_stop(void *p, uint64_t ts)
 {
-	obs_log(LOG_INFO, "gstreamer_output_stop = called");
+	blog(LOG_INFO, "gstreamer_output_stop = called");
 	data_t *data = (data_t *)p;
 
 	obs_output_end_data_capture(data->output);
-	obs_log(LOG_INFO, "gstreamer_output_stop = obs_output_end_data_capture stopped");
+	blog(LOG_INFO, "gstreamer_output_stop = obs_output_end_data_capture stopped");
 
 	if (data->pipe) {
 		gst_app_src_end_of_stream(GST_APP_SRC(data->video));
 		//gst_app_src_end_of_stream(GST_APP_SRC(data->audio));
-		obs_log(LOG_INFO, "gstreamer_output_stop = gst_app_src_end_of_stream");
+		blog(LOG_INFO, "gstreamer_output_stop = gst_app_src_end_of_stream");
 		GstBus *bus = gst_element_get_bus(data->pipe);	
 		gst_bus_remove_watch(bus);
 		gst_object_unref(bus);
@@ -245,10 +245,10 @@ void gstreamer_output_stop(void *p, uint64_t ts)
 		gst_element_set_state(data->pipe, GST_STATE_NULL);
 		gst_object_unref(data->pipe);
 		data->pipe = NULL;
-		obs_log(LOG_INFO, "gstreamer_output_stop = unref complete");
+		blog(LOG_INFO, "gstreamer_output_stop = unref complete");
 	}
 
-	obs_log(LOG_INFO, "gstreamer_output_stop = end");
+	blog(LOG_INFO, "gstreamer_output_stop = end");
 }
 
 void gstreamer_output_encoded_packet(void *p, struct encoder_packet *packet)
@@ -267,7 +267,7 @@ void gstreamer_output_encoded_packet(void *p, struct encoder_packet *packet)
 
 	gst_app_src_push_buffer(GST_APP_SRC(appsrc), buffer);
 
-	//obs_log(LOG_INFO, "gstreamer_output_encoded_packet = complete");
+	//blog(LOG_INFO, "gstreamer_output_encoded_packet = complete");
 }
 
 void gstreamer_output_raw_video(void *p, struct video_data *frame)
@@ -280,7 +280,7 @@ void gstreamer_output_raw_video(void *p, struct video_data *frame)
 	//GST_BUFFER_PTS(buffer) = frame->timestamp;
 
 	gst_app_src_push_buffer(GST_APP_SRC(data->video), buffer);
-	//obs_log(LOG_INFO, "gstreamer_output_raw_video");
+	//blog(LOG_INFO, "gstreamer_output_raw_video");
 }
 
 void gstreamer_output_raw_audio(void *p, struct audio_data *frame)

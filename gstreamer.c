@@ -38,7 +38,7 @@ extern obs_properties_t *gstreamer_output_get_properties(void *data);
 
 bool obs_module_load(void)
 {
-	obs_log(LOG_INFO, "plugin loaded successfully (version %s)", PLUGIN_VERSION);
+	blog(LOG_INFO, "plugin loaded successfully (version %s)", PLUGIN_VERSION);
 
 	struct obs_output_info output_info = {
 		.id = "hjm-gstreamer-output",
@@ -68,5 +68,5 @@ bool obs_module_load(void)
 
 void obs_module_unload(void)
 {
-	obs_log(LOG_INFO, "plugin unloaded");
+	blog(LOG_INFO, "plugin unloaded");
 }
