@@ -1,33 +1,7 @@
 {
-    "name": "OBS GStreamer Dev",
-    "remoteUser": "vscode",
-    "runArgs": [
-        "--device=/dev/net/tun",
-        "--cap-add=NET_ADMIN"
-    ],
-    "features": {
-        "ghcr.io/devcontainers/features/desktop-lite:1": { "version": "latest" },
-        
-        "ghcr.io/tailscale/codespace/tailscale": { "tailscaleAuthKey": "${localEnv:TAILSCALE_AUTH_KEY}" }
-    },
-    
-    "postCreateCommand": [
-        "bash", "-c",
-        "mkdir -p ~/.vnc && echo \"$VNC_PASSWORD\" | vncpasswd -f > ~/.vnc/passwd && chmod 600 ~/.vnc/passwd && sudo apt-get update && sudo apt-get install -y build-essential cmake git libobs-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgstreamer-plugins-bad1.0-dev"
-    ],
-    "postStartCommand": "sudo mkdir -p /workspaces/.tailscale && sudo tailscale up --state=/workspaces/.tailscale/tailscaled.state --accept-routes=false",
-    "customizations": {
-        "vscode": {
-            "extensions": [
-                "ms-vscode.cpptools",
-                "ms-vscode.cmake-tools",
-                "mesonbuild.mesonbuild",
-                "bbenoist.Meson"
-            ],
-            "settings": {
-                "C_Cpp.default.compilerPath": "/usr/bin/gcc",
-                "editor.formatOnSave": true
-            }
-        }
-    }
+  "image": "://microsoft.com",
+  "features": {
+    "ghcr.io/devcontainers/features/desktop-vnc:1": {}
+  },
+  "forwardPorts": [6080]
 }
