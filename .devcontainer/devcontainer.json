@@ -6,7 +6,7 @@
         "--cap-add=NET_ADMIN"
     ],
     "features": {
-        "ghcr.io/devcontainers/features/desktop-vnc:1": { "version": "latest" },
+        "ghcr.io/devcontainers/features/desktop-lite:1": { "version": "latest" },
         "ghcr.io/devcontainers/features/chrome-browser:1": { "version": "latest" },
         "ghcr.io/tailscale/codespace/tailscale": { "tailscaleAuthKey": "${localEnv:TAILSCALE_AUTH_KEY}" }
     },
