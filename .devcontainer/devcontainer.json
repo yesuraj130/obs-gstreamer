@@ -2,8 +2,12 @@
     "name": "OBS GStreamer Dev",
     "image": "mcr.microsoft.com/devcontainers/base:ubuntu-24.04",
     "remoteUser": "vscode",
+    "runArgs": [
+        "--device=/dev/net/tun"
+    ],
     "features": {
-        "ghcr.io/devcontainers/features/common-utils:2": {}
+        "ghcr.io/devcontainers/features/common-utils:2": {},
+        "ghcr.io/tailscale/codespace/tailscale": {}
     },
     "postCreateCommand": "bash .devcontainer/setup.sh",
     "postAttachCommand": "bash .devcontainer/start-vnc.sh",
