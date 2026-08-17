@@ -129,7 +129,7 @@ After creating or reopening a Codespace:
 
 Start the graphical XFCE desktop, TigerVNC, and noVNC:
 
-    ./start-vnc.sh
+    .devcontainer/start-vnc.sh
 
 Then open forwarded port 6080 in the GitHub Codespaces Ports panel and open `/vnc.html`.
 
