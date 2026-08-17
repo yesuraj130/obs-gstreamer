@@ -6,6 +6,7 @@
         "ghcr.io/devcontainers/features/common-utils:2": {}
     },
     "postCreateCommand": "bash .devcontainer/setup.sh",
+    "postStartCommand": "bash .devcontainer/start-vnc.sh",
     "customizations": {
         "vscode": {
             "extensions": [
@@ -16,8 +17,7 @@
             ],
             "settings": {
                 "C_Cpp.default.compilerPath": "/usr/bin/gcc",
-                "editor.formatOnSave": true,
-                "editor.defaultFormatter": "ms-vscode.cpptools"
+                "editor.formatOnSave": true
             }
         }
     }
