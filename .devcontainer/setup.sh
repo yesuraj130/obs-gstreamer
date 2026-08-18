@@ -1,55 +1,32 @@
 #!/usr/bin/env bash
-set -e
+set -Eeuo pipefail
 
-echo "========================================"
-echo "Installing OBS/GStreamer environment"
-echo "========================================"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+export DEBIAN_FRONTEND=noninteractive
+export DEBIAN_PRIORITY=critical
+export LANGUAGE=C.UTF-8
+export LC_ALL=C.UTF-8
 
 sudo apt-get update
 
-sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
-    build-essential \
-    gcc \
-    gdb \
-    valgrind \
-    git \
-    pkg-config \
-    meson \
-    ninja-build \
-    libglib2.0-dev \
-    libobs-dev \
-    obs-studio \
-    gstreamer1.0-tools \
-    libgstreamer1.0-dev \
-    libgstreamer-plugins-base1.0-dev \
-    gstreamer1.0-plugins-base \
-    gstreamer1.0-plugins-good \
-    gstreamer1.0-x \
-    gstreamer1.0-gl \
-    xfce4 \
-    xfce4-terminal \
-    dbus-x11 \
-    dbus-user-session \
-    tigervnc-standalone-server \
-    tigervnc-tools \
-    novnc \
-    websockify
+for script in \
+    "$SCRIPT_DIR/setup/obs.sh" \
+    "$SCRIPT_DIR/setup/gstreamer.sh" \
+    "$SCRIPT_DIR/setup/novnc.sh" \
+    "$SCRIPT_DIR/setup/tigervnc.sh" \
+    "$SCRIPT_DIR/setup/tailscale.sh" \
+    "$SCRIPT_DIR/setup/browser.sh"
+do
+    echo "========================================"
+    echo "Running ${script##*/}"
+    echo "========================================"
+    bash "$script"
+done
 
 echo
 echo "========================================"
-echo "Cleaning up package cache"
+echo "One-time environment setup complete"
 echo "========================================"
 
-sudo apt-get clean
-sudo rm -rf /var/lib/apt/lists/*
-
-echo
-echo "========================================"
-echo "Environment installed"
-echo "========================================"
-
-gcc --version | head -1
-meson --version
-ninja --version
-gst-launch-1.0 --version | head -1
-obs --version || true
+echo "Run .devcontainer/start.sh after each codespace reconnect or restart."
