@@ -1,14 +1,5 @@
 {
-  "name": "Minimal GUI (Fluxbox)",
-  "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
   "features": {
-    "ghcr.io/devcontainers/features/desktop-lite:1": {}
-  },
-  "forwardPorts": [6080, 5901],
-  "portsAttributes": {
-    "6080": {
-      "label": "Fluxbox Web Desktop",
-      "onAutoForward": "openBrowser"
-    }
+    "ghcr.io/bascodes/devcontainer-features/desktop-novnc:0": {}
   }
 }
