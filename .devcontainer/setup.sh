@@ -16,7 +16,8 @@ for script in \
     "$SCRIPT_DIR/setup/novnc.sh" \
     "$SCRIPT_DIR/setup/tigervnc.sh" \
     "$SCRIPT_DIR/setup/tailscale.sh" \
-    "$SCRIPT_DIR/setup/browser.sh"
+    "$SCRIPT_DIR/setup/browser.sh" \
+    "$SCRIPT_DIR/setup/clear-cache.sh"
 do
     echo "========================================"
     echo "Running ${script##*/}"
