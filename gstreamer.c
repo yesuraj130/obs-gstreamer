@@ -36,6 +36,9 @@ extern void gstreamer_output_raw_audio(void *data, struct audio_data *frame);
 extern void gstreamer_output_get_defaults(obs_data_t *settings);
 extern obs_properties_t *gstreamer_output_get_properties(void *data);
 
+extern void gstreamer_dock_register(void);
+extern void gstreamer_dock_unregister(void);
+
 bool obs_module_load(void)
 {
 	blog(LOG_INFO, "plugin loaded successfully (version %s)", PLUGIN_VERSION);
@@ -60,6 +63,7 @@ bool obs_module_load(void)
 	};
 
 	obs_register_output(&output_info);
+	gstreamer_dock_register();
 
 	gst_init(NULL, NULL);
 
@@ -68,5 +72,6 @@ bool obs_module_load(void)
 
 void obs_module_unload(void)
 {
+	gstreamer_dock_unregister();
 	blog(LOG_INFO, "plugin unloaded");
 }

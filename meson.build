@@ -18,7 +18,7 @@
 # along with obs-gstreamer. If not, see <http://www.gnu.org/licenses/>.
 #
 
-project('obs-gstreamer', 'c',
+project('obs-gstreamer', ['c', 'cpp'],
   default_options : [
     'prefix=~/.config/obs-studio/plugins/obs-gstreamer/bin/64bit',
     'libdir='
@@ -30,9 +30,18 @@ if not obs_dep.found()
   obs_dep = meson.get_compiler('c').find_library('obs', has_headers : 'obs/obs.h')
 endif
 
+obs_frontend_dep = meson.get_compiler('cpp').find_library('obs-frontend-api', has_headers : 'obs/obs-frontend-api.h')
+
 name_suffix = []
 if host_machine.system() == 'darwin'
   name_suffix = 'so'
+endif
+
+qt6 = import('qt6', required : false)
+qt_dep = dependency('qt6', modules : ['Widgets'], required : false)
+if not qt_dep.found()
+  qt5 = import('qt5')
+  qt_dep = dependency('qt5', modules : ['Widgets'])
 endif
 
 shared_library('obs-gstreamer',
@@ -41,6 +50,7 @@ shared_library('obs-gstreamer',
   'gstreamer-encoder.c',
   'gstreamer-filter.c',
   'gstreamer-output.c',
+  'gstreamer-dock.cpp',
   vcs_tag(
     command : ['git', 'rev-parse', '--short', 'HEAD'],
     input : 'version.c.in',
@@ -50,11 +60,14 @@ shared_library('obs-gstreamer',
   name_suffix : name_suffix,
   dependencies : [
     obs_dep,
+    obs_frontend_dep,
+    qt_dep,
     dependency('gstreamer-1.0', version : '>=1.16.0'),
     dependency('gstreamer-video-1.0'),
     dependency('gstreamer-audio-1.0'),
     dependency('gstreamer-app-1.0'),
     dependency('gstreamer-net-1.0'),
+    dependency('gstreamer-rtsp-server-1.0'),
   ],
   install : true,
 )
