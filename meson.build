@@ -68,6 +68,8 @@ shared_library('obs-gstreamer',
     dependency('gstreamer-app-1.0'),
     dependency('gstreamer-net-1.0'),
     dependency('gstreamer-rtsp-server-1.0'),
+    dependency('gstreamer-webrtc-1.0'),
+    dependency('gstreamer-sdp-1.0'),
   ],
   install : true,
 )

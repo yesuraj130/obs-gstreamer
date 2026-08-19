@@ -21,6 +21,8 @@ struct gstreamer_dock_state {
 	QCheckBox *rtsp_server = nullptr;
 	QLineEdit *rtsp_mount = nullptr;
 	QLineEdit *rtsp_service = nullptr;
+	QCheckBox *webrtc_output = nullptr;
+	QLineEdit *webrtc_signaling_url = nullptr;
 	QLineEdit *pipeline = nullptr;
 	QPushButton *start = nullptr;
 	QPushButton *stop = nullptr;
@@ -128,6 +130,9 @@ static void start_button_clicked(gstreamer_dock_state *state)
 		state->rtsp_mount->text().toUtf8().constData());
 	obs_data_set_string(settings, "rtsp_service",
 		state->rtsp_service->text().toUtf8().constData());
+	obs_data_set_bool(settings, "webrtc_output", state->webrtc_output->isChecked());
+	obs_data_set_string(settings, "webrtc_signaling_url",
+		state->webrtc_signaling_url->text().toUtf8().constData());
 	obs_data_set_string(settings, "pipeline",
 		state->pipeline->text().toUtf8().constData());
 
@@ -209,9 +214,13 @@ static QWidget *create_gstreamer_dock_widget(void)
 	form->setContentsMargins(0, 0, 0, 0);
 	state->rtsp_mount = new QLineEdit("/live");
 	state->rtsp_service = new QLineEdit("8554");
+	state->webrtc_output = new QCheckBox("Start WebRTC output");
+	state->webrtc_signaling_url = new QLineEdit("ws://127.0.0.1:8443");
 	state->pipeline = new QLineEdit("autovideosink sync=false");
 	form->addRow("RTSP mount", state->rtsp_mount);
 	form->addRow("RTSP service", state->rtsp_service);
+	layout->addWidget(state->webrtc_output);
+	form->addRow("WebRTC Signaling URL", state->webrtc_signaling_url);
 	form->addRow("Pipeline", state->pipeline);
 	layout->addLayout(form);
 

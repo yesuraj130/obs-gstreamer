@@ -35,6 +35,8 @@ typedef struct {
 	GstRTSPMediaFactory *factory;
 	char *mount_point;
 	bool rtsp_server;
+	bool webrtc_output;
+	char *signaling_url;
 	//GstElement *audio;
 	gsize buffer_size;
 	obs_output_t *output;
@@ -91,24 +93,41 @@ static gsize obs_video_format_buffer_size(enum video_format format, int width, i
 	}
 }
 
+static gboolean bus_callback(GstBus *bus, GstMessage *message, gpointer user_data);
+
+static void client_connected_cb(GstRTSPServer *server, GstRTSPClient *client, gpointer user_data)
+{
+	blog(LOG_INFO, "[obs-gstreamer] RTSP client connected");
+}
+
 static void media_configure_cb(GstRTSPMediaFactory *factory, GstRTSPMedia *media, gpointer user_data)
 {
 	data_t *data = user_data;
 	GstElement *element = gst_rtsp_media_get_element(media);
 	GstElement *appsrc = gst_bin_get_by_name(GST_BIN(element), "appsrc_video");
+	GstBus *bus = gst_element_get_bus(element);
 
 	if (!appsrc) {
 		blog(LOG_WARNING, "[obs-gstreamer] rtsp media has no appsrc_video");
+		gst_object_unref(bus);
+		gst_object_unref(element);
 		return;
 	}
 
-	if (data->video) {
+	if (data->video)
 		gst_object_unref(data->video);
-	}
 
 	data->video = appsrc;
-	g_object_ref(data->video);
+	gst_bus_add_watch(bus, bus_callback, data);
+	gst_object_unref(bus);
+	gst_app_src_set_stream_type(GST_APP_SRC(data->video), GST_APP_STREAM_TYPE_STREAM);
 	blog(LOG_INFO, "[obs-gstreamer] RTSP media configured, appsrc ready for scene output");
+
+	if (gst_element_set_state(element, GST_STATE_PLAYING) == GST_STATE_CHANGE_FAILURE) {
+		blog(LOG_ERROR, "[obs-gstreamer] RTSP media pipeline failed to enter PLAYING");
+	}
+
+	gst_object_unref(element);
 }
 
 static gboolean bus_callback(GstBus *bus, GstMessage *message, gpointer user_data)
@@ -198,6 +217,7 @@ bool gstreamer_output_start(void *p)
 
 	obs_get_video_info(&data->ovi);
 	data->rtsp_server = obs_data_get_bool(data->settings, "rtsp_server");
+	data->webrtc_output = obs_data_get_bool(data->settings, "webrtc_output");
 	const char *gst_format = obs_video_format_to_gst_format(data->ovi.output_format);
 	if (!gst_format) {
 		blog(LOG_ERROR, "unhandled output format: %d", data->ovi.output_format);
@@ -210,7 +230,7 @@ bool gstreamer_output_start(void *p)
 		const char *mount = obs_data_get_string(data->settings, "rtsp_mount");
 		const char *service = obs_data_get_string(data->settings, "rtsp_service");
 		char *launch = g_strdup_printf(
-			"( appsrc name=appsrc_video is-live=true format=GST_FORMAT_TIME do-timestamp=true block=true ! queue ! video/x-raw, format=%s, width=%d, height=%d, framerate=%d/%d ! videoconvert ! x264enc tune=zerolatency speed-preset=veryfast bitrate=3000 key-int-max=30 ! rtph264pay name=pay0 pt=96 )",
+			"( appsrc name=appsrc_video is-live=true format=GST_FORMAT_TIME do-timestamp=true block=true ! queue ! video/x-raw, format=%s, width=%d, height=%d, framerate=%d/%d ! videoconvert ! x264enc tune=zerolatency speed-preset=veryfast bitrate=3000 key-int-max=30 ! video/x-h264, stream-format=byte-stream, alignment=au ! h264parse ! rtph264pay name=pay0 pt=96 )",
 			gst_format, data->ovi.output_width, data->ovi.output_height,
 			data->ovi.fps_num, data->ovi.fps_den);
 
@@ -222,11 +242,42 @@ bool gstreamer_output_start(void *p)
 		data->factory = gst_rtsp_media_factory_new();
 		gst_rtsp_media_factory_set_shared(data->factory, TRUE);
 		gst_rtsp_media_factory_set_launch(data->factory, launch);
+		g_signal_connect(data->server, "client-connected", G_CALLBACK(client_connected_cb), data);
 		g_signal_connect(data->factory, "media-configure", G_CALLBACK(media_configure_cb), data);
 		gst_rtsp_mount_points_add_factory(data->mounts, data->mount_point, data->factory);
 		gst_rtsp_server_attach(data->server, NULL);
+		gst_rtsp_server_set_service(data->server, service);
 		g_free(launch);
 		blog(LOG_INFO, "[obs-gstreamer] RTSP server started at rtsp://127.0.0.1:%s%s", gst_rtsp_server_get_service(data->server), data->mount_point);
+	} else if (data->webrtc_output) {
+		const char *signaling_url = obs_data_get_string(data->settings, "webrtc_signaling_url");
+		char *pipe_string = g_strdup_printf(
+			"appsrc name=appsrc_video is-live=true format=GST_FORMAT_TIME do-timestamp=true ! queue ! video/x-raw, format=%s, width=%d, height=%d, framerate=%d/%d ! videoconvert ! x264enc tune=zerolatency speed-preset=veryfast bitrate=3000 key-int-max=30 ! video/x-h264, stream-format=byte-stream, alignment=au ! h264parse ! rtph264pay name=pay0 pt=96 ! rtpbin name=rtpbin ! webrtcbin name=wbin stun-server=stun://stun.l.google.com:19302",
+			gst_format, data->ovi.output_width, data->ovi.output_height,
+			data->ovi.fps_num, data->ovi.fps_den);
+
+		GError *err = NULL;
+		data->pipe = gst_parse_launch(pipe_string, &err);
+		g_free(pipe_string);
+
+		if (err) {
+			blog(LOG_ERROR, "gstreamer_output_start = WebRTC gst_parse_launch error: %s", err->message);
+			g_error_free(err);
+			return false;
+		}
+
+		data->video = gst_bin_get_by_name(GST_BIN(data->pipe), "appsrc_video");
+		if (!data->video) {
+			blog(LOG_ERROR, "gstreamer_output_start = appsrc_video element not found in WebRTC pipeline");
+			gst_object_unref(data->pipe);
+			data->pipe = NULL;
+			return false;
+		}
+		GstBus *bus = gst_element_get_bus(data->pipe);
+		gst_bus_add_watch(bus, bus_callback, data);
+		gst_object_unref(bus);
+		gst_element_set_state(data->pipe, GST_STATE_PLAYING);
+		blog(LOG_INFO, "[obs-gstreamer] WebRTC output started with signaling server %s", signaling_url && signaling_url[0] ? signaling_url : "ws://127.0.0.1:8443");
 	} else {
 		GError *err = NULL;
 		char *pipe_string = g_strdup_printf(
@@ -337,13 +388,17 @@ void gstreamer_output_encoded_packet(void *p, struct encoder_packet *packet)
 void gstreamer_output_raw_video(void *p, struct video_data *frame)
 {
 	data_t *data = (data_t *)p;
+	if (!data->video)
+		return;
 
 	GstBuffer *buffer = gst_buffer_new_wrapped_full(0, frame->data[0], data->buffer_size, 0, data->buffer_size, NULL, NULL);
 	gst_buffer_fill(buffer, 0, frame->data[0], data->buffer_size);
 
 	//GST_BUFFER_PTS(buffer) = frame->timestamp;
 
-	gst_app_src_push_buffer(GST_APP_SRC(data->video), buffer);
+	GstFlowReturn result = gst_app_src_push_buffer(GST_APP_SRC(data->video), buffer);
+	if (result != GST_FLOW_OK && result != GST_FLOW_FLUSHING)
+		blog(LOG_WARNING, "[obs-gstreamer] RTSP appsrc push failed: %s", gst_flow_get_name(result));
 	//blog(LOG_INFO, "gstreamer_output_raw_video");
 }
 
@@ -370,6 +425,8 @@ void gstreamer_output_get_defaults(obs_data_t *settings)
 	obs_data_set_default_bool(settings, "rtsp_server", false);
 	obs_data_set_default_string(settings, "rtsp_mount", "/live");
 	obs_data_set_default_string(settings, "rtsp_service", "8554");
+	obs_data_set_default_bool(settings, "webrtc_output", false);
+	obs_data_set_default_string(settings, "webrtc_signaling_url", "ws://127.0.0.1:8443");
 }
 
 obs_properties_t *gstreamer_output_get_properties(void *data)
@@ -386,8 +443,15 @@ obs_properties_t *gstreamer_output_get_properties(void *data)
 	obs_property_t *service = obs_properties_add_text(props, "rtsp_service", "RTSP service", OBS_TEXT_DEFAULT);
 	obs_property_set_long_description(service, "RTSP port or service name such as 8554");
 
+	obs_property_t *webrtc_enabled = obs_properties_add_bool(props, "webrtc_output", "Start WebRTC output");
+	obs_property_set_long_description(webrtc_enabled,
+		"Stream OBS scene output via WebRTC using webrtcbin.");
+
+	obs_property_t *signaling = obs_properties_add_text(props, "webrtc_signaling_url", "WebRTC signaling URL", OBS_TEXT_DEFAULT);
+	obs_property_set_long_description(signaling, "WebSocket signaling server URL such as ws://127.0.0.1:8443");
+
 	obs_property_t *prop = obs_properties_add_text(props, "pipeline", "Pipeline", OBS_TEXT_MULTILINE);
-	obs_property_set_long_description(prop, "pipeline for gstreamer-output. This is ignored when RTSP server mode is enabled.");
+	obs_property_set_long_description(prop, "pipeline for gstreamer-output. This is ignored when RTSP server or WebRTC output mode is enabled.");
 	obs_property_set_description(prop, "Pipeline");
 	return props;
 }
