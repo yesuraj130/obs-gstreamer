@@ -229,8 +229,9 @@ bool gstreamer_output_start(void *p)
 	if (data->rtsp_server) {
 		const char *mount = obs_data_get_string(data->settings, "rtsp_mount");
 		const char *service = obs_data_get_string(data->settings, "rtsp_service");
+		const char *pipeline = obs_data_get_string(data->settings, "rtsp_pipeline");
 		char *launch = g_strdup_printf(
-			"( appsrc name=appsrc_video is-live=true format=GST_FORMAT_TIME do-timestamp=true block=true ! queue ! video/x-raw, format=%s, width=%d, height=%d, framerate=%d/%d ! videoconvert ! x264enc tune=zerolatency speed-preset=veryfast bitrate=3000 key-int-max=30 ! video/x-h264, stream-format=byte-stream, alignment=au ! h264parse ! rtph264pay name=pay0 pt=96 )",
+			pipeline && pipeline[0] ? pipeline : "( appsrc name=appsrc_video is-live=true format=GST_FORMAT_TIME do-timestamp=true block=true ! queue ! video/x-raw, format=%s, width=%d, height=%d, framerate=%d/%d ! videoconvert ! x264enc tune=zerolatency speed-preset=veryfast bitrate=3000 key-int-max=30 ! video/x-h264, stream-format=byte-stream, alignment=au ! h264parse ! rtph264pay name=pay0 pt=96 )",
 			gst_format, data->ovi.output_width, data->ovi.output_height,
 			data->ovi.fps_num, data->ovi.fps_den);
 
@@ -425,6 +426,7 @@ void gstreamer_output_get_defaults(obs_data_t *settings)
 	obs_data_set_default_bool(settings, "rtsp_server", false);
 	obs_data_set_default_string(settings, "rtsp_mount", "/live");
 	obs_data_set_default_string(settings, "rtsp_service", "8554");
+	obs_data_set_default_string(settings, "rtsp_pipeline", "( appsrc name=appsrc_video is-live=true format=GST_FORMAT_TIME do-timestamp=true block=true ! queue ! video/x-raw, format=%s, width=%d, height=%d, framerate=%d/%d ! videoconvert ! x264enc tune=zerolatency speed-preset=veryfast bitrate=3000 key-int-max=30 ! video/x-h264, stream-format=byte-stream, alignment=au ! h264parse ! rtph264pay name=pay0 pt=96 )");
 	obs_data_set_default_bool(settings, "webrtc_output", false);
 	obs_data_set_default_string(settings, "webrtc_signaling_url", "ws://127.0.0.1:8443");
 }
@@ -442,6 +444,8 @@ obs_properties_t *gstreamer_output_get_properties(void *data)
 
 	obs_property_t *service = obs_properties_add_text(props, "rtsp_service", "RTSP service", OBS_TEXT_DEFAULT);
 	obs_property_set_long_description(service, "RTSP port or service name such as 8554");
+	obs_property_t *rtsp_pipeline = obs_properties_add_text(props, "rtsp_pipeline", "RTSP pipeline", OBS_TEXT_MULTILINE);
+	obs_property_set_long_description(rtsp_pipeline, "RTSP media-factory pipeline. Keep appsrc named appsrc_video and the RTP payloader named pay0.");
 
 	obs_property_t *webrtc_enabled = obs_properties_add_bool(props, "webrtc_output", "Start WebRTC output");
 	obs_property_set_long_description(webrtc_enabled,
