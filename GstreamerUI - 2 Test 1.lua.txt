@@ -1,0 +1,95 @@
+obs = obslua
+local cur_settings
+local output
+local virtualCamView
+local virtualCamVideo
+
+function script_description()
+    return "Used to modify gstreamer pipeline"
+end
+
+function button()
+print("button")
+  obs.obs_output_stop(output);
+  output = obs.obs_output_create("hjm-gstreamer-output", "output-test", cur_settings, NULL)
+  
+  local source = get_named_scene("TV")
+  
+  if source == nil then
+    print("null")
+	return
+  end
+  
+  obs.obs_frontend_remove_event_callback(on_frontend_event) 
+		
+  
+  virtualCamView = obs.obs_view_create()
+  obs.obs_view_set_source(virtualCamView, 0, source);
+  virtualCamVideo = obs.obs_view_add(virtualCamView);
+  obs.obs_output_set_media(output, virtualCamVideo, obs.obs_get_audio())
+  obs.obs_output_start(output);
+return nil
+end
+
+function get_named_scene(scene_name)
+    local scenes = obs.obs_frontend_get_scenes() -- Get a list of all scenes
+    if scenes == nil then
+	print("obs_frontend_get_scenes null")
+        return nil
+    end
+
+    local target_scene = nil
+    for _, scene_source in ipairs(scenes) do
+        local current_scene_name = obs.obs_source_get_name(scene_source)
+			print(current_scene_name)
+			
+        if current_scene_name == scene_name then
+            target_scene = scene_source
+            break
+        end
+    end
+	
+    if target_scene == nil then
+	print("target_scene null")
+			end
+
+    obs.source_list_release(scenes) -- Release the scene list after use
+    return target_scene
+end
+
+function button2()
+  obs.obs_output_stop(output);
+return nil
+end
+
+function script_properties()
+  local properties = obs.obs_properties_create()
+  local textbox= obs.obs_properties_add_text (properties, "pipeline", "Pipeline", obs.OBS_TEXT_MULTILINE);
+  textbox= obs.obs_properties_add_text (properties, "appsrc_video", "Video Appsrc", obs.OBS_TEXT_MULTILINE);
+  local button = obs.obs_properties_add_button (properties, "new_button", "Start Pipeline", button)
+  local button2 = obs.obs_properties_add_button (properties, "new_button2", "Stop Pipeline", button2)
+return properties
+end
+
+function script_defaults(settings)
+    obs.obs_data_set_default_string(settings, "pipeline", "autovideosink sync=false")
+	obs.obs_data_set_default_string(settings, "appsrc_video", "appsrc name=appsrc_video format=GST_FORMAT_TIME do-timestamp=true")
+end
+
+function script_load(settings)
+	cur_settings = settings
+	obs.obs_frontend_add_event_callback(on_frontend_event)
+    button()
+end
+
+function on_frontend_event(event)
+    if event == obs.OBS_FRONTEND_EVENT_FINISHED_LOADING then
+		obs.obs_frontend_remove_event_callback(on_frontend_event) 
+		print("obs.OBS_FRONTEND_EVENT_FINISHED_LOADING")
+		button()
+	end
+end
+
+function script_update(settings)
+    cur_settings = settings
+end

@@ -1,0 +1,44 @@
+obs = obslua
+local cur_settings
+local output
+
+function script_description()
+    return "Used to modify gstreamer pipeline"
+end
+
+function button()
+  obs.obs_output_stop(output);
+  output = obs.obs_output_create("hjm-gstreamer-output", "output-test", cur_settings, NULL)
+  obs.obs_output_set_media(output, obs.obs_get_video(), obs.obs_get_audio());
+  obs.obs_output_start(output);
+return nil
+end
+
+function button2()
+  obs.obs_output_stop(output);
+return nil
+end
+
+function script_properties()
+  local properties = obs.obs_properties_create()
+  local textbox= obs.obs_properties_add_text (properties, "pipeline", "Pipeline", obs.OBS_TEXT_MULTILINE);
+  textbox= obs.obs_properties_add_text (properties, "appsrc_video", "Video Appsrc", obs.OBS_TEXT_MULTILINE);
+  local button = obs.obs_properties_add_button (properties, "new_button", "Start Pipeline", button)
+  local button2 = obs.obs_properties_add_button (properties, "new_button2", "Stop Pipeline", button2)
+return properties
+end
+
+function script_defaults(settings)
+    obs.obs_data_set_default_string(settings, "pipeline", "amfh264enc preset=speed bitrate=6000 rate-control=vbr usage=low-latency ! video/x-h264, profile=main, stream-format=avc ! gdppay crc-header=false ! tcpserversink host=192.168.0.103 port=5001 sync=false async=true burst-format=GST_FORMAT_TIME")
+	obs.obs_data_set_default_string(settings, "appsrc_video", "appsrc name=appsrc_video format=GST_FORMAT_TIME do-timestamp=true is-live=true")
+end
+
+function script_load(settings)
+  --output = obs.obs_output_create("hjm-gstreamer-output", "output-test", cur_settings, NULL)
+  --obs.obs_output_set_media(output, obs.obs_get_video(), obs.obs_get_audio());
+  --obs.obs_output_start(output);
+end
+
+function script_update(settings)
+    cur_settings = settings
+end
