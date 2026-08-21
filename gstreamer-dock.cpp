@@ -5,6 +5,9 @@
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QStringList>
 #include <QFormLayout>
 #include <QHBoxLayout>
 #include <QIcon>
@@ -42,11 +45,11 @@ struct gstreamer_output_config {
 struct gstreamer_dock_state {
 	QWidget *widget = nullptr;
 	QListWidget *outputs = nullptr;
-	QPushButton *add = nullptr;
-	QPushButton *edit = nullptr;
-	QPushButton *remove = nullptr;
-	QPushButton *move_up = nullptr;
-	QPushButton *move_down = nullptr;
+	QToolButton *add = nullptr;
+	QToolButton *edit = nullptr;
+	QToolButton *remove = nullptr;
+	QToolButton *move_up = nullptr;
+	QToolButton *move_down = nullptr;
 	std::vector<gstreamer_output_config> configurations;
 };
 
@@ -77,7 +80,7 @@ static QStringList source_names(void)
 static QStringList scene_names(void)
 {
 	QStringList names;
-	obs_enum_scenes([](void *data, obs_source_t *scene) -> bool {
+		obs_enum_scenes([](void *data, obs_source_t *scene) -> bool {
 		QStringList *result = static_cast<QStringList *>(data);
 		const char *name = obs_source_get_name(scene);
 		if (name && *name)
@@ -85,6 +88,33 @@ static QStringList scene_names(void)
 		return true;
 	}, &names);
 	return names;
+}
+
+static QIcon obs_theme_icon(const QString &name)
+{
+	const char *theme = obs_frontend_is_theme_dark() ? "Dark" : "Light";
+	const QString rel = QString("themes/%1/%2.svg").arg(theme, name);
+	char *path = obs_find_data_file(rel.toUtf8().constData());
+	if (path) {
+		QIcon icon(QString::fromUtf8(path));
+		bfree(path);
+		return icon;
+	}
+	const QStringList roots = {
+		QString::fromUtf8(qgetenv("OBS_DATA_PATH")),
+		"/usr/share/obs/obs-studio",
+		"/usr/local/share/obs/obs-studio",
+		"/app/share/obs/obs-studio",
+		"/opt/obs-studio/share/obs/obs-studio",
+	};
+	for (const QString &root : roots) {
+		if (root.isEmpty())
+			continue;
+		const QString file = root + "/" + rel;
+		if (QFile::exists(file))
+			return QIcon(file);
+	}
+	return QIcon(QString(":/res/images/%1.svg").arg(name));
 }
 
 static void select_source(gstreamer_output_config &config)
@@ -291,27 +321,26 @@ static void refresh_rows(gstreamer_dock_state *state)
 		const QString status = config.output && obs_output_active(config.output) ? "Running" : "Stopped";
 		QListWidgetItem *item = new QListWidgetItem(state->outputs);
 		QWidget *row_widget = new QWidget(state->outputs);
-				row_widget->setFixedHeight(36);
+		row_widget->setStyleSheet("QLabel { color: palette(WindowText); }");
 		QHBoxLayout *row_layout = new QHBoxLayout(row_widget);
-				row_layout->setContentsMargins(4, 4, 4, 4);
-				row_layout->setSpacing(4);
+		row_layout->setContentsMargins(8, 2, 8, 2);
+		row_layout->setSpacing(6);
 		QLabel *label = new QLabel(QString("%1  [%2]").arg(config.name, status));
 		QPushButton *start = new QPushButton("Start");
 		QPushButton *stop = new QPushButton("Stop");
-				start->setFixedSize(64, 28);
-				stop->setFixedSize(64, 28);
-				label->setFixedHeight(28);
-				label->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+		start->setFixedSize(64, 24);
+		stop->setFixedSize(64, 24);
+		label->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
 		start->setToolTip("Start output");
 		stop->setToolTip("Stop output");
 		const bool running = config.output && obs_output_active(config.output);
 		start->setEnabled(!running);
 		stop->setEnabled(running);
-				label->setAlignment(Qt::AlignVCenter | Qt::AlignLeft);
-				row_layout->addWidget(label, 1);
-				row_layout->addWidget(start);
-				row_layout->addWidget(stop);
-				item->setSizeHint(QSize(0, 36));
+		label->setAlignment(Qt::AlignVCenter | Qt::AlignLeft);
+		row_layout->addWidget(label, 1);
+		row_layout->addWidget(start);
+		row_layout->addWidget(stop);
+		item->setSizeHint(row_widget->sizeHint());
 		state->outputs->setItemWidget(item, row_widget);
 		QObject::connect(start, &QPushButton::clicked, [state, index]() { start_selected(state, static_cast<int>(index)); });
 		QObject::connect(stop, &QPushButton::clicked, [state, index]() { stop_selected(state, static_cast<int>(index)); });
@@ -351,44 +380,47 @@ static QWidget *create_gstreamer_dock_widget(void)
 	QVBoxLayout *layout = new QVBoxLayout(widget);
 	state->outputs = new QListWidget();
 	state->outputs->setContextMenuPolicy(Qt::CustomContextMenu);
-	state->outputs->setStyleSheet("QListWidget::item { margin: 0 10px; }");
+	state->outputs->setStyleSheet(
+		"QListWidget::item { margin: 0; padding: 0; }"
+		"QListWidget::item:selected { background: palette(highlight); }"
+		"QListWidget::item:selected QLabel { color: palette(HighlightedText); }");
 	layout->addWidget(state->outputs);
 	QHBoxLayout *manage = new QHBoxLayout();
 	manage->setContentsMargins(0, 0, 0, 0);
-	manage->setSpacing(4);
-	state->add = new QPushButton();
-	state->add->setIcon(QIcon(":/res/images/plus.svg"));
-	state->add->setIconSize(QSize(18, 18));
-	state->add->setFixedSize(34, 32);
+	manage->setSpacing(2);
+	state->add = new QToolButton();
+	state->add->setAutoRaise(true);
+	state->add->setIcon(obs_theme_icon("plus"));
+	state->add->setIconSize(QSize(16, 16));
 	state->add->setToolTip("Add output");
-	state->edit = new QPushButton();
-	state->edit->setIcon(QIcon(":/res/images/cogs.svg"));
-	state->edit->setIconSize(QSize(18, 18));
-	state->edit->setFixedSize(34, 32);
+	state->edit = new QToolButton();
+	state->edit->setAutoRaise(true);
+	state->edit->setIcon(obs_theme_icon("cogs"));
+	state->edit->setIconSize(QSize(16, 16));
 	state->edit->setToolTip("Edit selected output");
-	state->remove = new QPushButton();
-	state->remove->setIcon(QIcon(":/res/images/trash.svg"));
-	state->remove->setIconSize(QSize(18, 18));
-	state->remove->setFixedSize(34, 32);
+	state->remove = new QToolButton();
+	state->remove->setAutoRaise(true);
+	state->remove->setIcon(obs_theme_icon("trash"));
+	state->remove->setIconSize(QSize(16, 16));
 	state->remove->setToolTip("Remove selected output");
-	state->move_up = new QPushButton();
-	state->move_up->setIcon(QIcon(":/res/images/up.svg"));
-	state->move_up->setIconSize(QSize(18, 18));
-	state->move_up->setFixedSize(34, 32);
+	state->move_up = new QToolButton();
+	state->move_up->setAutoRaise(true);
+	state->move_up->setIcon(obs_theme_icon("up"));
+	state->move_up->setIconSize(QSize(16, 16));
 	state->move_up->setToolTip("Move output up");
-	state->move_down = new QPushButton();
-	state->move_down->setIcon(QIcon(":/res/images/down.svg"));
-	state->move_down->setIconSize(QSize(18, 18));
-	state->move_down->setFixedSize(34, 32);
+	state->move_down = new QToolButton();
+	state->move_down->setAutoRaise(true);
+	state->move_down->setIcon(obs_theme_icon("down"));
+	state->move_down->setIconSize(QSize(16, 16));
 	state->move_down->setToolTip("Move output down");
-	for (QPushButton *button : {state->add, state->edit, state->remove, state->move_up, state->move_down})
+	for (QToolButton *button : {state->add, state->edit, state->remove, state->move_up, state->move_down})
 		button->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
 	manage->addWidget(state->add);
 	manage->addWidget(state->edit);
 	manage->addWidget(state->remove);
-	manage->addStretch();
 	manage->addWidget(state->move_up);
 	manage->addWidget(state->move_down);
+	manage->addStretch();
 	layout->addLayout(manage);
 	load_configurations(state);
 	if (state->configurations.empty())
