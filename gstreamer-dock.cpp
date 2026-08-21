@@ -35,6 +35,8 @@ struct gstreamer_output_config {
 	QString signaling_url = "ws://127.0.0.1:8443";
 	QString pipeline = "autovideosink sync=false";
 	obs_output_t *output = nullptr;
+	obs_view_t *view = nullptr;
+	video_t *video  = nullptr;
 };
 
 struct gstreamer_dock_state {
@@ -85,23 +87,50 @@ static QStringList scene_names(void)
 	return names;
 }
 
-static obs_source_t *select_source(const gstreamer_output_config &config)
+static void select_source(gstreamer_output_config &config)
 {
-	if (config.source_type == "Program Output")
-		return obs_get_output_source(0);
-	if (config.source_type == "Program Preview")
-		return obs_frontend_get_current_preview_scene();
-	if (config.source_type == "Source")
-		return obs_get_source_by_name(config.source_name.toUtf8().constData());
-	if (config.source_type == "Scene") {
-		obs_scene_t *scene = obs_get_scene_by_name(config.scene_name.toUtf8().constData());
-		if (!scene)
-			return nullptr;
-		obs_source_t *source = obs_scene_get_source(scene);
-		obs_scene_release(scene);
-		return source;
+	if (config.view) 
+	{
+		obs_view_remove(config.view);
+		obs_view_destroy(config.view);
+		config.view = nullptr;
+		config.video = nullptr;
 	}
-	return nullptr;
+	if (config.source_type == "Program Output") 
+	{	
+		obs_output_set_media(config.output, obs_get_video(), obs_get_audio());
+	}
+	else if (config.source_type == "Source")
+	{
+		obs_source_t *source = obs_get_source_by_name(config.source_name.toUtf8().constData());
+		if (!source) return;
+
+		config.view = obs_view_create();
+		obs_view_set_source(config.view, 0, source);
+		config.video = obs_view_add(config.view);
+		obs_output_set_media(config.output, config.video, obs_get_audio());
+
+		obs_source_release(source);
+	}
+	else if (config.source_type == "Scene") 
+	{
+		obs_scene_t *scene = obs_get_scene_by_name(config.scene_name.toUtf8().constData());
+		if (!scene) return;
+		obs_source_t *source = obs_scene_get_source(scene);
+		if (!source) 
+		{
+			obs_scene_release(scene);
+			return;
+		}
+
+		config.view = obs_view_create();
+		obs_view_set_source(config.view, 0, source);
+		config.video = obs_view_add(config.view);
+		obs_output_set_media(config.output, config.video, obs_get_audio());
+
+		obs_source_release(source);
+		obs_scene_release(scene);
+	}
 }
 
 static void stop_output(gstreamer_output_config &config)
@@ -187,7 +216,7 @@ static bool edit_configuration(QWidget *parent, gstreamer_output_config *config)
 	QFormLayout *right_form = new QFormLayout(right_panel);
 	QLineEdit *name = new QLineEdit(config->name);
 	QComboBox *source_type = new QComboBox();
-	source_type->addItems({"Program Output", "Program Preview", "Scene", "Source"});
+	source_type->addItems({"Program Output", "Scene", "Source"});
 	source_type->setCurrentText(config->source_type);
 	QComboBox *source = new QComboBox();
 	source->addItems(source_names());
@@ -293,22 +322,16 @@ static void refresh_rows(gstreamer_dock_state *state)
 
 static void start_selected(gstreamer_dock_state *state, int row)
 {
-	if (row < 0 || row >= static_cast<int>(state->configurations.size()))
-		return;
+	if (row < 0 || row >= static_cast<int>(state->configurations.size())) return;
 	gstreamer_output_config &config = state->configurations[row];
 	stop_output(config);
 	obs_data_t *settings = output_settings(config);
 	config.output = obs_output_create("hjm-gstreamer-output", config.name.toUtf8().constData(), settings, nullptr);
 	obs_data_release(settings);
-	if (!config.output)
-		return;
-	obs_source_t *target = select_source(config);
-	if (target) {
-		obs_set_output_source(0, target);
-		obs_source_release(target);
-	}
-	if (!obs_output_start(config.output))
-		stop_output(config);
+	if (!config.output)	return;
+	select_source(config);
+
+	if (!obs_output_start(config.output)) stop_output(config);
 	refresh_rows(state);
 	save_configurations(state);
 }
