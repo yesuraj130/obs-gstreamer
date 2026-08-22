@@ -2,6 +2,7 @@
 #include <obs-frontend-api.h>
 
 #include <QComboBox>
+#include <QCheckBox>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
@@ -37,6 +38,7 @@ struct gstreamer_output_config {
 	QString rtsp_pipeline = "( appsrc name=appsrc_video is-live=true format=GST_FORMAT_TIME do-timestamp=true block=true ! queue ! video/x-raw, format=%s, width=%d, height=%d, framerate=%d/%d ! videoconvert ! x264enc tune=zerolatency speed-preset=veryfast bitrate=3000 key-int-max=30 ! video/x-h264, stream-format=byte-stream, alignment=au ! h264parse ! rtph264pay name=pay0 pt=96 )";
 	QString signaling_url = "ws://127.0.0.1:8443";
 	QString pipeline = "autovideosink sync=false";
+	bool auto_start = true;
 	obs_output_t *output = nullptr;
 	obs_view_t *view = nullptr;
 	video_t *video  = nullptr;
@@ -181,6 +183,7 @@ static obs_data_t *output_settings(const gstreamer_output_config &config)
 	obs_data_set_string(settings, "rtsp_service", config.rtsp_service.toUtf8().constData());
 	obs_data_set_string(settings, "rtsp_pipeline", config.rtsp_pipeline.toUtf8().constData());
 	obs_data_set_bool(settings, "webrtc_output", config.mode == "WebRTC");
+	obs_data_set_bool(settings, "webrtc_auto_start", config.auto_start);
 	obs_data_set_string(settings, "webrtc_signaling_url", config.signaling_url.toUtf8().constData());
 	obs_data_set_string(settings, "pipeline", config.pipeline.toUtf8().constData());
 	return settings;
@@ -204,6 +207,7 @@ static void save_configurations(const gstreamer_dock_state *state)
 		settings.setValue("rtsp_service", config.rtsp_service);
 		settings.setValue("rtsp_pipeline", config.rtsp_pipeline);
 		settings.setValue("signaling_url", config.signaling_url);
+		settings.setValue("auto_start", config.auto_start);
 		settings.setValue("pipeline", config.pipeline);
 		settings.endGroup();
 	}
@@ -227,6 +231,7 @@ static void load_configurations(gstreamer_dock_state *state)
 		config.rtsp_service = settings.value("rtsp_service", config.rtsp_service).toString();
 		config.rtsp_pipeline = settings.value("rtsp_pipeline", config.rtsp_pipeline).toString();
 		config.signaling_url = settings.value("signaling_url", config.signaling_url).toString();
+		config.auto_start = settings.value("auto_start", config.auto_start).toBool();
 		config.pipeline = settings.value("pipeline", config.pipeline).toString();
 		state->configurations.push_back(config);
 		settings.endGroup();
@@ -262,6 +267,8 @@ static bool edit_configuration(QWidget *parent, gstreamer_output_config *config)
 	QPlainTextEdit *rtsp_pipeline = new QPlainTextEdit(config->rtsp_pipeline);
 	rtsp_pipeline->setMinimumHeight(100);
 	QLineEdit *signaling = new QLineEdit(config->signaling_url);
+	QCheckBox *auto_start = new QCheckBox("Start output automatically when OBS launches");
+	auto_start->setChecked(config->auto_start);
 	QLineEdit *pipeline = new QLineEdit(config->pipeline);
 	rtsp_pipeline->setMinimumWidth(430);
 	left_form->addRow("Name", name);
@@ -273,18 +280,20 @@ static bool edit_configuration(QWidget *parent, gstreamer_output_config *config)
 	left_form->addRow("RTSP service", service);
 	right_form->addRow("RTSP pipeline", rtsp_pipeline);
 	right_form->addRow("WebRTC signaling", signaling);
+	right_form->addRow("WebRTC auto-start", auto_start);
 	right_form->addRow("Pipeline", pipeline);
 	QDialogButtonBox *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
 	right_form->addRow(buttons);
 	columns->addWidget(left_panel, 1);
 	columns->addWidget(right_panel, 2);
-	auto update_enabled = [source_type, source, scene, mode, mount, service, rtsp_pipeline, signaling, pipeline]() {
+	auto update_enabled = [source_type, source, scene, mode, mount, service, rtsp_pipeline, signaling, auto_start, pipeline]() {
 		source->setEnabled(source_type->currentText() == "Source");
 		scene->setEnabled(source_type->currentText() == "Scene");
 		mount->setEnabled(mode->currentText() == "RTSP");
 		service->setEnabled(mode->currentText() == "RTSP");
 		rtsp_pipeline->setEnabled(mode->currentText() == "RTSP");
 		signaling->setEnabled(mode->currentText() == "WebRTC");
+		auto_start->setEnabled(true);
 		pipeline->setEnabled(mode->currentText() == "Pipeline");
 	};
 	QObject::connect(source_type, &QComboBox::currentTextChanged, update_enabled);
@@ -303,6 +312,7 @@ static bool edit_configuration(QWidget *parent, gstreamer_output_config *config)
 	config->rtsp_service = service->text();
 	config->rtsp_pipeline = rtsp_pipeline->toPlainText();
 	config->signaling_url = signaling->text();
+	config->auto_start = auto_start->isChecked();
 	config->pipeline = pipeline->text();
 	if (config->name.isEmpty())
 		config->name = "Output";
@@ -426,6 +436,12 @@ static QWidget *create_gstreamer_dock_widget(void)
 	if (state->configurations.empty())
 		state->configurations.emplace_back();
 	refresh_rows(state);
+	QTimer::singleShot(0, widget, [state]() {
+		for (int index = 0; index < static_cast<int>(state->configurations.size()); ++index) {
+			if (state->configurations[index].auto_start)
+				start_selected(state, index);
+		}
+	});
 	QObject::connect(widget, &QObject::destroyed, [state]() {
 		for (auto &config : state->configurations)
 			stop_output(config);

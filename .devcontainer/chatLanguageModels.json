@@ -1,0 +1,19 @@
+[
+	{
+		"name": "Open Code",
+		"vendor": "customendpoint",
+		"apiKey": "${input:OPENCODE_API_KEY}",
+		"apiType": "chat-completions",
+        "models": [
+            {
+            "id": "x-preview-f-free",
+            "name": "Ox Alpha Free",
+            "url": "https://opencode.ai/zen/v1",
+            "toolCalling": true,
+            "vision": true,
+            "maxInputTokens": 1048576,
+            "maxOutputTokens": 131072
+            }
+        ]
+	}
+]
