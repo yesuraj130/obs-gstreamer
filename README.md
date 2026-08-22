@@ -112,6 +112,61 @@ meson setup build --buildtype=release --prefix=/usr --libdir=lib/obs-plugins
 ```
 will install at `/usr/lib/obs-plugins`.
 
+## WebRTC (WHEP) Output
+
+The GStreamer Output dock supports a built-in WebRTC (WHEP) server mode. The OBS
+scene is encoded once (H.264) and fanned out to any number of browsers with
+sub-second latency. No external signaling or media server is required.
+
+### Usage
+
+1. Open the **GStreamer Output** dock and add/edit an output.
+2. Set **Output mode** to `WebRTC`.
+3. Start the output, then open `http://<host>:8888/` in a browser.
+
+Multiple viewers are supported; each browser gets its own `webrtcbin` branch
+from a shared encode pipeline.
+
+### Settings
+
+- **WebRTC HTTP port** — port for the embedded HTTP/WHEP server (default `8888`).
+- **WebRTC web root** — folder containing the viewer page (`index.html`,
+  `style.css`, `app.js`). Leave empty to use
+  `~/.local/share/obs-gstreamer/webrtc`, which is seeded automatically on first
+  start. Edit the files there to customize the player page; changes apply on
+  browser refresh without rebuilding.
+- **WebRTC STUN server** — optional (`stun://stun.l.google.com:19302`). Leave
+  empty for LAN-only viewing (host candidates only).
+- **Start output automatically when OBS launches** — auto-starts this output
+  when OBS starts.
+
+The canonical copies of the default viewer assets live in
+[`.webrtc-webroot/`](.webrtc-webroot/) in this repository.
+
+### WHEP endpoint
+
+Browsers POST an SDP offer to `/whep` and receive a non-trickle SDP answer
+(`201 Created` + `Location: /whep/<id>`). Sessions end via `DELETE /whep/<id>`
+or when the peer disconnects. Static files are served from the configured web
+root.
+
+### Dependencies
+
+- Linux: `gstreamer1.0-nice` (ICE/libnice), `libsoup-3.0-dev`, plus the usual
+  GStreamer development packages.
+- Windows (MinGW/MSVC): the GStreamer installers bundle libsoup3 and webrtcbin;
+  ensure these runtime DLLs ship next to the plugin: `libsoup-3-0-0.dll`,
+  `libgstwebrtc-1.0-0.dll`, `libgstsdp-1.0-0.dll`, and the glib-networking TLS
+  backend for `souphttpsrc`.
+- macOS (MacPorts): `libsoup3`.
+
+### Notes
+
+- Video only (no audio/Opus yet).
+- Latency is typically well under one second on LAN.
+- If the port is already in use, output start fails with a clear error in the
+  OBS log.
+
 
 ## Codespace Development Environment
 
