@@ -1,0 +1,107 @@
+name: Main Config
+version: 1.0.0
+schema: v1
+models:
+  - name: GLM-4.7-Flash
+    provider: zAI
+    model: glm-4.7-flash
+    apiKey: ${{secrets.ZAI_API_KEY}}
+  - name: Gemini 3.1 Flash Lite
+    provider: gemini
+    model: gemini-3.1-flash-lite-preview
+    apiKey: ${{secrets.GEMINI_API_KEY}}
+  - name: Gemini 3.5 Flash Lite
+    provider: gemini
+    model: gemini-3.5-flash-lite
+    apiKey: ${{secrets.GEMINI_API_KEY}}
+  - name: Gemini 3 Flash
+    provider: gemini
+    model: gemini-3-flash-preview
+    apiKey: ${{secrets.GEMINI_API_KEY}}
+  - name: Gemini 2.5 Flash
+    provider: gemini
+    model: gemini-2.5-flash
+    apiKey: ${{secrets.GEMINI_API_KEY}}
+
+  - name: Ox Alpha Free
+    provider: openai
+    model: x-preview-f-free
+    apiBase: https://opencode.ai/zen/v1
+    apiKey: ${{secrets.OPENCODE_API_KEY}}
+  - name: MiMo 2.5 Free
+    provider: openai
+    model: mimo-v2.5-free
+    apiBase: https://opencode.ai/zen/v1
+    apiKey: ${{secrets.OPENCODE_API_KEY}}
+  - name: Nemotron 3 Ultra Free
+    provider: openai
+    model: nemotron-3-ultra-free
+    apiBase: https://opencode.ai/zen/v1
+    apiKey: ${{secrets.OPENCODE_API_KEY}}
+  - name: Hy3 Free
+    provider: openai
+    model: hy3-free
+    apiBase: https://opencode.ai/zen/v1
+    apiKey: ${{secrets.OPENCODE_API_KEY}}
+  - name: Nemotron 3.5 Lightning Free
+    provider: openai
+    model: nemotron-3.5-lightning-free
+    apiBase: https://opencode.ai/zen/v1
+    apiKey: ${{secrets.OPENCODE_API_KEY}}
+  - name: Muse Spark 1.2 Contributor Free
+    provider: openai
+    model: muse-spark-1.2-contributor-free
+    apiBase: https://opencode.ai/zen/v1
+    apiKey: ${{secrets.OPENCODE_API_KEY}}
+
+  - name: Autodetect
+    provider: groq
+    model: AUTODETECT
+    apiKey: ${{secrets.GROQ_API_KEY}}
+
+  - name: DeepSeek Coder
+    provider: deepseek
+    model: deepseek-v4-flash
+    apiKey: ${{secrets.DEEPSEEK_API_KEY}}
+
+  - name: Ling 3.0 Tiny Free
+    provider: openai
+    model: inclusionai/ling-3.0-tiny-free
+    apiBase: https://ai-gateway.vercel.sh/v1
+    apiKey: ${{secrets.VERCEL_API_KEY}}
+
+  - name: Mistral Medium 3.5
+    provider: mistral
+    model: mistral-medium-latest
+    apiKey: ${{secrets.MISTRAL_API_KEY}}
+  - name: Devstral 2
+    provider: mistral
+    model: devstral-medium-latest
+    apiKey: ${{secrets.MISTRAL_API_KEY}}
+
+  - name: Llama 4 Maverick Instruct
+    provider: sambanova
+    model: Llama-4-Maverick-17B-128E-Instruct
+    apiKey: ${{secrets.SAMBANOVA_API_KEY}}
+
+  - name: Cloudflare GPT-OSS 120B
+    provider: openai
+    model: "@cf/openai/gpt-oss-120b"
+    apiBase: https://api.cloudflare.com/client/v4/accounts/${{secrets.CLOUDFLARE_ACCOUNT_ID}}/ai/v1
+    apiKey: ${{secrets.CLOUDFLARE_API_KEY}}
+
+  - name: Kimi K3 - Puter
+    provider: openai
+    model: moonshotai/kimi-k3
+    apiBase: https://api.puter.com/puterai/openai/v1
+    apiKey: ${{secrets.PUTER_API_KEY}}
+
+
+  - name: MoonshotAI Kimi Latest
+    provider: openrouter
+    model: ~moonshotai/kimi-latest
+    apiKey: ${{secrets.OPENROUTER_API_KEY}}
+    defaultCompletionOptions:
+      maxTokens: 974842
+    capabilities:
+      - tool_use
