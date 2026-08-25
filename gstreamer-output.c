@@ -403,88 +403,26 @@ void gstreamer_output_raw_video(void *p, struct video_data *frame)
 		return;
 	data->raw_video_frames++;
 
-	// OBS reuses frame memory after this callback; GStreamer must own a copy.
-	GstBuffer *buffer = gst_buffer_new_allocate(NULL, data->buffer_size, NULL);
-	gst_buffer_fill(buffer, 0, frame->data[0], data->buffer_size);
+	// Wrap OBS frame memory directly to avoid a per-frame copy.
+	GstBuffer *buffer = gst_buffer_new_wrapped_full(0, frame->data[0], data->buffer_size, 0, data->buffer_size, NULL, NULL);
 
 	//GST_BUFFER_PTS(buffer) = frame->timestamp;
 
 	GstFlowReturn result = gst_app_src_push_buffer(GST_APP_SRC(data->video), buffer);
 	if (data->webrtc_output && (data->raw_video_frames == 1 || data->raw_video_frames % 60 == 0))
-		blog(LOG_INFO, "[obs-gstreamer] WebRTC raw frame %llu pushed, result=%s, size=%zu",
-			(unsigned long long)data->raw_video_frames, gst_flow_get_name(result), data->buffer_size);
+		blog(LOG_INFO, "[obs-gstreamer] WebRTC raw frame %llu pushed, result=%s, size=%zu", (unsigned long long)data->raw_video_frames, gst_flow_get_name(result), data->buffer_size);
 	if (result != GST_FLOW_OK && result != GST_FLOW_FLUSHING)
 		blog(LOG_WARNING, "[obs-gstreamer] RTSP appsrc push failed: %s", gst_flow_get_name(result));
 	//blog(LOG_INFO, "gstreamer_output_raw_video");
 }
 
-void gstreamer_output_raw_audio(void *p, struct audio_data *frame)
-{
-	data_t *data = (data_t *)p;
-
-	GstBuffer *buffer = gst_buffer_new_allocate(NULL, data->buffer_size, NULL);
-	gst_buffer_fill(buffer, 0, frame->data[0], data->buffer_size);
-
-	GST_BUFFER_PTS(buffer) = frame->timestamp;
-	GST_BUFFER_DTS(buffer) = frame->timestamp;
-	GST_BUFFER_OFFSET(buffer) = 0;
-	//gst_buffer_set_flags(buffer, packet->keyframe ? 0 : GST_BUFFER_FLAG_DELTA_UNIT);
-
-	GstElement *appsrc = data->video;
-
-	gst_app_src_push_buffer(GST_APP_SRC(appsrc), buffer);
-}
-
 void gstreamer_output_get_defaults(obs_data_t *settings)
 {
-	obs_data_set_default_string(settings, "pipeline", "autovideosink sync=false");
-	obs_data_set_default_bool(settings, "rtsp_server", false);
 	obs_data_set_default_string(settings, "rtsp_mount", "/live");
 	obs_data_set_default_string(settings, "rtsp_service", "8554");
-	obs_data_set_default_string(settings, "rtsp_pipeline", "( appsrc name=appsrc_video is-live=true format=GST_FORMAT_TIME do-timestamp=true block=true ! queue ! video/x-raw, format=%s, width=%d, height=%d, framerate=%d/%d ! videoconvert ! x264enc tune=zerolatency speed-preset=veryfast bitrate=3000 key-int-max=30 ! video/x-h264, stream-format=byte-stream, alignment=au ! h264parse ! rtph264pay name=pay0 pt=96 )");
+	obs_data_set_default_string(settings, "rtsp_pipeline", "( appsrc name=appsrc_video is-live=true format=GST_FORMAT_TIME do-timestamp=true block=true ! queue ! video/x-raw, format=I420, width=1920, height=1080, framerate=30/1 ! videoconvert ! x264enc tune=zerolatency speed-preset=veryfast bitrate=3000 key-int-max=30 ! video/x-h264, stream-format=byte-stream, alignment=au ! h264parse ! rtph264pay name=pay0 pt=96 )");
+	obs_data_set_default_bool(settings, "rtsp_server", false);
 	obs_data_set_default_bool(settings, "webrtc_output", false);
-	obs_data_set_default_string(settings, "webrtc_http_port", "8888");
-	obs_data_set_default_string(settings, "webrtc_stun_server", "");
-	obs_data_set_default_string(settings, "webrtc_web_root", "");
 	obs_data_set_default_string(settings, "webrtc_signaling_url", "ws://127.0.0.1:8443");
+	obs_data_set_default_string(settings, "pipeline", "autovideosink sync=false");
 }
-
-obs_properties_t *gstreamer_output_get_properties(void *data)
-{
-	obs_properties_t *props = obs_properties_create();
-
-	obs_property_t *rtsp_enabled = obs_properties_add_bool(props, "rtsp_server", "Start RTSP server");
-	obs_property_set_long_description(rtsp_enabled,
-		"Start a GStreamer RTSP server and serve the OBS scene output on the configured mount point.");
-
-	obs_property_t *mount = obs_properties_add_text(props, "rtsp_mount", "RTSP mount", OBS_TEXT_DEFAULT);
-	obs_property_set_long_description(mount, "RTSP mount path such as /live");
-
-	obs_property_t *service = obs_properties_add_text(props, "rtsp_service", "RTSP service", OBS_TEXT_DEFAULT);
-	obs_property_set_long_description(service, "RTSP port or service name such as 8554");
-	obs_property_t *rtsp_pipeline = obs_properties_add_text(props, "rtsp_pipeline", "RTSP pipeline", OBS_TEXT_MULTILINE);
-	obs_property_set_long_description(rtsp_pipeline, "RTSP media-factory pipeline. Keep appsrc named appsrc_video and the RTP payloader named pay0.");
-
-	obs_property_t *webrtc_enabled = obs_properties_add_bool(props, "webrtc_output", "Start WebRTC output");
-	obs_property_set_long_description(webrtc_enabled,
-		"Serve the OBS scene to browsers via an embedded WHEP (WebRTC) server on http://<host>:8888/.");
-
-	obs_property_t *http_port = obs_properties_add_text(props, "webrtc_http_port", "WebRTC HTTP port", OBS_TEXT_DEFAULT);
-	obs_property_set_long_description(http_port, "HTTP port for the embedded WHEP server and viewer page, default 8888");
-
-	obs_property_t *stun = obs_properties_add_text(props, "webrtc_stun_server", "WebRTC STUN server", OBS_TEXT_DEFAULT);
-	obs_property_set_long_description(stun, "Optional STUN server such as stun://stun.l.google.com:19302. Leave empty for LAN-only viewing.");
-
-	obs_property_t *web_root = obs_properties_add_text(props, "webrtc_web_root", "WebRTC web root", OBS_TEXT_DEFAULT);
-	obs_property_set_long_description(web_root, "Folder with viewer page files (index.html, style.css, app.js). Empty = ~/.local/share/obs-gstreamer/webrtc");
-
-	// Legacy key kept for saved configs; ignored at runtime.
-	obs_properties_add_text(props, "webrtc_signaling_url", "WebRTC signaling URL (legacy, ignored)", OBS_TEXT_DEFAULT);
-
-	obs_property_t *prop = obs_properties_add_text(props, "pipeline", "Pipeline", OBS_TEXT_MULTILINE);
-	obs_property_set_long_description(prop, "pipeline for gstreamer-output. This is ignored when RTSP server or WebRTC output mode is enabled.");
-	obs_property_set_description(prop, "Pipeline");
-	return props;
-}
-#pragma warning(default : 4047)
-#pragma warning(default : 4244)
