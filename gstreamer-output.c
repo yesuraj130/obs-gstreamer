@@ -235,21 +235,15 @@ bool gstreamer_output_start(void *p)
 		blog(LOG_ERROR, "unhandled output format: %d", data->ovi.output_format);
 		return false;
 	}
-	data->buffer_size = obs_video_format_buffer_size(data->ovi.output_format,
-		data->ovi.output_width, data->ovi.output_height);
+	data->buffer_size = obs_video_format_buffer_size(data->ovi.output_format, data->ovi.output_width, data->ovi.output_height);
 	if (data->webrtc_output)
-		blog(LOG_INFO, "[obs-gstreamer] WebRTC video format=%d (%s), size=%dx%d, frame bytes=%zu",
-			data->ovi.output_format, gst_format, data->ovi.output_width,
-			data->ovi.output_height, data->buffer_size);
+		blog(LOG_INFO, "[obs-gstreamer] WebRTC video format=%d (%s), size=%dx%d, frame bytes=%zu", data->ovi.output_format, gst_format, data->ovi.output_width, data->ovi.output_height, data->buffer_size);
 
 	if (data->rtsp_server) {
 		const char *mount = obs_data_get_string(data->settings, "rtsp_mount");
 		const char *service = obs_data_get_string(data->settings, "rtsp_service");
 		const char *pipeline = obs_data_get_string(data->settings, "rtsp_pipeline");
-		char *launch = g_strdup_printf(
-			pipeline && pipeline[0] ? pipeline : "( appsrc name=appsrc_video is-live=true format=GST_FORMAT_TIME do-timestamp=true block=true ! queue ! video/x-raw, format=%s, width=%d, height=%d, framerate=%d/%d ! videoconvert ! x264enc tune=zerolatency speed-preset=veryfast bitrate=3000 key-int-max=30 ! video/x-h264, stream-format=byte-stream, alignment=au ! h264parse ! rtph264pay name=pay0 pt=96 )",
-			gst_format, data->ovi.output_width, data->ovi.output_height,
-			data->ovi.fps_num, data->ovi.fps_den);
+		char *launch = g_strdup_printf(pipeline && pipeline[0] ? pipeline : "( appsrc name=appsrc_video is-live=true format=GST_FORMAT_TIME do-timestamp=true block=true ! queue ! video/x-raw, format=%s, width=%d, height=%d, framerate=%d/%d ! videoconvert ! x264enc tune=zerolatency speed-preset=veryfast bitrate=3000 key-int-max=30 ! video/x-h264, stream-format=byte-stream, alignment=au ! h264parse ! rtph264pay name=pay0 pt=96 )", gst_format, data->ovi.output_width, data->ovi.output_height, data->ovi.fps_num, data->ovi.fps_den);
 
 		data->server = gst_rtsp_server_new();
 		if (service && service[0])
@@ -270,8 +264,7 @@ bool gstreamer_output_start(void *p)
 		char *error = NULL;
 		data->webrtc = gstreamer_webrtc_create(data->output, data->settings, &data->ovi, &error);
 		if (!data->webrtc) {
-			blog(LOG_ERROR, "gstreamer_output_start = WebRTC init failed: %s",
-				error ? error : "unknown error");
+			blog(LOG_ERROR, "gstreamer_output_start = WebRTC init failed: %s", error ? error : "unknown error");
 			obs_output_set_last_error(data->output, error ? error : "WebRTC output failed to start");
 			g_free(error);
 			return false;
@@ -281,11 +274,7 @@ bool gstreamer_output_start(void *p)
 		blog(LOG_INFO, "[obs-gstreamer] WebRTC output started");
 	} else {
 		GError *err = NULL;
-		char *pipe_string = g_strdup_printf(
-			"appsrc name=appsrc_video is-live=true format=GST_FORMAT_TIME do-timestamp=true ! queue ! video/x-raw, format=%s, width=%d, height=%d, framerate=%d/%d ! videoconvert ! %s",
-			gst_format, data->ovi.output_width, data->ovi.output_height,
-			data->ovi.fps_num, data->ovi.fps_den,
-			obs_data_get_string(data->settings, "pipeline"));
+		char *pipe_string = g_strdup_printf("appsrc name=appsrc_video is-live=true format=GST_FORMAT_TIME do-timestamp=true ! queue ! video/x-raw, format=%s, width=%d, height=%d, framerate=%d/%d ! videoconvert ! %s", gst_format, data->ovi.output_width, data->ovi.output_height, data->ovi.fps_num, data->ovi.fps_den, obs_data_get_string(data->settings, "pipeline"));
 
 		data->pipe = gst_parse_launch(pipe_string, &err);
 		g_free(pipe_string);
@@ -403,9 +392,8 @@ void gstreamer_output_raw_video(void *p, struct video_data *frame)
 		return;
 	data->raw_video_frames++;
 
-	// OBS reuses frame memory after this callback; GStreamer must own a copy.
-	GstBuffer *buffer = gst_buffer_new_allocate(NULL, data->buffer_size, NULL);
-	gst_buffer_fill(buffer, 0, frame->data[0], data->buffer_size);
+	// Wrap OBS frame memory directly to avoid a per-frame copy.
+	GstBuffer *buffer = gst_buffer_new_wrapped_full(0, frame->data[0], data->buffer_size, 0, data->buffer_size, NULL, NULL);
 
 	//GST_BUFFER_PTS(buffer) = frame->timestamp;
 
