@@ -32,11 +32,6 @@ endif
 
 obs_frontend_dep = meson.get_compiler('cpp').find_library('obs-frontend-api', has_headers : 'obs/obs-frontend-api.h')
 
-name_suffix = []
-if host_machine.system() == 'darwin'
-  name_suffix = 'so'
-endif
-
 qt6 = import('qt6', required : false)
 qt_dep = dependency('qt6', modules : ['Widgets'], required : false)
 if not qt_dep.found()
@@ -58,7 +53,6 @@ shared_library('obs-gstreamer',
     output : 'version.c',
   ),
   name_prefix : '',
-  name_suffix : name_suffix,
   dependencies : [
     obs_dep,
     obs_frontend_dep,

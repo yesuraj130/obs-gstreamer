@@ -18,21 +18,6 @@ stages:
       - docker/linux
       when: always
 
-.docker-macos:
-  stage: docker
-  image: docker:git
-  services:
-    - name: docker:dind
-  script:
-    - docker login -u gitlab-ci-token -p $CI_BUILD_TOKEN registry.gitlab.com
-    - docker build -f docker/macos -t registry.gitlab.com/fzwoch/obs-gstreamer/macos .
-    - docker push registry.gitlab.com/fzwoch/obs-gstreamer/macos
-  rules:
-    - if: $CI_COMMIT_BRANCH == "master"
-      changes:
-      - docker/macos
-      when: always
-
 .docker-mingw:
   stage: docker
   image: docker:git
@@ -61,60 +46,6 @@ linux:
       - linux/obs-gstreamer.so
     expire_in: 1 day
 
-.macos:
-  stage: build
-  image: registry.gitlab.com/fzwoch/obs-gstreamer/macos
-  script:
-    - echo "[binaries]" >> cross.txt
-    - echo "c = 'x86_64-apple-darwin20.2-cc'" >> cross.txt
-    - echo "cpp = 'x86_64-apple-darwin20.2-c++'" >> cross.txt
-    - echo "ar = 'x86_64-apple-darwin20.2-ar'" >> cross.txt
-    - echo "strip = 'x86_64-apple-darwin20.2-strip'" >> cross.txt
-    - echo "pkgconfig = 'x86_64-apple-darwin20.2-pkg-config'" >> cross.txt
-
-    - echo "[host_machine]" >> cross.txt
-    - echo "system = 'darwin'" >> cross.txt
-    - echo "cpu_family = 'x86_64'" >> cross.txt
-    - echo "cpu = 'x86_64'" >> cross.txt
-    - echo "endian = 'little'" >> cross.txt
-
-    - export C_INCLUDE_PATH=/
-    - export LIBRARY_PATH=/OBS-x86_64/OBS.app/Contents/Frameworks
-
-    - meson --buildtype release --cross-file cross.txt macos
-    - ninja -C macos
-  artifacts:
-    paths:
-      - macos/obs-gstreamer.so
-    expire_in: 1 day
-
-.macos-aarch64:
-  stage: build
-  image: registry.gitlab.com/fzwoch/obs-gstreamer/macos
-  script:
-    - echo "[binaries]" >> cross.txt
-    - echo "c = 'aarch64-apple-darwin20.2-cc'" >> cross.txt
-    - echo "cpp = 'aarch64-apple-darwin20.2-c++'" >> cross.txt
-    - echo "ar = 'aarch64-apple-darwin20.2-ar'" >> cross.txt
-    - echo "strip = 'aarch64-apple-darwin20.2-strip'" >> cross.txt
-    - echo "pkgconfig = 'aarch64-apple-darwin20.2-pkg-config'" >> cross.txt
-
-    - echo "[host_machine]" >> cross.txt
-    - echo "system = 'darwin'" >> cross.txt
-    - echo "cpu_family = 'aarch64'" >> cross.txt
-    - echo "cpu = 'aarch64'" >> cross.txt
-    - echo "endian = 'little'" >> cross.txt
-
-    - export C_INCLUDE_PATH=/
-    - export LIBRARY_PATH=/OBS-x86_64/OBS.app/Contents/Frameworks
-
-    - meson --buildtype release --cross-file cross.txt macos-aarch64
-    - ninja -C macos-aarch64
-  artifacts:
-    paths:
-      - macos-aarch64/obs-gstreamer.so
-    expire_in: 1 day
-
 windows:
   stage: build
   image: registry.gitlab.com/fzwoch/obs-gstreamer/mingw
@@ -126,7 +57,6 @@ windows:
     - echo "cpp = 'x86_64-w64-mingw32-g++'" >> cross.txt
     - echo "ar = 'x86_64-w64-mingw32-ar'" >> cross.txt
     - echo "strip = 'x86_64-w64-mingw32-strip'" >> cross.txt
-    - echo "pkgconfig = 'x86_64-w64-mingw32-pkg-config'" >> cross.txt
     - echo "windres = 'x86_64-w64-mingw32-windres'" >> cross.txt
 
     - echo "[properties]" >> cross.txt
@@ -160,5 +90,4 @@ obs-gstreamer:
     name: obs-gstreamer
     paths:
       - linux/obs-gstreamer.so
-#      - macos/obs-gstreamer.so
       - windows/obs-gstreamer.dll
