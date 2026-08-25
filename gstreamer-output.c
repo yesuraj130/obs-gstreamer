@@ -403,9 +403,8 @@ void gstreamer_output_raw_video(void *p, struct video_data *frame)
 		return;
 	data->raw_video_frames++;
 
-	// OBS reuses frame memory after this callback; GStreamer must own a copy.
-	GstBuffer *buffer = gst_buffer_new_allocate(NULL, data->buffer_size, NULL);
-	gst_buffer_fill(buffer, 0, frame->data[0], data->buffer_size);
+	// Wrap OBS frame memory directly to avoid a per-frame copy.
+	GstBuffer *buffer = gst_buffer_new_wrapped_full(0, frame->data[0], data->buffer_size, 0, data->buffer_size, NULL, NULL);
 
 	//GST_BUFFER_PTS(buffer) = frame->timestamp;
 
