@@ -5,6 +5,7 @@
 #include <QApplication>
 #include <QPalette>
 #include <QComboBox>
+#include <QSpinBox>
 #include <QCheckBox>
 #include <QDialog>
 #include <QDialogButtonBox>
@@ -402,14 +403,23 @@ static bool edit_configuration(QWidget *parent, gstreamer_output_config *config)
 	mode->addItems({"RTSP", "WebRTC", "Pipeline"});
 	mode->setCurrentText(config->mode);
 
-	QLineEdit *mount = new QLineEdit(config->rtsp_mount);
-	QLineEdit *service = new QLineEdit(config->rtsp_service);
+	QLineEdit *mount = new QLineEdit(config->rtsp_mount.isEmpty() ? "/live" : config->rtsp_mount);
+	mount->setPlaceholderText("/live");
+
+	QSpinBox *service = new QSpinBox();
+	service->setRange(1024, 65535);
+	int initial_service = config->rtsp_service.toInt();
+	service->setValue(initial_service > 0 ? initial_service : 8554);
 
 	QPlainTextEdit *rtsp_pipeline = new QPlainTextEdit(config->rtsp_pipeline);
 	rtsp_pipeline->setMinimumHeight(100);
 	rtsp_pipeline->setMinimumWidth(430);
 
-	QLineEdit *http_port = new QLineEdit(config->webrtc_http_port);
+	QSpinBox *http_port = new QSpinBox();
+	http_port->setRange(1024, 65535);
+	int initial_http = config->webrtc_http_port.toInt();
+	http_port->setValue(initial_http > 0 ? initial_http : 8888);
+
 	QLineEdit *web_root = new QLineEdit(config->webrtc_web_root);
 	web_root->setPlaceholderText("~/.local/share/obs-gstreamer/webrtc");
 
@@ -505,10 +515,13 @@ static bool edit_configuration(QWidget *parent, gstreamer_output_config *config)
 	config->use_render_hub = (config->render_mode == RENDER_MODE_CALLBACK);
 	config->use_gpu_encoder = (config->render_mode == RENDER_MODE_GPU_TEX);
 	config->mode = mode->currentText();
-	config->rtsp_mount = mount->text();
-	config->rtsp_service = service->text();
+	QString m = mount->text().trimmed();
+	if (m.isEmpty()) m = "/live";
+	if (!m.startsWith("/")) m.prepend("/");
+	config->rtsp_mount = m;
+	config->rtsp_service = QString::number(service->value());
 	config->rtsp_pipeline = rtsp_pipeline->toPlainText();
-	config->webrtc_http_port = http_port->text();
+	config->webrtc_http_port = QString::number(http_port->value());
 	config->webrtc_web_root = web_root->text();
 	config->auto_start = auto_start->isChecked();
 	config->pipeline = pipeline->text();
@@ -658,19 +671,30 @@ static void start_selected(gstreamer_dock_state *state, int row)
 	stop_output(config);
 
 	if (config.use_render_hub) {
-		gst_hub_output_params_t params = {};
-		params.name = config.name.toUtf8().constData();
-		params.source_type = config.source_type.toUtf8().constData();
-		params.source_name = (config.source_type == "Scene") ? config.scene_name.toUtf8().constData() : config.source_name.toUtf8().constData();
-		params.rtsp_service = config.rtsp_service.toUtf8().constData();
-		params.rtsp_mount = config.rtsp_mount.toUtf8().constData();
-		params.encoder_type = config.gpu_encoder_type.toUtf8().constData();
-		params.bitrate_kbps = config.bitrate_kbps > 0 ? config.bitrate_kbps : 4000;
-		params.keyint_sec = 1;
-		params.master_pipeline = state->master_pipeline.toUtf8().constData();
-		params.rtsp_pipeline = config.rtsp_pipeline.toUtf8().constData();
+		obs_data_t *settings = obs_data_create();
+		obs_data_set_string(settings, "name", config.name.toUtf8().constData());
+		obs_data_set_string(settings, "source_type", config.source_type.toUtf8().constData());
+		const QString src_name = (config.source_type == "Scene") ? config.scene_name : config.source_name;
+		obs_data_set_string(settings, "source_name", src_name.toUtf8().constData());
 
-		config.hub_branch = gst_render_hub_start_branch(&params);
+		int port = config.rtsp_service.toInt();
+		if (port <= 0) port = 8554;
+		obs_data_set_int(settings, "rtsp_port", port);
+		obs_data_set_string(settings, "rtsp_service", QString::number(port).toUtf8().constData());
+
+		QString mount = config.rtsp_mount.trimmed();
+		if (mount.isEmpty()) mount = "/live";
+		if (!mount.startsWith("/")) mount.prepend("/");
+		obs_data_set_string(settings, "rtsp_mount", mount.toUtf8().constData());
+
+		obs_data_set_string(settings, "encoder_type", config.gpu_encoder_type.toUtf8().constData());
+		obs_data_set_int(settings, "bitrate_kbps", config.bitrate_kbps > 0 ? config.bitrate_kbps : 4000);
+		obs_data_set_int(settings, "keyint_sec", 1);
+		obs_data_set_string(settings, "master_pipeline", state->master_pipeline.trimmed().toUtf8().constData());
+		obs_data_set_string(settings, "rtsp_pipeline", config.rtsp_pipeline.trimmed().toUtf8().constData());
+
+		config.hub_branch = gst_render_hub_start_branch_data(settings);
+		obs_data_release(settings);
 		if (!config.hub_branch) {
 			const QString display_port = config.rtsp_service.trimmed().isEmpty() ? "8554" : config.rtsp_service.trimmed();
 			blog(LOG_ERROR, "[obs-gstreamer-dock] Failed to start Direct GPU RTSP server for '%s' on port %s",

@@ -532,6 +532,36 @@ static void hub_destroy(struct gst_master_hub *hub)
 	blog(LOG_INFO, "[obs-gstreamer-hub] Master GPU Render Hub destroyed cleanly");
 }
 
+/* Public API: Start a direct RTSP output branch using native OBS data settings */
+gst_hub_branch_t *gst_render_hub_start_branch_data(obs_data_t *settings)
+{
+	if (!settings) return NULL;
+
+	gst_hub_output_params_t params = {0};
+	params.name = obs_data_get_string(settings, "name");
+	params.source_type = obs_data_get_string(settings, "source_type");
+	params.source_name = obs_data_get_string(settings, "source_name");
+
+	int port = (int)obs_data_get_int(settings, "rtsp_port");
+	char port_buf[16] = {0};
+	if (port > 0) {
+		snprintf(port_buf, sizeof(port_buf), "%d", port);
+		params.rtsp_service = port_buf;
+	} else {
+		params.rtsp_service = obs_data_get_string(settings, "rtsp_service");
+	}
+
+	params.rtsp_mount = obs_data_get_string(settings, "rtsp_mount");
+	params.encoder_type = obs_data_get_string(settings, "encoder_type");
+	params.bitrate_kbps = (int)obs_data_get_int(settings, "bitrate_kbps");
+	params.keyint_sec = (int)obs_data_get_int(settings, "keyint_sec");
+	if (params.keyint_sec <= 0) params.keyint_sec = 1;
+	params.master_pipeline = obs_data_get_string(settings, "master_pipeline");
+	params.rtsp_pipeline = obs_data_get_string(settings, "rtsp_pipeline");
+
+	return gst_render_hub_start_branch(&params);
+}
+
 /* Public API: Start a direct RTSP output branch */
 gst_hub_branch_t *gst_render_hub_start_branch(const gst_hub_output_params_t *params)
 {
@@ -551,7 +581,12 @@ gst_hub_branch_t *gst_render_hub_start_branch(const gst_hub_output_params_t *par
 		}
 	}
 
-	const char *requested_service = (params->rtsp_service && params->rtsp_service[0]) ? params->rtsp_service : "8554";
+	const char *requested_service = "8554";
+	if (params->rtsp_service) {
+		const char *s = params->rtsp_service;
+		while (*s == ' ' || *s == '\t') s++;
+		if (*s != '\0') requested_service = s;
+	}
 
 	// Port Conflict Detection: Check if any active branch is already using this RTSP port
 	if (g_hub) {
@@ -570,11 +605,18 @@ gst_hub_branch_t *gst_render_hub_start_branch(const gst_hub_output_params_t *par
 		g_mutex_unlock(&g_hub->branch_lock);
 	}
 
+	const char *requested_mount = "/live";
+	if (params->rtsp_mount) {
+		const char *m = params->rtsp_mount;
+		while (*m == ' ' || *m == '\t') m++;
+		if (*m != '\0') requested_mount = m;
+	}
+
 	// Create new RTSP branch
 	struct gst_hub_branch *branch = bzalloc(sizeof(struct gst_hub_branch));
 	branch->name = bstrdup(params->name ? params->name : "Output");
 	branch->service = bstrdup(requested_service);
-	branch->mount_point = bstrdup(params->rtsp_mount && params->rtsp_mount[0] ? params->rtsp_mount : "/live");
+	branch->mount_point = bstrdup(requested_mount);
 	branch->hub = g_hub;
 	g_mutex_init(&branch->lock);
 

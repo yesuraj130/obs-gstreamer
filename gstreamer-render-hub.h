@@ -31,6 +31,9 @@ typedef struct {
 	const char *rtsp_pipeline;   /* Custom RTSP branch pipeline string (or NULL for auto) */
 } gst_hub_output_params_t;
 
+/* Start a direct RTSP output branch on the render hub using native OBS data settings */
+gst_hub_branch_t *gst_render_hub_start_branch_data(obs_data_t *settings);
+
 /* Start a direct RTSP output branch on the render hub */
 gst_hub_branch_t *gst_render_hub_start_branch(const gst_hub_output_params_t *params);
 
