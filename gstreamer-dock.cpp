@@ -80,7 +80,7 @@ struct gstreamer_output_config {
 	QString webrtc_http_port = "8888";
 	QString webrtc_web_root;
 	QString pipeline = "autovideosink sync=false";
-	bool auto_start = true;
+	bool auto_start = false;
 	bool use_gpu_encoder = false;
 	bool use_render_hub = true;
 	QString gpu_encoder_type = "auto";
@@ -366,7 +366,14 @@ static bool edit_configuration(QWidget *parent, gstreamer_output_config *config)
 	QDialog dialog(parent);
 	dialog.setWindowTitle("GStreamer Output");
 	dialog.resize(760, 380);
-	QHBoxLayout *columns = new QHBoxLayout(&dialog);
+	QVBoxLayout *main_layout = new QVBoxLayout(&dialog);
+	main_layout->setContentsMargins(12, 12, 12, 12);
+	main_layout->setSpacing(8);
+
+	QHBoxLayout *columns = new QHBoxLayout();
+	columns->setContentsMargins(0, 0, 0, 0);
+	columns->setSpacing(12);
+
 	QWidget *left_panel = new QWidget(&dialog);
 	QWidget *right_panel = new QWidget(&dialog);
 	QFormLayout *left_form = new QFormLayout(left_panel);
@@ -403,13 +410,13 @@ static bool edit_configuration(QWidget *parent, gstreamer_output_config *config)
 	mode->addItems({"RTSP", "WebRTC", "Pipeline"});
 	mode->setCurrentText(config->mode);
 
-	QLineEdit *mount = new QLineEdit(config->rtsp_mount.isEmpty() ? "/live" : config->rtsp_mount);
-	mount->setPlaceholderText("/live");
-
 	QSpinBox *service = new QSpinBox();
 	service->setRange(1024, 65535);
 	int initial_service = config->rtsp_service.toInt();
 	service->setValue(initial_service > 0 ? initial_service : 8554);
+
+	QLineEdit *mount = new QLineEdit(config->rtsp_mount.isEmpty() ? "/live" : config->rtsp_mount);
+	mount->setPlaceholderText("/live");
 
 	QPlainTextEdit *rtsp_pipeline = new QPlainTextEdit(config->rtsp_pipeline);
 	rtsp_pipeline->setMinimumHeight(100);
@@ -426,7 +433,9 @@ static bool edit_configuration(QWidget *parent, gstreamer_output_config *config)
 	QCheckBox *auto_start = new QCheckBox("Start output automatically when OBS launches");
 	auto_start->setChecked(config->auto_start);
 
-	QLineEdit *pipeline = new QLineEdit(config->pipeline);
+	QPlainTextEdit *pipeline = new QPlainTextEdit(config->pipeline);
+	pipeline->setMinimumHeight(100);
+	pipeline->setMinimumWidth(430);
 
 	left_form->addRow("Name", name);
 	left_form->addRow("Source type", source_type);
@@ -434,22 +443,23 @@ static bool edit_configuration(QWidget *parent, gstreamer_output_config *config)
 	left_form->addRow("Scene", scene);
 	left_form->addRow("Render mode", render_mode);
 	left_form->addRow("Output mode", mode);
+	left_form->addRow("RTSP Port", service);
 	left_form->addRow("RTSP mount", mount);
-	left_form->addRow("RTSP service", service);
+	left_form->addRow("WebRTC Port", http_port);
+	left_form->addRow("Web Root", web_root);
 	left_form->addRow("Auto-start", auto_start);
 
 	right_form->addRow("RTSP pipeline", rtsp_pipeline);
-	right_form->addRow("WebRTC HTTP port", http_port);
-	right_form->addRow("WebRTC web root", web_root);
 	right_form->addRow("Pipeline", pipeline);
-
-	QDialogButtonBox *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
-	right_form->addRow(buttons);
 
 	columns->addWidget(left_panel, 1);
 	columns->addWidget(right_panel, 2);
+	main_layout->addLayout(columns);
 
-	auto update_visibility = [&dialog, left_form, right_form, source_type, source, scene, render_mode, mode, mount, service, rtsp_pipeline, http_port, web_root, pipeline]() {
+	QDialogButtonBox *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
+	main_layout->addWidget(buttons, 0, Qt::AlignRight);
+
+	auto update_visibility = [&dialog, left_form, right_panel, right_form, source_type, source, scene, render_mode, mode, mount, service, rtsp_pipeline, http_port, web_root, pipeline]() {
 		const QString cur_source_type = source_type->currentText();
 		left_form->setRowVisible(source, cur_source_type == "Source");
 		left_form->setRowVisible(scene, cur_source_type == "Scene");
@@ -478,15 +488,20 @@ static bool edit_configuration(QWidget *parent, gstreamer_output_config *config)
 		const bool is_webrtc = (cur_mode == "WebRTC");
 		const bool is_pipe = (cur_mode == "Pipeline");
 
-		left_form->setRowVisible(mount, is_rtsp);
 		left_form->setRowVisible(service, is_rtsp);
+		left_form->setRowVisible(mount, is_rtsp);
+		left_form->setRowVisible(http_port, is_webrtc);
+		left_form->setRowVisible(web_root, is_webrtc);
+
+		right_panel->setVisible(!is_webrtc);
 		right_form->setRowVisible(rtsp_pipeline, is_rtsp);
-
-		right_form->setRowVisible(http_port, is_webrtc);
-		right_form->setRowVisible(web_root, is_webrtc);
-
 		right_form->setRowVisible(pipeline, is_pipe);
 
+		if (is_webrtc) {
+			dialog.resize(420, 340);
+		} else {
+			dialog.resize(760, 380);
+		}
 		dialog.adjustSize();
 	};
 
@@ -524,7 +539,7 @@ static bool edit_configuration(QWidget *parent, gstreamer_output_config *config)
 	config->webrtc_http_port = QString::number(http_port->value());
 	config->webrtc_web_root = web_root->text();
 	config->auto_start = auto_start->isChecked();
-	config->pipeline = pipeline->text();
+	config->pipeline = pipeline->toPlainText().trimmed();
 	config->color_space_mode = "auto";
 	if (config->name.isEmpty())
 		config->name = "Output";
