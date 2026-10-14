@@ -8,4 +8,8 @@ export LC_ALL=C.UTF-8
 
 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
     novnc \
-    websockify
+    websockify \
+    autocutsel
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+bash "$SCRIPT_DIR/patch-novnc.sh"

@@ -11,6 +11,11 @@ cat > "$XSTARTUP" <<'EOF'
 #!/bin/sh
 unset SESSION_MANAGER
 unset DBUS_SESSION_BUS_ADDRESS
+
+# Synchronize X11 selection buffers with VNC clipboard
+autocutsel -fork
+autocutsel -selection PRIMARY -fork
+
 exec dbus-launch --exit-with-session xfce4-session
 EOF
 chmod +x "$XSTARTUP"
