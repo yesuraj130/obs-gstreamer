@@ -35,7 +35,7 @@ EOF
 
     if ! pgrep -f "Xkasmvnc.*:${DISPLAY_NUM}" >/dev/null 2>&1; then
         echo "Starting KasmVNC on display :${DISPLAY_NUM} (web port ${NOVNC_PORT})..."
-        vncserver ":${DISPLAY_NUM}" \
+        kasmvncserver ":${DISPLAY_NUM}" \
             -select-de xfce \
             -websocketPort "${NOVNC_PORT}" \
             -httpd /usr/share/kasmvnc/www \
