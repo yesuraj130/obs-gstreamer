@@ -12,6 +12,11 @@ sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
     libgstreamer-plugins-base1.0-dev \
     gstreamer1.0-plugins-base \
     gstreamer1.0-plugins-good \
+    gstreamer1.0-plugins-bad \
+    libgstreamer-plugins-bad1.0-dev \
+    libgstrtspserver-1.0-0 \
+    libgstrtspserver-1.0-dev \
+    gstreamer1.0-rtsp \
     gstreamer1.0-nice \
     libsoup-3.0-dev \
     gstreamer1.0-x \
