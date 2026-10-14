@@ -67,7 +67,7 @@ EOF
         echo -e "${VNC_PASSWORD}\n${VNC_PASSWORD}\n" | kasmvncpasswd -u "$VNC_USER" -wo >/dev/null 2>&1 || true
     fi
 
-    if ! pgrep -f "Xkasmvnc.*:${DISPLAY_NUM}" >/dev/null 2>&1; then
+    if ! kasmvncserver -list 2>/dev/null | grep -q ":${DISPLAY_NUM}"; then
         echo "Starting KasmVNC on display :${DISPLAY_NUM} (web port ${NOVNC_PORT})..."
         kasmvncserver ":${DISPLAY_NUM}" \
             -select-de xfce \
@@ -76,7 +76,7 @@ EOF
             -interface 0.0.0.0
 
         sleep 1
-        if ! pgrep -f "Xkasmvnc.*:${DISPLAY_NUM}" >/dev/null 2>&1; then
+        if ! kasmvncserver -list 2>/dev/null | grep -q ":${DISPLAY_NUM}" && ! pgrep -f "X.*:${DISPLAY_NUM}" >/dev/null 2>&1; then
             echo "ERROR: Failed to start KasmVNC."
             exit 1
         fi
