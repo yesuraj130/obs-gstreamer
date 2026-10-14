@@ -110,7 +110,7 @@ jobs:
                 }
               }
             } catch {
-              Write-Host "MSI download/install failed for $ver: $_"
+              Write-Host "MSI download/install failed for ${ver}: $_"
             }
           }
 
