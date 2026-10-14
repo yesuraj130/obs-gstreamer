@@ -37,11 +37,10 @@ jobs:
         with:
           arch: x64
 
-      - name: Install Meson, Ninja, and pkg-config
+      - name: Install Meson and Ninja
         shell: pwsh
         run: |
           pip install meson ninja
-          choco install pkgconfiglite -y
 
       - name: Install Qt 6 (MSVC 64-bit)
         uses: jurplel/install-qt-action@v4
