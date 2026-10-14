@@ -3,13 +3,11 @@ set -Eeuo pipefail
 
 DISPLAY_NUM="${DISPLAY_NUM:-1}"
 VNC_PORT=$((5900 + DISPLAY_NUM))
+VNC_PASSWORD="${VNC_PASSWORD:-vncpassword}"
 PASSWD_FILE="$HOME/.vnc/passwd"
 LOG_FILE="$HOME/.vnc/startup.log"
 
-if [ -z "${VNC_PASSWORD:-}" ]; then
-    echo "ERROR: VNC_PASSWORD is not set."
-    exit 1
-fi
+mkdir -p "$HOME/.vnc"
 
 {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] Starting VNC server"

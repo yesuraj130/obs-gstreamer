@@ -19,13 +19,19 @@
  */
 
 #include "gstreamer-webrtc.h"
+#include <plugin-support.h>
+
+#ifndef ENABLE_WEBRTC
+#define ENABLE_WEBRTC 1
+#endif
+
+#if ENABLE_WEBRTC
 
 #include <gst/app/app.h>
 #include <gst/sdp/sdp.h>
 #include <gst/video/video.h>
 #include <gst/webrtc/webrtc.h>
 #include <libsoup/soup.h>
-#include <plugin-support.h>
 
 #define MAX_SESSIONS 16
 #define ANSWER_TIMEOUT_SECONDS 5
@@ -48,8 +54,11 @@ static GstPadProbeReturn rtp_packet_probe(GstPad *pad, GstPadProbeInfo *info,
 	return GST_PAD_PROBE_OK;
 }
 
+struct gstreamer_webrtc;
+
 typedef struct {
 	char *id;
+	struct gstreamer_webrtc *webrtc;
 	GstElement *queue;
 	GstElement *webrtcbin;
 	GstPad *tee_pad;
@@ -79,6 +88,34 @@ struct gstreamer_webrtc {
 	guint bus_watch_id;
 	packet_counter_t pay_counter;
 };
+
+#ifndef SOUP_CHECK_VERSION
+#define SOUP_CHECK_VERSION(major, minor, micro) \
+    (SOUP_MAJOR_VERSION > (major) || \
+     (SOUP_MAJOR_VERSION == (major) && SOUP_MINOR_VERSION > (minor)) || \
+     (SOUP_MAJOR_VERSION == (major) && SOUP_MINOR_VERSION == (minor) && \
+      SOUP_MICRO_VERSION >= (micro)))
+#endif
+
+static inline void compat_soup_server_message_pause(SoupServer *server, SoupServerMessage *msg)
+{
+#if SOUP_CHECK_VERSION(3, 2, 0)
+	(void)server;
+	soup_server_message_pause(msg);
+#else
+	soup_server_pause_message(server, msg);
+#endif
+}
+
+static inline void compat_soup_server_message_unpause(SoupServer *server, SoupServerMessage *msg)
+{
+#if SOUP_CHECK_VERSION(3, 2, 0)
+	(void)server;
+	soup_server_message_unpause(msg);
+#else
+	soup_server_unpause_message(server, msg);
+#endif
+}
 
 // ---------------------------------------------------------------------------
 // Embedded default viewer assets (seeded into the user-editable web root)
@@ -239,7 +276,7 @@ static void session_free(gpointer data)
 	}
 	if (session->webrtcbin && session->pending_msg) {
 		soup_server_message_set_status(session->pending_msg, SOUP_STATUS_INTERNAL_SERVER_ERROR, NULL);
-		soup_server_message_unpause(session->pending_msg);
+		compat_soup_server_message_unpause(session->webrtc ? session->webrtc->server : NULL, session->pending_msg);
 		session->pending_msg = NULL;
 	}
 	g_free(session->id);
@@ -353,10 +390,12 @@ static gboolean idle_reply(gpointer user_data)
 	char *location = g_strdup_printf("/whep/%s", ctx->id);
 	SoupMessageHeaders *headers = soup_server_message_get_response_headers(ctx->msg);
 	soup_message_headers_append(headers, "Location", location);
+	soup_message_headers_append(headers, "Access-Control-Allow-Origin", "*");
+	soup_message_headers_append(headers, "Access-Control-Expose-Headers", "Location, Content-Type");
 	soup_server_message_set_status(ctx->msg, ctx->status, NULL);
 	soup_server_message_set_response(ctx->msg, "application/sdp", SOUP_MEMORY_COPY,
 		ctx->sdp ? ctx->sdp : "", ctx->sdp ? strlen(ctx->sdp) : 0);
-	soup_server_message_unpause(ctx->msg);
+	compat_soup_server_message_unpause(ctx->webrtc ? ctx->webrtc->server : NULL, ctx->msg);
 	g_object_unref(ctx->msg);
 	if (ctx->status != SOUP_STATUS_CREATED)
 		session_teardown_async(ctx->webrtc, ctx->id);
@@ -384,7 +423,7 @@ static gboolean answer_timeout(gpointer user_data)
 			ctx->id);
 		soup_server_message_set_status(session->pending_msg,
 			SOUP_STATUS_INTERNAL_SERVER_ERROR, NULL);
-		soup_server_message_unpause(session->pending_msg);
+		compat_soup_server_message_unpause(ctx->webrtc ? ctx->webrtc->server : NULL, session->pending_msg);
 		session->pending_msg = NULL;
 	}
 	if (session)
@@ -413,22 +452,38 @@ static void on_gathering_complete(GstElement *webrtcbin, GParamSpec *pspec, gpoi
 	if (state != GST_WEBRTC_ICE_GATHERING_STATE_COMPLETE)
 		return;
 
-	blog(LOG_INFO, "[obs-gstreamer] WHEP session %s: ICE gathering complete, sending 201 answer",
-		ctx->session->id);
 	g_signal_handlers_disconnect_by_func(webrtcbin, on_gathering_complete, user_data);
 
 	GstWebRTCSessionDescription *local = NULL;
 	g_object_get(webrtcbin, "local-description", &local, NULL);
-	gchar *sdp_text = gst_sdp_message_as_text(local->sdp);
-	gst_webrtc_session_description_free(local);
+	gchar *sdp_text = local ? gst_sdp_message_as_text(local->sdp) : NULL;
+	if (local)
+		gst_webrtc_session_description_free(local);
+
+	g_mutex_lock(&ctx->webrtc->sessions_lock);
+	whep_session_t *session = ctx->session ? g_hash_table_lookup(ctx->webrtc->sessions, ctx->session->id) : NULL;
+	if (!session || session->replied || !session->pending_msg) {
+		g_mutex_unlock(&ctx->webrtc->sessions_lock);
+		blog(LOG_WARNING, "[obs-gstreamer] WHEP session %s: completed after timeout/cleanup",
+			ctx->session ? ctx->session->id : "unknown");
+		g_free(sdp_text);
+		g_free(ctx);
+		return;
+	}
+
+	blog(LOG_INFO, "[obs-gstreamer] WHEP session %s: ICE gathering complete, sending 201 answer",
+		session->id);
 
 	reply_ctx_t *reply = g_new0(reply_ctx_t, 1);
 	reply->webrtc = ctx->webrtc;
-	reply->msg = g_object_ref(ctx->session->pending_msg);
-	reply->id = g_strdup(ctx->session->id);
+	reply->msg = g_object_ref(session->pending_msg);
+	reply->id = g_strdup(session->id);
 	reply->sdp = sdp_text;
 	reply->status = SOUP_STATUS_CREATED;
 	g_idle_add(idle_reply, reply);
+	g_mutex_unlock(&ctx->webrtc->sessions_lock);
+
+	g_free(ctx);
 }
 
 static void on_local_description_set(GstPromise *promise, gpointer user_data)
@@ -491,14 +546,20 @@ static void on_answer_created(GstPromise *promise, gpointer user_data)
 
 	if (!answer) {
 		blog(LOG_ERROR, "[obs-gstreamer] WHEP session %s: create-answer failed",
-			ctx->session->id);
-		reply_ctx_t *reply_ctx = g_new0(reply_ctx_t, 1);
-		reply_ctx->webrtc = ctx->webrtc;
-		reply_ctx->msg = g_object_ref(ctx->session->pending_msg);
-		reply_ctx->id = g_strdup(ctx->session->id);
-		reply_ctx->sdp = NULL;
-		reply_ctx->status = SOUP_STATUS_INTERNAL_SERVER_ERROR;
-		g_idle_add(idle_reply, reply_ctx);
+			ctx->session ? ctx->session->id : "unknown");
+		g_mutex_lock(&ctx->webrtc->sessions_lock);
+		whep_session_t *session = ctx->session ? g_hash_table_lookup(ctx->webrtc->sessions, ctx->session->id) : NULL;
+		if (session && !session->replied && session->pending_msg) {
+			reply_ctx_t *reply_ctx = g_new0(reply_ctx_t, 1);
+			reply_ctx->webrtc = ctx->webrtc;
+			reply_ctx->msg = g_object_ref(session->pending_msg);
+			reply_ctx->id = g_strdup(session->id);
+			reply_ctx->sdp = NULL;
+			reply_ctx->status = SOUP_STATUS_INTERNAL_SERVER_ERROR;
+			g_idle_add(idle_reply, reply_ctx);
+		}
+		g_mutex_unlock(&ctx->webrtc->sessions_lock);
+		g_free(ctx);
 		return;
 	}
 
@@ -533,6 +594,7 @@ static void whep_post(struct gstreamer_webrtc *webrtc, SoupServerMessage *msg)
 	}
 
 	whep_session_t *session = g_new0(whep_session_t, 1);
+	session->webrtc = webrtc;
 	session->id = g_strdup_printf("viewer%u", ++webrtc->session_counter);
 
 	session->queue = gst_element_factory_make("queue", NULL);
@@ -636,7 +698,7 @@ static void whep_post(struct gstreamer_webrtc *webrtc, SoupServerMessage *msg)
 	tctx->webrtc = webrtc;
 	tctx->id = g_strdup(session->id);
 	session->timeout_id = g_timeout_add_seconds(ANSWER_TIMEOUT_SECONDS, answer_timeout, tctx);
-	soup_server_message_pause(msg);
+	compat_soup_server_message_pause(webrtc->server, msg);
 
 	GstPromise *promise = gst_promise_new_with_change_func(on_remote_description_set, ctx, NULL);
 	g_signal_emit_by_name(session->webrtcbin, "set-remote-description", offer, promise);
@@ -663,6 +725,8 @@ static void whep_delete(struct gstreamer_webrtc *webrtc, SoupServerMessage *msg,
 	}
 
 	session_teardown_async(webrtc, id);
+	SoupMessageHeaders *headers = soup_server_message_get_response_headers(msg);
+	soup_message_headers_append(headers, "Access-Control-Allow-Origin", "*");
 	soup_server_message_set_status(msg, SOUP_STATUS_OK, NULL);
 }
 
@@ -671,7 +735,14 @@ static void whep_handler(SoupServer *server, SoupServerMessage *msg, const char 
 {
 	struct gstreamer_webrtc *webrtc = user_data;
 
-	if (g_strcmp0(soup_server_message_get_method(msg), "POST") == 0) {
+	if (g_strcmp0(soup_server_message_get_method(msg), "OPTIONS") == 0) {
+		SoupMessageHeaders *headers = soup_server_message_get_response_headers(msg);
+		soup_message_headers_append(headers, "Access-Control-Allow-Origin", "*");
+		soup_message_headers_append(headers, "Access-Control-Allow-Methods", "POST, DELETE, OPTIONS");
+		soup_message_headers_append(headers, "Access-Control-Allow-Headers", "Content-Type, Accept");
+		soup_message_headers_append(headers, "Access-Control-Expose-Headers", "Location, Content-Type");
+		soup_server_message_set_status(msg, SOUP_STATUS_NO_CONTENT, NULL);
+	} else if (g_strcmp0(soup_server_message_get_method(msg), "POST") == 0) {
 		whep_post(webrtc, msg);
 	} else if (g_strcmp0(soup_server_message_get_method(msg), "DELETE") == 0) {
 		whep_delete(webrtc, msg, path);
@@ -768,19 +839,31 @@ static void seed_web_root(const char *root)
 
 static gboolean bus_callback(GstBus *bus, GstMessage *message, gpointer user_data)
 {
+	const char *src_name = GST_MESSAGE_SRC_NAME(message);
+
 	switch (GST_MESSAGE_TYPE(message)) {
 	case GST_MESSAGE_ERROR: {
 		GError *err = NULL;
-		gst_message_parse_error(message, &err, NULL);
-		blog(LOG_ERROR, "[obs-gstreamer] WebRTC pipeline error: %s", err->message);
-		g_error_free(err);
+		gchar *debug = NULL;
+		gst_message_parse_error(message, &err, &debug);
+		blog(LOG_ERROR, "[obs-gstreamer-webrtc] [%s] ERROR: %s (debug: %s)",
+			src_name ? src_name : "pipeline",
+			err ? err->message : "unknown error",
+			debug ? debug : "none");
+		if (err) g_error_free(err);
+		g_free(debug);
 		break;
 	}
 	case GST_MESSAGE_WARNING: {
 		GError *err = NULL;
-		gst_message_parse_warning(message, &err, NULL);
-		blog(LOG_WARNING, "[obs-gstreamer] WebRTC pipeline warning: %s", err->message);
-		g_error_free(err);
+		gchar *debug = NULL;
+		gst_message_parse_warning(message, &err, &debug);
+		blog(LOG_WARNING, "[obs-gstreamer-webrtc] [%s] WARNING: %s (debug: %s)",
+			src_name ? src_name : "pipeline",
+			err ? err->message : "unknown warning",
+			debug ? debug : "none");
+		if (err) g_error_free(err);
+		g_free(debug);
 		break;
 	}
 	default:
@@ -958,3 +1041,33 @@ GstElement *gstreamer_webrtc_appsrc(struct gstreamer_webrtc *webrtc)
 {
 	return webrtc ? webrtc->appsrc : NULL;
 }
+
+#else /* !ENABLE_WEBRTC */
+
+#include <glib.h>
+
+struct gstreamer_webrtc *gstreamer_webrtc_create(obs_output_t *output, obs_data_t *settings,
+						 struct obs_video_info *ovi, char **error)
+{
+	(void)output;
+	(void)settings;
+	(void)ovi;
+	blog(LOG_WARNING, "[obs-gstreamer] WebRTC WHEP output is disabled in this build");
+	if (error)
+		*error = g_strdup("WebRTC output is not supported in this build (compiled without libsoup-3.0 / WebRTC)");
+	return NULL;
+}
+
+void gstreamer_webrtc_destroy(struct gstreamer_webrtc *webrtc)
+{
+	(void)webrtc;
+}
+
+GstElement *gstreamer_webrtc_appsrc(struct gstreamer_webrtc *webrtc)
+{
+	(void)webrtc;
+	return NULL;
+}
+
+#endif /* ENABLE_WEBRTC */
+

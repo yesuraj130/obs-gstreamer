@@ -1,0 +1,25 @@
+# Environment variables and config
+.env
+.env.*
+.env.example
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Build outputs and cache
+build/
+build-*/
+package-*/
+*.zip
+*.tar.gz
+dist/
+.cache/
+
+# OS and Editor files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.vscode/
+.idea/

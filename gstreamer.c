@@ -22,6 +22,9 @@
 #include <plugin-support.h>
 #include <gst/gst.h>
 
+#include "gstreamer-encoder-tex.h"
+#include "gstreamer-render-hub.h"
+
 OBS_DECLARE_MODULE()
 
 // gstreamer-output.c
@@ -36,12 +39,27 @@ extern void gstreamer_output_raw_audio(void *data, struct audio_data *frame);
 extern void gstreamer_output_get_defaults(obs_data_t *settings);
 extern obs_properties_t *gstreamer_output_get_properties(void *data);
 
+#ifndef ENABLE_DOCK
+#define ENABLE_DOCK 1
+#endif
+
+#if ENABLE_DOCK
 extern void gstreamer_dock_register(void);
 extern void gstreamer_dock_unregister(void);
+#else
+static inline void gstreamer_dock_register(void)
+{
+	blog(LOG_WARNING, "[obs-gstreamer] Dock UI is DISABLED in this build (compiled with ENABLE_DOCK=0)");
+}
+static inline void gstreamer_dock_unregister(void) {}
+#endif
 
 bool obs_module_load(void)
 {
-	blog(LOG_INFO, "plugin loaded successfully (version %s)", PLUGIN_VERSION);
+	blog(LOG_INFO, "[obs-gstreamer] Loading plugin (version: %s)", PLUGIN_VERSION);
+
+	gst_init(NULL, NULL);
+	blog(LOG_INFO, "[obs-gstreamer] GStreamer runtime initialized: %s", gst_version_string());
 
 	struct obs_output_info output_info = {
 		.id = "hjm-gstreamer-output",
@@ -63,15 +81,20 @@ bool obs_module_load(void)
 	};
 
 	obs_register_output(&output_info);
-	gstreamer_dock_register();
+	blog(LOG_INFO, "[obs-gstreamer] Registered output module: hjm-gstreamer-output");
 
-	gst_init(NULL, NULL);
+	gstreamer_encoder_tex_register();
+	gstreamer_dock_register();
+	blog(LOG_INFO, "[obs-gstreamer] Plugin loaded successfully");
 
 	return true;
 }
 
 void obs_module_unload(void)
 {
+	blog(LOG_INFO, "[obs-gstreamer] Unloading plugin...");
+	gst_render_hub_shutdown();
 	gstreamer_dock_unregister();
-	blog(LOG_INFO, "plugin unloaded");
+	gstreamer_encoder_tex_unregister();
+	blog(LOG_INFO, "[obs-gstreamer] Plugin unloaded successfully");
 }

@@ -7,7 +7,8 @@ for script in \
     "$SCRIPT_DIR/start/tailscale.sh" \
     "$SCRIPT_DIR/start/xstartup.sh" \
     "$SCRIPT_DIR/start/vnc.sh" \
-    "$SCRIPT_DIR/start/novnc.sh"
+    "$SCRIPT_DIR/start/novnc.sh" \
+    "$SCRIPT_DIR/start/server.sh"
 do
     echo "========================================"
     echo "Running ${script##*/}"

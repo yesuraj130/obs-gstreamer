@@ -1,0 +1,6 @@
+{
+  "name": "OBS GStreamer Plugin & Stream Viewer",
+  "description": "OBS Studio GStreamer Plugin with hardware accelerated encoding and WebRTC streaming",
+  "permissions": [],
+  "capabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

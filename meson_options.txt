@@ -1,0 +1,1 @@
+option('webrtc', type : 'feature', value : 'auto', description : 'Build WebRTC (WHEP) server output (requires libsoup-3.0 and gstreamer-webrtc-1.0)')

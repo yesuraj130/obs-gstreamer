@@ -20,7 +20,9 @@
 
 #define _GNU_SOURCE
 
+#ifdef __linux__
 #include <dirent.h>
+#endif
 #include <obs/obs-module.h>
 #include <obs/util/dstr.h>
 #include <gst/gst.h>
@@ -87,15 +89,18 @@ char *gstreamer_get_format(data_t *data)
 	case VIDEO_FORMAT_RGBA:
 		format = "RGBA";
 		data->buffer_size =
-			data->ovi.output_width * data->ovi.output_height * 3;
+			data->ovi.output_width * data->ovi.output_height * 4;
+		break;
 	case VIDEO_FORMAT_BGRA:
 		format = "BGRA";
 		data->buffer_size =
-			data->ovi.output_width * data->ovi.output_height * 3;
+			data->ovi.output_width * data->ovi.output_height * 4;
+		break;
 	case VIDEO_FORMAT_BGRX:
 		format = "BGRX";
 		data->buffer_size =
-			data->ovi.output_width * data->ovi.output_height * 3;
+			data->ovi.output_width * data->ovi.output_height * 4;
+		break;
 	case VIDEO_FORMAT_I444:
 		format = "Y444";
 		data->buffer_size =
@@ -194,6 +199,7 @@ void *gstreamer_encoder_create_h264(obs_data_t *settings,
 				data->ovi.fps_num / data->ovi.fps_den);
 	} else {
 		blog(LOG_ERROR, "invalid encoder selected");
+		g_free(data);
 		return NULL;
 	}
 
@@ -203,6 +209,8 @@ void *gstreamer_encoder_create_h264(obs_data_t *settings,
 		data->ovi.fps_num, data->ovi.fps_den, encoder_string,
 		obs_data_get_string(data->settings, "extra_options"));
 
+	blog(LOG_INFO, "[obs-gstreamer-encoder] Launching H.264 encoder pipeline: %s", pipe_string);
+
 	GError *err = NULL;
 
 	data->pipe = gst_parse_launch(pipe_string, &err);
@@ -211,14 +219,28 @@ void *gstreamer_encoder_create_h264(obs_data_t *settings,
 	g_free(pipe_string);
 
 	if (err != NULL) {
-		blog(LOG_ERROR, "%s", err->message);
+		blog(LOG_ERROR, "[obs-gstreamer-encoder] H.264 pipeline creation failed: %s", err->message);
+		g_error_free(err);
+		g_free(data);
 		return NULL;
 	}
 
 	data->appsrc = gst_bin_get_by_name(GST_BIN(data->pipe), "appsrc");
 	data->appsink = gst_bin_get_by_name(GST_BIN(data->pipe), "appsink");
 
+	if (!data->appsrc || !data->appsink) {
+		blog(LOG_ERROR, "[obs-gstreamer-encoder] Failed to locate appsrc (%p) or appsink (%p) in H.264 pipeline",
+			(void *)data->appsrc, (void *)data->appsink);
+		if (data->appsink) gst_object_unref(data->appsink);
+		if (data->appsrc) gst_object_unref(data->appsrc);
+		gst_element_set_state(data->pipe, GST_STATE_NULL);
+		gst_object_unref(data->pipe);
+		g_free(data);
+		return NULL;
+	}
+
 	gst_element_set_state(data->pipe, GST_STATE_PLAYING);
+	blog(LOG_INFO, "[obs-gstreamer-encoder] H.264 encoder pipeline started successfully");
 
 	return data;
 }
@@ -280,6 +302,7 @@ void *gstreamer_encoder_create_h265(obs_data_t *settings,
 				data->ovi.fps_num / data->ovi.fps_den);
 	} else {
 		blog(LOG_ERROR, "invalid encoder selected");
+		g_free(data);
 		return NULL;
 	}
 
@@ -289,6 +312,8 @@ void *gstreamer_encoder_create_h265(obs_data_t *settings,
 		data->ovi.fps_num, data->ovi.fps_den, encoder_string,
 		obs_data_get_string(data->settings, "extra_options"));
 
+	blog(LOG_INFO, "[obs-gstreamer-encoder] Launching H.265 encoder pipeline: %s", pipe_string);
+
 	GError *err = NULL;
 
 	data->pipe = gst_parse_launch(pipe_string, &err);
@@ -297,14 +322,28 @@ void *gstreamer_encoder_create_h265(obs_data_t *settings,
 	g_free(pipe_string);
 
 	if (err != NULL) {
-		blog(LOG_ERROR, "%s", err->message);
+		blog(LOG_ERROR, "[obs-gstreamer-encoder] H.265 pipeline creation failed: %s", err->message);
+		g_error_free(err);
+		g_free(data);
 		return NULL;
 	}
 
 	data->appsrc = gst_bin_get_by_name(GST_BIN(data->pipe), "appsrc");
 	data->appsink = gst_bin_get_by_name(GST_BIN(data->pipe), "appsink");
 
+	if (!data->appsrc || !data->appsink) {
+		blog(LOG_ERROR, "[obs-gstreamer-encoder] Failed to locate appsrc (%p) or appsink (%p) in H.265 pipeline",
+			(void *)data->appsrc, (void *)data->appsink);
+		if (data->appsink) gst_object_unref(data->appsink);
+		if (data->appsrc) gst_object_unref(data->appsrc);
+		gst_element_set_state(data->pipe, GST_STATE_NULL);
+		gst_object_unref(data->pipe);
+		g_free(data);
+		return NULL;
+	}
+
 	gst_element_set_state(data->pipe, GST_STATE_PLAYING);
+	blog(LOG_INFO, "[obs-gstreamer-encoder] H.265 encoder pipeline started successfully");
 
 	return data;
 }
@@ -389,7 +428,7 @@ bool gstreamer_encoder_encode(void *p, struct encoder_frame *frame,
 		size_t size;
 
 		// this is pretty lazy..
-		for (size = 0; size < data->info.size; size++) {
+		for (size = 0; size + 4 < data->info.size; size++) {
 			if (data->info.data[size + 0] == 0 &&
 			    data->info.data[size + 1] == 0 &&
 			    data->info.data[size + 2] == 0 &&

@@ -147,12 +147,17 @@ static gboolean bus_callback(GstBus *bus, GstMessage *message,
 
 	switch (GST_MESSAGE_TYPE(message)) {
 	case GST_MESSAGE_ERROR: {
-		GError *err;
-		gst_message_parse_error(message, &err, NULL);
+		GError *err = NULL;
+		gchar *debug = NULL;
+		gst_message_parse_error(message, &err, &debug);
 		const char *source_name = obs_source_get_name(data->source);
-		blog(LOG_ERROR, "[obs-gstreamer] %s: %s", source_name,
-		     err->message);
-		g_error_free(err);
+		const char *src_name = GST_MESSAGE_SRC_NAME(message);
+		blog(LOG_ERROR, "[obs-gstreamer-source] %s [%s] ERROR: %s (debug: %s)",
+		     source_name, src_name ? src_name : "pipeline",
+		     err ? err->message : "unknown",
+		     debug ? debug : "none");
+		if (err) g_error_free(err);
+		g_free(debug);
 	} // fallthrough
 	case GST_MESSAGE_EOS:
 		if (obs_data_get_bool(data->settings, "clear_on_end"))
@@ -172,12 +177,17 @@ static gboolean bus_callback(GstBus *bus, GstMessage *message,
 		}
 		break;
 	case GST_MESSAGE_WARNING: {
-		GError *err;
-		gst_message_parse_warning(message, &err, NULL);
+		GError *err = NULL;
+		gchar *debug = NULL;
+		gst_message_parse_warning(message, &err, &debug);
 		const char *source_name = obs_source_get_name(data->source);
-		blog(LOG_WARNING, "[obs-gstreamer] %s: %s", source_name,
-		     err->message);
-		g_error_free(err);
+		const char *src_name = GST_MESSAGE_SRC_NAME(message);
+		blog(LOG_WARNING, "[obs-gstreamer-source] %s [%s] WARNING: %s (debug: %s)",
+		     source_name, src_name ? src_name : "pipeline",
+		     err ? err->message : "unknown",
+		     debug ? debug : "none");
+		if (err) g_error_free(err);
+		g_free(debug);
 	} break;
 	default:
 		break;
@@ -317,11 +327,15 @@ static GstFlowReturn audio_new_sample(GstAppSink *appsink, gpointer user_data)
 	audio.samples_per_sec = audio_info.rate;
 	audio.data[0] = info.data;
 
-	audio.timestamp =
-		obs_data_get_bool(data->settings, "use_timestamps_audio")
-			? GST_BUFFER_PTS(buffer)
-			: data->audio_count++ * GST_SECOND *
-				  (audio.frames / (double)audio_info.rate);
+	if (obs_data_get_bool(data->settings, "use_timestamps_audio") &&
+	    GST_CLOCK_TIME_IS_VALID(GST_BUFFER_PTS(buffer))) {
+		audio.timestamp = GST_BUFFER_PTS(buffer);
+	} else {
+		audio.timestamp = audio_info.rate > 0
+			? (uint64_t)data->audio_count * GST_SECOND / audio_info.rate
+			: 0;
+	}
+	data->audio_count += audio.frames;
 
 	switch (audio_info.channels) {
 	case 1:
@@ -601,11 +615,15 @@ static void create_pipeline(data_t *data)
 
 	// check if connected and remove if not
 	GstElement *sink = gst_bin_get_by_name(GST_BIN(data->pipe), "video");
-	GstPad *pad = gst_element_get_static_pad(sink, "sink");
-	if (!gst_pad_is_linked(pad))
-		gst_bin_remove(GST_BIN(data->pipe), appsink);
-	gst_object_unref(pad);
-	gst_object_unref(sink);
+	if (sink) {
+		GstPad *pad = gst_element_get_static_pad(sink, "sink");
+		if (pad) {
+			if (!gst_pad_is_linked(pad))
+				gst_bin_remove(GST_BIN(data->pipe), appsink);
+			gst_object_unref(pad);
+		}
+		gst_object_unref(sink);
+	}
 
 	gst_object_unref(appsink);
 
@@ -629,11 +647,15 @@ static void create_pipeline(data_t *data)
 
 	// check if connected and remove if not
 	sink = gst_bin_get_by_name(GST_BIN(data->pipe), "audio");
-	pad = gst_element_get_static_pad(sink, "sink");
-	if (!gst_pad_is_linked(pad))
-		gst_bin_remove(GST_BIN(data->pipe), appsink);
-	gst_object_unref(pad);
-	gst_object_unref(sink);
+	if (sink) {
+		GstPad *pad = gst_element_get_static_pad(sink, "sink");
+		if (pad) {
+			if (!gst_pad_is_linked(pad))
+				gst_bin_remove(GST_BIN(data->pipe), appsink);
+			gst_object_unref(pad);
+		}
+		gst_object_unref(sink);
+	}
 
 	gst_object_unref(appsink);
 
