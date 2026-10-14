@@ -470,11 +470,23 @@ bool gstreamer_output_start(void *p)
 		blog(LOG_INFO, "[obs-gstreamer] WebRTC output started successfully");
 	} else {
 		GError *err = NULL;
-		char *pipe_string = g_strdup_printf(
-			"appsrc name=appsrc_video is-live=true format=GST_FORMAT_TIME do-timestamp=true ! queue ! video/x-raw, format=%s, width=%d, height=%d, framerate=%d/%d ! videoconvert ! %s",
-			gst_format, data->ovi.output_width, data->ovi.output_height,
-			data->ovi.fps_num, data->ovi.fps_den,
-			obs_data_get_string(data->settings, "pipeline"));
+		char *pipe_string = NULL;
+		const char *user_pipe = obs_data_get_string(data->settings, "pipeline");
+		bool is_encoded = (obs_output_get_flags(data->output) & OBS_OUTPUT_ENCODED) != 0;
+
+		if (user_pipe && strstr(user_pipe, "appsrc")) {
+			pipe_string = g_strdup(user_pipe);
+		} else if (is_encoded) {
+			pipe_string = g_strdup_printf(
+				"appsrc name=appsrc_video is-live=true format=GST_FORMAT_TIME do-timestamp=true caps=\"video/x-h264, stream-format=byte-stream, alignment=au\" ! %s",
+				(user_pipe && user_pipe[0]) ? user_pipe : "fakesink");
+		} else {
+			pipe_string = g_strdup_printf(
+				"appsrc name=appsrc_video is-live=true format=GST_FORMAT_TIME do-timestamp=true ! queue ! video/x-raw, format=%s, width=%d, height=%d, framerate=%d/%d ! videoconvert ! %s",
+				gst_format, data->ovi.output_width, data->ovi.output_height,
+				data->ovi.fps_num, data->ovi.fps_den,
+				(user_pipe && user_pipe[0]) ? user_pipe : "autovideosink sync=false");
+		}
 
 		blog(LOG_INFO, "[obs-gstreamer] Launching custom pipeline: %s", pipe_string);
 		data->pipe = gst_parse_launch(pipe_string, &err);

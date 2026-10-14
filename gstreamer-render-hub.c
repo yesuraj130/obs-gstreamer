@@ -30,8 +30,10 @@ struct gst_hub_branch {
 	GstRTSPMediaFactory *factory;
 	GstElement *appsrc;
 	GstRTSPMedia *media;
+	GstElement *pipe;
 	GMutex lock;
 	bool active;
+	bool is_pipeline;
 	bool waiting_for_keyframe;
 	int client_count;
 	struct gst_master_hub *hub;
@@ -69,6 +71,7 @@ struct gst_master_hub {
 	GThread *rtsp_thread;
 
 	gint connected_client_count; // Number of active remote RTSP clients across all branches
+	gint pipeline_branch_count;  // Number of active direct GPU pipeline branches (always-pushing)
 	GMutex branch_lock;
 	struct gst_hub_branch *branches;
 	size_t active_branch_count;
@@ -187,8 +190,8 @@ static void hub_render_callback(void *param, uint32_t cx, uint32_t cy)
 	struct gst_master_hub *hub = (struct gst_master_hub *)param;
 	if (!hub || !hub->view) return;
 
-	// On-Demand Encoding: If no client is connected to any branch, do NOT render or encode!
-	if (g_atomic_int_get(&hub->connected_client_count) <= 0) {
+	// Render if ANY RTSP client is connected OR ANY pipeline branch is active
+	if (g_atomic_int_get(&hub->connected_client_count) <= 0 && g_atomic_int_get(&hub->pipeline_branch_count) <= 0) {
 		hub->first_frame_primed = false;
 		return;
 	}
@@ -211,7 +214,7 @@ static void hub_render_callback(void *param, uint32_t cx, uint32_t cy)
 	}
 
 	// 2. Map the PREVIOUS frame's staging surface (GPU finished DMA, zero CPU wait)
-	if (hub->first_frame_primed && hub->stagesurf[prev] && hub->appsrc) {
+	if (hub->first_frame_primed && hub->stagesurf[prev]) {
 		uint8_t *data = NULL;
 		uint32_t linesize = 0;
 		if (gs_stagesurface_map(hub->stagesurf[prev], &data, &linesize)) {
@@ -236,7 +239,25 @@ static void hub_render_callback(void *param, uint32_t cx, uint32_t cy)
 					GST_BUFFER_DURATION(buf) = duration;
 					hub->frame_index++;
 
-					gst_app_src_push_buffer(GST_APP_SRC(hub->appsrc), buf);
+					// Push to master hardware encoder if RTSP clients are active
+					if (hub->appsrc && g_atomic_int_get(&hub->connected_client_count) > 0) {
+						gst_app_src_push_buffer(GST_APP_SRC(hub->appsrc), gst_buffer_ref(buf));
+					}
+
+					// Push raw frames directly to custom pipeline branches (Always Pushing!)
+					if (g_atomic_int_get(&hub->pipeline_branch_count) > 0) {
+						g_mutex_lock(&hub->branch_lock);
+						struct gst_hub_branch *curr = hub->branches;
+						while (curr) {
+							if (curr->active && curr->is_pipeline && curr->appsrc) {
+								gst_app_src_push_buffer(GST_APP_SRC(curr->appsrc), gst_buffer_ref(buf));
+							}
+							curr = curr->next;
+						}
+						g_mutex_unlock(&hub->branch_lock);
+					}
+
+					gst_buffer_unref(buf);
 				} else {
 					gst_buffer_unref(buf);
 				}
@@ -560,10 +581,100 @@ static void hub_destroy(struct gst_master_hub *hub)
 	blog(LOG_INFO, "[obs-gstreamer-hub] Master GPU Render Hub destroyed cleanly");
 }
 
+/* Public API: Start a direct GPU custom pipeline branch (always-pushing, raw BGRA to pipeline) */
+gst_hub_branch_t *gst_render_hub_start_pipeline_branch(const char *name, const char *source_type, const char *source_name, const char *pipeline_str)
+{
+	g_mutex_lock(&g_hub_mutex);
+
+	// Ensure master hub is running
+	if (!g_hub) {
+		g_hub = bzalloc(sizeof(struct gst_master_hub));
+		g_mutex_init(&g_hub->branch_lock);
+		gst_hub_output_params_t dummy_params = {0};
+		dummy_params.source_type = source_type;
+		dummy_params.source_name = source_name;
+		if (!hub_init(g_hub, &dummy_params)) {
+			hub_destroy(g_hub);
+			g_hub = NULL;
+			g_mutex_unlock(&g_hub_mutex);
+			return NULL;
+		}
+	}
+
+	gchar *pipe_desc = NULL;
+	if (pipeline_str && strstr(pipeline_str, "appsrc")) {
+		pipe_desc = g_strdup(pipeline_str);
+	} else {
+		pipe_desc = g_strdup_printf(
+			"appsrc name=appsrc_video is-live=true format=GST_FORMAT_TIME do-timestamp=true "
+			"caps=\"video/x-raw, format=BGRA, width=%u, height=%u, framerate=%u/%u\" ! "
+			"%s",
+			g_hub->width, g_hub->height, g_hub->fps_num, g_hub->fps_den,
+			(pipeline_str && pipeline_str[0]) ? pipeline_str : "autovideosink sync=false");
+	}
+
+	GError *err = NULL;
+	GstElement *pipe = gst_parse_launch(pipe_desc, &err);
+	blog(LOG_INFO, "[obs-gstreamer-hub] Launching direct GPU pipeline: %s", pipe_desc);
+	g_free(pipe_desc);
+
+	if (err || !pipe) {
+		blog(LOG_ERROR, "[obs-gstreamer-hub] Failed to create direct GPU pipeline: %s",
+			err ? err->message : "unknown error");
+		if (err) g_error_free(err);
+		g_mutex_unlock(&g_hub_mutex);
+		return NULL;
+	}
+
+	GstElement *appsrc = gst_bin_get_by_name(GST_BIN(pipe), "appsrc_video");
+	if (!appsrc) {
+		blog(LOG_ERROR, "[obs-gstreamer-hub] 'appsrc_video' not found in direct GPU pipeline");
+		gst_element_set_state(pipe, GST_STATE_NULL);
+		gst_object_unref(pipe);
+		g_mutex_unlock(&g_hub_mutex);
+		return NULL;
+	}
+
+	gst_app_src_set_stream_type(GST_APP_SRC(appsrc), GST_APP_STREAM_TYPE_STREAM);
+	gst_app_src_set_latency(GST_APP_SRC(appsrc), 0, 0);
+
+	struct gst_hub_branch *branch = bzalloc(sizeof(struct gst_hub_branch));
+	branch->name = bstrdup(name ? name : "Pipeline");
+	branch->is_pipeline = true;
+	branch->pipe = pipe;
+	branch->appsrc = appsrc;
+	branch->hub = g_hub;
+	branch->active = true;
+	g_mutex_init(&branch->lock);
+
+	gst_element_set_state(branch->pipe, GST_STATE_PLAYING);
+
+	g_mutex_lock(&g_hub->branch_lock);
+	branch->next = g_hub->branches;
+	g_hub->branches = branch;
+	g_hub->active_branch_count++;
+	g_atomic_int_inc(&g_hub->pipeline_branch_count);
+	g_mutex_unlock(&g_hub->branch_lock);
+
+	blog(LOG_INFO, "[obs-gstreamer-hub] Direct GPU pipeline '%s' started (always-pushing)", branch->name);
+
+	g_mutex_unlock(&g_hub_mutex);
+	return branch;
+}
+
 /* Public API: Start a direct RTSP output branch using native OBS data settings */
 gst_hub_branch_t *gst_render_hub_start_branch_data(obs_data_t *settings)
 {
 	if (!settings) return NULL;
+
+	const char *mode = obs_data_get_string(settings, "mode");
+	if (g_strcmp0(mode, "Pipeline") == 0) {
+		const char *name = obs_data_get_string(settings, "name");
+		const char *source_type = obs_data_get_string(settings, "source_type");
+		const char *source_name = obs_data_get_string(settings, "source_name");
+		const char *pipeline_str = obs_data_get_string(settings, "pipeline");
+		return gst_render_hub_start_pipeline_branch(name, source_type, source_name, pipeline_str);
+	}
 
 	gst_hub_output_params_t params = {0};
 	params.name = obs_data_get_string(settings, "name");
@@ -727,6 +838,23 @@ static void gst_render_hub_stop_branch_internal(gst_hub_branch_t *branch)
 
 	g_mutex_lock(&branch->lock);
 	branch->active = false;
+
+	if (branch->is_pipeline) {
+		if (hub) {
+			g_atomic_int_dec_and_test(&hub->pipeline_branch_count);
+		}
+		if (branch->pipe) {
+			gst_element_set_state(branch->pipe, GST_STATE_NULL);
+			gst_object_unref(branch->pipe);
+			branch->pipe = NULL;
+		}
+		if (branch->appsrc) {
+			gst_object_unref(branch->appsrc);
+			branch->appsrc = NULL;
+		}
+		blog(LOG_INFO, "[obs-gstreamer-hub] Direct GPU pipeline '%s' stopped cleanly", branch->name ? branch->name : "pipeline");
+	}
+
 	int branch_clients = branch->client_count;
 	branch->client_count = 0;
 	if (branch->media) {

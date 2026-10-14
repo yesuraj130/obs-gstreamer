@@ -479,18 +479,19 @@ static bool edit_configuration(QWidget *parent, gstreamer_output_config *config)
 		const QString cur_render_mode = render_mode->currentText();
 		const bool is_callback = (cur_render_mode == RENDER_MODE_CALLBACK);
 
-		// If Render Callback is active, WebRTC is not supported on direct GPU hub branches.
-		// If WebRTC is currently selected, switch to RTSP.
-		if (is_callback && mode->currentText() == "WebRTC") {
+		// Render Callback is specifically the Direct GPU RTSP Hub.
+		// If Render Callback is active, lock Output mode to RTSP (WebRTC & Pipeline require OBS Output).
+		if (is_callback && mode->currentText() != "RTSP") {
 			mode->setCurrentText("RTSP");
 		}
 		QStandardItemModel *mode_model = qobject_cast<QStandardItemModel *>(mode->model());
 		if (mode_model) {
 			for (int i = 0; i < mode_model->rowCount(); ++i) {
 				QStandardItem *item = mode_model->item(i);
-				if (item && item->text() == "WebRTC") {
-					item->setEnabled(!is_callback);
-					item->setSelectable(!is_callback);
+				if (item) {
+					const bool allow = !is_callback || (item->text() == "RTSP");
+					item->setEnabled(allow);
+					item->setSelectable(allow);
 				}
 			}
 		}
@@ -675,14 +676,14 @@ static void start_selected(gstreamer_dock_state *state, int row)
 		(config.source_type == "Scene" ? config.scene_name : config.source_name).toUtf8().constData());
 
 	// Port Conflict Detection: If starting an RTSP server, check if port is already taken by another active output
-	const bool is_rtsp = config.use_render_hub || (config.mode == "RTSP");
+	const bool is_rtsp = (config.mode == "RTSP");
 	if (is_rtsp) {
 		const QString target_port = config.rtsp_service.trimmed().isEmpty() ? "8554" : config.rtsp_service.trimmed();
 		for (size_t i = 0; i < state->configurations.size(); ++i) {
 			if (static_cast<int>(i) == row) continue;
 			const auto &other = state->configurations[i];
 			if (is_config_active(other)) {
-				const bool other_is_rtsp = other.use_render_hub || (other.mode == "RTSP");
+				const bool other_is_rtsp = (other.mode == "RTSP");
 				const QString other_port = other.rtsp_service.trimmed().isEmpty() ? "8554" : other.rtsp_service.trimmed();
 				if (other_is_rtsp && other_port == target_port) {
 					blog(LOG_ERROR, "[obs-gstreamer-dock] Port conflict: '%s' requested port %s which is in use by '%s'",
@@ -702,7 +703,7 @@ static void start_selected(gstreamer_dock_state *state, int row)
 
 	stop_output(config);
 
-	if (config.use_render_hub) {
+	if (config.use_render_hub && config.mode == "RTSP") {
 		obs_data_t *settings = obs_data_create();
 		obs_data_set_string(settings, "name", config.name.toUtf8().constData());
 		obs_data_set_string(settings, "source_type", config.source_type.toUtf8().constData());
@@ -752,7 +753,7 @@ static void start_selected(gstreamer_dock_state *state, int row)
 	}
 	select_source(config);
 
-	if (config.use_gpu_encoder) {
+	if (config.use_gpu_encoder && (obs_output_get_flags(config.output) & OBS_OUTPUT_ENCODED)) {
 		const char *enc_id = config.gpu_encoder_type.contains("h264") ?
 			"hjm-gstreamer-encoder-tex-h264" : "hjm-gstreamer-encoder-tex-h265";
 		obs_data_t *enc_settings = obs_data_create();

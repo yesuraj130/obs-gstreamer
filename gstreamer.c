@@ -63,8 +63,6 @@ bool obs_module_load(void)
 
 	struct obs_output_info output_info = {
 		.id = "hjm-gstreamer-output",
-		//.flags = OBS_OUTPUT_AV | OBS_OUTPUT_ENCODED,
-		//.flags = OBS_OUTPUT_AV,
 		.flags = OBS_OUTPUT_VIDEO,
 		.get_name = gstreamer_output_get_name,
 		.create = gstreamer_output_create,
@@ -79,9 +77,27 @@ bool obs_module_load(void)
 		.get_defaults = gstreamer_output_get_defaults,
 		.get_properties = gstreamer_output_get_properties,
 	};
-
 	obs_register_output(&output_info);
-	blog(LOG_INFO, "[obs-gstreamer] Registered output module: hjm-gstreamer-output");
+	blog(LOG_INFO, "[obs-gstreamer] Registered raw output module: hjm-gstreamer-output");
+
+	struct obs_output_info output_encoded_info = {
+		.id = "hjm-gstreamer-output-encoded",
+		.flags = OBS_OUTPUT_VIDEO | OBS_OUTPUT_ENCODED,
+		.get_name = gstreamer_output_get_name,
+		.create = gstreamer_output_create,
+		.destroy = gstreamer_output_destroy,
+		.start = gstreamer_output_start,
+		.stop = gstreamer_output_stop,
+
+		.encoded_packet = gstreamer_output_encoded_packet,
+		.raw_video = gstreamer_output_raw_video,
+		.raw_audio = gstreamer_output_raw_audio,
+
+		.get_defaults = gstreamer_output_get_defaults,
+		.get_properties = gstreamer_output_get_properties,
+	};
+	obs_register_output(&output_encoded_info);
+	blog(LOG_INFO, "[obs-gstreamer] Registered encoded output module: hjm-gstreamer-output-encoded");
 
 	gstreamer_encoder_tex_register();
 	gstreamer_dock_register();
