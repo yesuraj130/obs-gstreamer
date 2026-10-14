@@ -1,4 +1,4 @@
-name: Build obs-gstreamer (Multi-Target Separate Outputs)
+name: Build obs-gstreamer (Windows 10/11 & Linux)
 
 on:
   push:
@@ -10,120 +10,11 @@ on:
 
 jobs:
   # =========================================================================
-  # Target 1: Legacy OBS 27.2.4 (32-bit x86) for Windows 7 SP1 / Ivy Bridge
-  # =========================================================================
-  build-win32-obs27:
-    name: "Windows 7 / OBS 27 (32-bit x86)"
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install build prerequisites & MinGW-w64 i686
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            gcc-mingw-w64-i686 g++-mingw-w64-i686 mingw-w64-tools \
-            ninja-build python3-pip msitools wget unzip pkg-config
-          pip3 install --upgrade meson
-
-      - name: Fetch and prepare OBS Studio 27.2.4 (x86) SDK
-        run: |
-          mkdir -p obs-sdk-win32/include/obs
-          mkdir -p obs-sdk-win32/lib/pkgconfig
-          cd obs-sdk-win32
-          wget -q https://github.com/obsproject/obs-studio/releases/download/27.2.4/OBS-Studio-27.2.4-Full-x86.zip
-          unzip -q -o OBS-Studio-27.2.4-Full-x86.zip "bin/32bit/*"
-          wget -q https://github.com/obsproject/obs-studio/archive/refs/tags/27.2.4.tar.gz
-          tar -xzf 27.2.4.tar.gz
-          
-          # Provide headers in both include/obs/ and include/
-          cp -r obs-studio-27.2.4/libobs/* include/obs/
-          cp -r obs-studio-27.2.4/UI/obs-frontend-api/* include/obs/
-          cp -r obs-studio-27.2.4/libobs/* include/
-          cp -r obs-studio-27.2.4/UI/obs-frontend-api/* include/
-
-          # Generate obsconfig.h (normally produced by CMake build)
-          (
-            echo '#pragma once'
-            echo '#ifndef OBS_INSTALL_PREFIX'
-            echo '#define OBS_INSTALL_PREFIX ""'
-            echo '#endif'
-            echo '#ifndef OBS_DATA_PATH'
-            echo '#define OBS_DATA_PATH "data"'
-            echo '#endif'
-            echo '#ifndef OBS_PLUGIN_DESTINATION'
-            echo '#define OBS_PLUGIN_DESTINATION "obs-plugins"'
-            echo '#endif'
-            echo '#ifndef OBS_RELEASE_CANDIDATE'
-            echo '#define OBS_RELEASE_CANDIDATE 0'
-            echo '#endif'
-            echo '#ifndef OBS_BETA'
-            echo '#define OBS_BETA 0'
-            echo '#endif'
-          ) > include/obs/obsconfig.h
-          cp include/obs/obsconfig.h include/obsconfig.h
-          
-          # Generate MinGW import libraries from 32-bit OBS binaries
-          gendef bin/32bit/obs.dll
-          i686-w64-mingw32-dlltool -d obs.def -l libobs.dll.a -D obs.dll
-          gendef bin/32bit/obs-frontend-api.dll
-          i686-w64-mingw32-dlltool -d obs-frontend-api.def -l libobs-frontend-api.dll.a -D obs-frontend-api.dll
-
-          SDK_DIR="$(pwd)"
-          printf "prefix=%s\nlibdir=%s\nincludedir=%s/include\n\nName: libobs\nDescription: OBS Studio library\nVersion: 27.2.4\nLibs: -L\${libdir} -lobs\nCflags: -I\${includedir}\n" "$SDK_DIR" "$SDK_DIR" "$SDK_DIR" > lib/pkgconfig/libobs.pc
-          printf "prefix=%s\nlibdir=%s\nincludedir=%s/include\n\nName: obs-frontend-api\nDescription: OBS Studio Frontend API library\nVersion: 27.2.4\nLibs: -L\${libdir} -lobs-frontend-api\nCflags: -I\${includedir}\n" "$SDK_DIR" "$SDK_DIR" "$SDK_DIR" > lib/pkgconfig/obs-frontend-api.pc
-          cd ..
-
-      - name: Fetch and prepare GStreamer (x86) MinGW SDK
-        run: |
-          mkdir -p gst-sdk-win32
-          cd gst-sdk-win32
-          GST_URL="https://gstreamer.freedesktop.org/data/pkg/windows/1.18.6/mingw/gstreamer-1.0-devel-mingw-x86-1.18.6.msi"
-          wget -q "$GST_URL" -O gst-devel.msi || wget -q https://gstreamer.freedesktop.org/data/pkg/windows/1.20.7/mingw/gstreamer-1.0-devel-mingw-x86-1.20.7.msi -O gst-devel.msi
-          msiextract gst-devel.msi
-          
-          # Normalize pkg-config paths to current extracted location
-          GST_ROOT="$(pwd)/gstreamer/1.0/mingw_x86"
-          sed -i.bak "s|^prefix=.*|prefix=${GST_ROOT}|g" "${GST_ROOT}/lib/pkgconfig/"*.pc
-          cd ..
-
-      - name: Configure Meson build (32-bit x86, Win7 SP1 target)
-        run: |
-          export PKG_CONFIG_PATH="$(pwd)/obs-sdk-win32/lib/pkgconfig:$(pwd)/gst-sdk-win32/gstreamer/1.0/mingw_x86/lib/pkgconfig"
-          export PKG_CONFIG_LIBDIR="${PKG_CONFIG_PATH}"
-          
-          meson setup build-win32 \
-            --cross-file cross/i686-w64-mingw32.ini \
-            --buildtype release \
-            -Dwebrtc=disabled
-
-      - name: Compile 32-bit Plugin
-        run: |
-          ninja -C build-win32
-
-      - name: Package OBS 27 (32-bit Win7) Release Archive
-        run: |
-          mkdir -p package-win32/obs-plugins/32bit
-          cp build-win32/obs-gstreamer.dll package-win32/obs-plugins/32bit/
-          cp docs/README-INSTALL-OBS27-WIN32.txt package-win32/README-INSTALL.txt
-          
-          cd package-win32
-          zip -r ../obs-gstreamer-obs27-win32.zip ./*
-          cd ..
-
-      - name: Upload Win32 (OBS 27) Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: obs-gstreamer-obs27-win32
-          path: obs-gstreamer-obs27-win32.zip
-
-  # =========================================================================
-  # Target 2: Modern OBS Studio 30+/32+ (64-bit x64) for Windows 10/11
+  # Target 1: Modern OBS Studio 30+/32+ (64-bit x64) for Windows 10/11
   # Native MSVC + Qt 6 Build (Enables Native Qt6 Dock in OBS Studio Menu)
   # =========================================================================
   build-win64-obs30:
-    name: "Windows 10/11 / OBS 32+ (64-bit MSVC + Qt6 Dock)"
+    name: "Windows 10/11 / OBS 30+ (64-bit MSVC + Qt6 Dock)"
     runs-on: windows-latest
     steps:
       - name: Checkout repository
@@ -165,61 +56,43 @@ jobs:
           $gst_version = "1.28.7"
           $gst_base = "https://gstreamer.freedesktop.org/data/pkg/windows/$gst_version/msvc"
           $exe_url = "$gst_base/gstreamer-1.0-msvc-x86_64-$gst_version.exe"
-          $runtime_url = "$gst_base/gstreamer-1.0-msvc-x86_64-$gst_version.msi"
-          $devel_url = "$gst_base/gstreamer-1.0-devel-msvc-x86_64-$gst_version.msi"
 
-          # Determine installer format: GStreamer 1.28+ distributes a unified Inno Setup .exe (runtime + devel),
-          # whereas 1.26 and earlier distributed separate .msi packages.
-          $hasExe = $false
-          try {
-            $resp = Invoke-WebRequest -Uri $exe_url -Method Head -UseBasicParsing -ErrorAction Stop
-            if ($resp.StatusCode -eq 200) {
-              $hasExe = $true
-            }
-          } catch {
-            $hasExe = $false
-          }
-
-          if ($hasExe) {
-            Write-Host "Downloading GStreamer MSVC unified installer ($gst_version)..."
-            Invoke-WebRequest -Uri $exe_url -OutFile "gst-installer.exe"
-            $installerPath = (Get-Item "gst-installer.exe").FullName
-
-            Write-Host "Installing GStreamer MSVC (Runtime + Devel)..."
-            $p = Start-Process -FilePath $installerPath -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /TYPE=devel /DIR=`"C:\gstreamer\1.0\msvc_x86_64`" /LOG=`"gst-install.log`"" -Wait -PassThru
-            if ($p.ExitCode -ne 0) {
-              if (Test-Path "gst-install.log") {
-                Write-Host "Installer log tail:"
-                Get-Content "gst-install.log" | Select-Object -Last 50
+          Write-Host "Downloading GStreamer MSVC unified installer ($gst_version)..."
+          # Download using curl with resume (-C -) and retry for resilient multi-hundred-MB download
+          $downloaded = $false
+          for ($attempt = 1; $attempt -le 5; $attempt++) {
+            Write-Host "Download attempt $attempt of 5..."
+            & curl.exe -fL --retry 3 --retry-delay 3 --retry-all-errors -C - -o "gst-installer.exe" "$exe_url"
+            if (Test-Path "gst-installer.exe") {
+              $fileSize = (Get-Item "gst-installer.exe").Length
+              Write-Host "Current downloaded installer size: $fileSize bytes"
+              if ($fileSize -gt 500000000) {
+                $downloaded = $true
+                break
               }
-              Write-Error "GStreamer Inno installer failed with exit code $($p.ExitCode)"
-              exit 1
             }
-          } else {
-            Write-Host "Downloading GStreamer MSVC Runtime ($gst_version)..."
-            Invoke-WebRequest -Uri $runtime_url -OutFile "gst-runtime.msi"
-            Write-Host "Downloading GStreamer MSVC Devel SDK ($gst_version)..."
-            Invoke-WebRequest -Uri $devel_url -OutFile "gst-devel.msi"
-
-            $runtimeMsi = (Get-Item "gst-runtime.msi").FullName
-            $develMsi = (Get-Item "gst-devel.msi").FullName
-
-            Write-Host "Installing GStreamer MSVC Runtime..."
-            $p1 = Start-Process msiexec.exe -ArgumentList "/i `"$runtimeMsi`" ADDLOCAL=ALL /qn /norestart" -Wait -PassThru
-            if ($p1.ExitCode -ne 0 -and $p1.ExitCode -ne 3010) {
-              Write-Error "GStreamer runtime installer failed with exit code $($p1.ExitCode)"
-              exit 1
-            }
-
-            Write-Host "Installing GStreamer MSVC Devel SDK..."
-            $p2 = Start-Process msiexec.exe -ArgumentList "/i `"$develMsi`" ADDLOCAL=ALL /qn /norestart" -Wait -PassThru
-            if ($p2.ExitCode -ne 0 -and $p2.ExitCode -ne 3010) {
-              Write-Error "GStreamer devel installer failed with exit code $($p2.ExitCode)"
-              exit 1
-            }
+            Start-Sleep -Seconds 3
           }
 
-          # Refresh and detect GStreamer install directory
+          if (!$downloaded) {
+            Write-Error "Failed to download GStreamer unified installer."
+            exit 1
+          }
+
+          $installerPath = (Get-Item "gst-installer.exe").FullName
+
+          Write-Host "Installing GStreamer MSVC (Runtime + Devel)..."
+          $p = Start-Process -FilePath $installerPath -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /TYPE=devel /DIR=`"C:\gstreamer\1.0\msvc_x86_64`" /LOG=`"gst-install.log`"" -Wait -PassThru
+          if ($p.ExitCode -ne 0) {
+            if (Test-Path "gst-install.log") {
+              Write-Host "Installer log tail:"
+              Get-Content "gst-install.log" | Select-Object -Last 50
+            }
+            Write-Error "GStreamer Inno installer failed with exit code $($p.ExitCode)"
+            exit 1
+          }
+
+          # Detect GStreamer install directory
           $rawCandidates = @(
             "C:\gstreamer\1.0\msvc_x86_64",
             "C:\Program Files\gstreamer\1.0\msvc_x86_64",
@@ -260,43 +133,30 @@ jobs:
           New-Item -ItemType Directory -Force -Path "obs-sdk\include\obs" | Out-Null
           New-Item -ItemType Directory -Force -Path "obs-sdk\lib\pkgconfig" | Out-Null
 
-          # Support modern OBS 31/32+ asset naming (-Windows-x64.zip) and legacy OBS 30 (-Windows.zip)
-          $bin_urls = @(
-            "https://github.com/obsproject/obs-studio/releases/download/$obs_version/OBS-Studio-$obs_version-Windows-x64.zip",
-            "https://github.com/obsproject/obs-studio/releases/download/$obs_version/OBS-Studio-$obs_version-Windows.zip"
-          )
-          $downloaded = $false
-          foreach ($url in $bin_urls) {
-            try {
-              Write-Host "Downloading OBS Studio $obs_version Windows binary from $url..."
-              Invoke-WebRequest -Uri $url -OutFile "obs-bin.zip" -UseBasicParsing -ErrorAction Stop
-              $downloaded = $true
-              break
-            } catch {
-              Write-Host "Candidate URL not found: $url"
-            }
-          }
-          if (!$downloaded) {
-            Write-Error "Failed to download OBS Studio $obs_version Windows binary from release assets."
+          $bin_url = "https://github.com/obsproject/obs-studio/releases/download/$obs_version/OBS-Studio-$obs_version-Windows-x64.zip"
+          Write-Host "Downloading OBS Studio $obs_version Windows binary from $bin_url..."
+          & curl.exe -fL --retry 3 --retry-delay 2 --retry-all-errors -C - -o "obs-bin.zip" "$bin_url"
+          if ($LASTEXITCODE -ne 0 -or !(Test-Path "obs-bin.zip")) {
+            Write-Error "Failed to download OBS Studio $obs_version Windows binary."
             exit 1
           }
 
           Expand-Archive -Path "obs-bin.zip" -DestinationPath "obs-bin"
 
           Write-Host "Downloading OBS Studio $obs_version source headers..."
-          Invoke-WebRequest -Uri "https://github.com/obsproject/obs-studio/archive/refs/tags/$obs_version.zip" -OutFile "obs-src.zip"
+          & curl.exe -fL --retry 3 --retry-delay 2 --retry-all-errors -C - -o "obs-src.zip" "https://github.com/obsproject/obs-studio/archive/refs/tags/$obs_version.zip"
+          if ($LASTEXITCODE -ne 0 -or !(Test-Path "obs-src.zip")) {
+            Write-Error "Failed to download OBS Studio $obs_version source archive."
+            exit 1
+          }
           Expand-Archive -Path "obs-src.zip" -DestinationPath "obs-src"
 
-          # Provide headers (supports modern frontend/api and legacy UI/obs-frontend-api)
+          # Provide headers
           Copy-Item -Recurse -Force "obs-src\obs-studio-$obs_version\libobs\*" "obs-sdk\include\obs\"
           Copy-Item -Recurse -Force "obs-src\obs-studio-$obs_version\libobs\*" "obs-sdk\include\"
           if (Test-Path "obs-src\obs-studio-$obs_version\frontend\api") {
             Copy-Item -Recurse -Force "obs-src\obs-studio-$obs_version\frontend\api\*" "obs-sdk\include\obs\"
             Copy-Item -Recurse -Force "obs-src\obs-studio-$obs_version\frontend\api\*" "obs-sdk\include\"
-          }
-          if (Test-Path "obs-src\obs-studio-$obs_version\UI\obs-frontend-api") {
-            Copy-Item -Recurse -Force "obs-src\obs-studio-$obs_version\UI\obs-frontend-api\*" "obs-sdk\include\obs\"
-            Copy-Item -Recurse -Force "obs-src\obs-studio-$obs_version\UI\obs-frontend-api\*" "obs-sdk\include\"
           }
 
           # Generate obsconfig.h (normally produced by CMake build for OBS 28+)
@@ -371,7 +231,6 @@ jobs:
             $env:GSTREAMER_ROOT,
             "C:\gstreamer\1.0\msvc_x86_64",
             "C:\Program Files\gstreamer\1.0\msvc_x86_64",
-            "C:\Program Files (x86)\gstreamer\1.0\msvc_x86_64",
             [System.Environment]::GetEnvironmentVariable("GSTREAMER_1_0_ROOT_MSVC_X86_64", "Machine"),
             [System.Environment]::GetEnvironmentVariable("GSTREAMER_1_0_ROOT_MSVC_X86_64", "User")
           )
@@ -456,7 +315,7 @@ jobs:
           path: obs-gstreamer-obs30-win64.zip
 
   # =========================================================================
-  # Target 3: Linux (x86_64) Native (Latest OBS Studio 30+)
+  # Target 2: Linux (x86_64) Native (Latest OBS Studio 30+)
   # =========================================================================
   build-linux:
     name: "Linux (64-bit x86_64, OBS 30+)"
@@ -494,12 +353,12 @@ jobs:
           path: obs-gstreamer-linux-x86_64.tar.gz
 
   # =========================================================================
-  # Optional: Publish GitHub Release when tagged
+  # Publish GitHub Release when tagged
   # =========================================================================
   release:
     name: "Publish GitHub Release"
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build-win32-obs27, build-win64-obs30, build-linux]
+    needs: [build-win64-obs30, build-linux]
     runs-on: ubuntu-latest
     steps:
       - name: Download all build artifacts
@@ -509,7 +368,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            obs-gstreamer-obs27-win32/obs-gstreamer-obs27-win32.zip
             obs-gstreamer-obs30-win64/obs-gstreamer-obs30-win64.zip
             obs-gstreamer-linux-x86_64/obs-gstreamer-linux-x86_64.tar.gz
         env:
