@@ -124,7 +124,8 @@ jobs:
 
           if (-not $installed -and -not (Test-Path "$gstRootTarget\lib\pkgconfig\gstreamer-1.0.pc")) {
             Write-Host "Freedesktop.org downloads failed. Falling back to vcpkg..."
-            & vcpkg install gstreamer:x64-windows gst-plugins-base:x64-windows gst-plugins-bad:x64-windows gst-rtsp-server:x64-windows --triplet x64-windows
+            Remove-Item Env:\VCPKG_ROOT -ErrorAction SilentlyContinue
+            & C:\vcpkg\vcpkg.exe install gstreamer[plugins-base,plugins-good,plugins-bad,plugins-ugly,rtsp-server,webrtc]:x64-windows --triplet x64-windows
             if ($LASTEXITCODE -eq 0 -and (Test-Path "C:\vcpkg\installed\x64-windows\lib\pkgconfig\gstreamer-1.0.pc")) {
               $gstRootTarget = "C:\vcpkg\installed\x64-windows"
               $installed = $true
