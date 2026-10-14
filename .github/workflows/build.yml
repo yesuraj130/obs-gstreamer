@@ -65,55 +65,48 @@ jobs:
             Write-Host "GStreamer MSVC SDK already present (restored from cache or pre-installed)."
             $installed = $true
           } else {
-            $versions = @("1.28.7", "1.26.6", "1.24.12", "1.22.12")
+            $targets = @(
+              @{ Version = "1.28.7"; Retries = 2 },
+              @{ Version = "1.26.6"; Retries = 1 }
+            )
             $installed = $false
 
-            foreach ($ver in $versions) {
-              Write-Host "Trying GStreamer version $ver..."
-              $gst_base = "https://gstreamer.freedesktop.org/data/pkg/windows/$ver/msvc"
-              $exe_url = "$gst_base/gstreamer-1.0-msvc-x86_64-$ver.exe"
+            foreach ($target in $targets) {
+              $ver = $target.Version
+              for ($attempt = 1; $attempt -le $target.Retries; $attempt++) {
+                Write-Host "Trying GStreamer version $ver (Attempt $attempt of $($target.Retries))..."
+                $gst_base = "https://gstreamer.freedesktop.org/data/pkg/windows/$ver/msvc"
+                $exe_url = "$gst_base/gstreamer-1.0-msvc-x86_64-$ver.exe"
 
-              # Clean up previous attempts
-              if (Test-Path "gst-installer.exe") { Remove-Item "gst-installer.exe" -Force }
-              if (Test-Path "gst-runtime.msi") { Remove-Item "gst-runtime.msi" -Force }
-              if (Test-Path "gst-devel.msi") { Remove-Item "gst-devel.msi" -Force }
+                if (Test-Path "gst-installer.exe") { Remove-Item "gst-installer.exe" -Force }
+                if (Test-Path "gst-runtime.msi") { Remove-Item "gst-runtime.msi" -Force }
+                if (Test-Path "gst-devel.msi") { Remove-Item "gst-devel.msi" -Force }
 
-              # Try unified .exe first
-              Write-Host "Attempting download of unified .exe from $exe_url..."
-              try {
-                & curl.exe -fL --retry 5 --retry-delay 5 --retry-all-errors -o "gst-installer.exe" "$exe_url"
-                if ($LASTEXITCODE -eq 0 -and (Test-Path "gst-installer.exe")) {
-                  $size = (Get-Item "gst-installer.exe").Length
-                  if ($size -gt 400000000) {
-                    Write-Host "Unified .exe downloaded successfully ($size bytes). Installing..."
-                    $installerPath = (Get-Item "gst-installer.exe").FullName
-                    $p = Start-Process -FilePath $installerPath -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /TYPE=devel /DIR=`"$gstRootTarget`" /LOG=`"gst-install.log`"" -Wait -PassThru
-                    if ($p.ExitCode -eq 0) {
-                      $installed = $true
-                      break
-                    } else {
-                      Write-Host "Unified .exe installer exited with code $($p.ExitCode). Trying MSI fallback..."
+                # Try unified .exe
+                try {
+                  & curl.exe -fL --retry 2 --retry-delay 2 -o "gst-installer.exe" "$exe_url"
+                  if ($LASTEXITCODE -eq 0 -and (Test-Path "gst-installer.exe")) {
+                    $size = (Get-Item "gst-installer.exe").Length
+                    if ($size -gt 400000000) {
+                      $installerPath = (Get-Item "gst-installer.exe").FullName
+                      $p = Start-Process -FilePath $installerPath -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /TYPE=devel /DIR=`"$gstRootTarget`" /LOG=`"gst-install.log`"" -Wait -PassThru
+                      if ($p.ExitCode -eq 0) {
+                        $installed = $true
+                        break
+                      }
                     }
                   }
+                } catch {
+                  Write-Host "Unified .exe attempt failed: $_"
                 }
-              } catch {
-                Write-Host "Unified .exe download failed: $_"
-              }
 
-              # Fallback to separate .msi files (runtime + devel)
-              $runtime_url = "$gst_base/gstreamer-1.0-msvc-x86_64-$ver.msi"
-              $devel_url = "$gst_base/gstreamer-1.0-devel-msvc-x86_64-$ver.msi"
-
-              Write-Host "Attempting download of MSIs for $ver..."
-              try {
-                & curl.exe -fL --retry 3 --retry-delay 3 -o "gst-runtime.msi" "$runtime_url"
-                & curl.exe -fL --retry 3 --retry-delay 3 -o "gst-devel.msi" "$devel_url"
-
-                if ((Test-Path "gst-runtime.msi") -and (Test-Path "gst-devel.msi")) {
-                  $rSize = (Get-Item "gst-runtime.msi").Length
-                  $dSize = (Get-Item "gst-devel.msi").Length
-                  if ($rSize -gt 50000000 -and $dSize -gt 50000000) {
-                    Write-Host "MSIs downloaded successfully. Installing..."
+                # Fallback to separate MSIs
+                $runtime_url = "$gst_base/gstreamer-1.0-msvc-x86_64-$ver.msi"
+                $devel_url = "$gst_base/gstreamer-1.0-devel-msvc-x86_64-$ver.msi"
+                try {
+                  & curl.exe -fL --retry 2 --retry-delay 2 -o "gst-runtime.msi" "$runtime_url"
+                  & curl.exe -fL --retry 2 --retry-delay 2 -o "gst-devel.msi" "$devel_url"
+                  if ((Test-Path "gst-runtime.msi") -and (Test-Path "gst-devel.msi")) {
                     $p1 = Start-Process msiexec.exe -ArgumentList "/i `"$((Get-Item "gst-runtime.msi").FullName)`" ADDLOCAL=ALL /qn /norestart" -Wait -PassThru
                     $p2 = Start-Process msiexec.exe -ArgumentList "/i `"$((Get-Item "gst-devel.msi").FullName)`" ADDLOCAL=ALL /qn /norestart" -Wait -PassThru
                     if (($p1.ExitCode -eq 0 -or $p1.ExitCode -eq 3010) -and ($p2.ExitCode -eq 0 -or $p2.ExitCode -eq 3010)) {
@@ -121,10 +114,11 @@ jobs:
                       break
                     }
                   }
+                } catch {
+                  Write-Host "MSI attempt failed for ${ver}: $_"
                 }
-              } catch {
-                Write-Host "MSI download/install failed for ${ver}: $_"
               }
+              if ($installed) { break }
             }
           }
 
