@@ -56,13 +56,13 @@ static const char *RENDER_MODE_CPU_RAM  = "OBS Output (CPU RAM)";
 static const char *DEFAULT_MASTER_PIPELINE =
 	"appsrc name=hub_appsrc is-live=true format=GST_FORMAT_TIME do-timestamp=true "
 	"caps=\"video/x-raw, format=BGRA, width=%u, height=%u, framerate=%u/%u\" ! "
-	"videoconvert ! x264enc tune=zerolatency speed-preset=ultrafast bframes=0 key-int-max=60 bitrate=4000 ! "
-	"h264parse config-interval=-1 ! appsink name=hub_appsink sync=false drop=true max-buffers=1";
+	"videoconvert ! x264enc tune=zerolatency speed-preset=ultrafast bframes=0 key-int-max=30 bitrate=4000 ! "
+	"h264parse config-interval=1 ! appsink name=hub_appsink sync=false drop=true max-buffers=1";
 
 static const char *DEFAULT_HUB_RTSP_PIPELINE =
 	"( appsrc name=appsrc_video is-live=true format=GST_FORMAT_TIME do-timestamp=true "
 	"caps=\"video/x-h264, stream-format=byte-stream, alignment=au\" ! "
-	"h264parse config-interval=-1 ! rtph264pay name=pay0 pt=96 config-interval=1 )";
+	"h264parse config-interval=1 ! rtph264pay name=pay0 pt=96 config-interval=1 )";
 
 struct gstreamer_output_config {
 	QString name = "Output";
@@ -365,7 +365,6 @@ static bool edit_configuration(QWidget *parent, gstreamer_output_config *config)
 {
 	QDialog dialog(parent);
 	dialog.setWindowTitle("GStreamer Output");
-	dialog.resize(760, 380);
 	QVBoxLayout *main_layout = new QVBoxLayout(&dialog);
 	main_layout->setContentsMargins(12, 12, 12, 12);
 	main_layout->setSpacing(8);
@@ -377,7 +376,11 @@ static bool edit_configuration(QWidget *parent, gstreamer_output_config *config)
 	QWidget *left_panel = new QWidget(&dialog);
 	QWidget *right_panel = new QWidget(&dialog);
 	QFormLayout *left_form = new QFormLayout(left_panel);
-	QFormLayout *right_form = new QFormLayout(right_panel);
+	left_form->setContentsMargins(0, 0, 0, 0);
+
+	QHBoxLayout *right_layout = new QHBoxLayout(right_panel);
+	right_layout->setContentsMargins(0, 0, 0, 0);
+	right_layout->setSpacing(8);
 
 	QLineEdit *name = new QLineEdit(config->name);
 
@@ -418,9 +421,16 @@ static bool edit_configuration(QWidget *parent, gstreamer_output_config *config)
 	QLineEdit *mount = new QLineEdit(config->rtsp_mount.isEmpty() ? "/live" : config->rtsp_mount);
 	mount->setPlaceholderText("/live");
 
+	QLabel *pipeline_label = new QLabel("RTSP pipeline", right_panel);
+	pipeline_label->setAlignment(Qt::AlignTop | Qt::AlignLeft);
+	pipeline_label->setContentsMargins(0, 4, 0, 0);
+	pipeline_label->setMinimumWidth(pipeline_label->sizeHint().width());
+
 	QPlainTextEdit *rtsp_pipeline = new QPlainTextEdit(config->rtsp_pipeline);
-	rtsp_pipeline->setMinimumHeight(100);
+	const int three_lines_h = rtsp_pipeline->fontMetrics().lineSpacing() * 3 + 12;
+	rtsp_pipeline->setMinimumHeight(three_lines_h);
 	rtsp_pipeline->setMinimumWidth(430);
+	rtsp_pipeline->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
 
 	QSpinBox *http_port = new QSpinBox();
 	http_port->setRange(1024, 65535);
@@ -434,8 +444,9 @@ static bool edit_configuration(QWidget *parent, gstreamer_output_config *config)
 	auto_start->setChecked(config->auto_start);
 
 	QPlainTextEdit *pipeline = new QPlainTextEdit(config->pipeline);
-	pipeline->setMinimumHeight(100);
+	pipeline->setMinimumHeight(three_lines_h);
 	pipeline->setMinimumWidth(430);
+	pipeline->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
 
 	left_form->addRow("Name", name);
 	left_form->addRow("Source type", source_type);
@@ -449,8 +460,9 @@ static bool edit_configuration(QWidget *parent, gstreamer_output_config *config)
 	left_form->addRow("Web Root", web_root);
 	left_form->addRow("Auto-start", auto_start);
 
-	right_form->addRow("RTSP pipeline", rtsp_pipeline);
-	right_form->addRow("Pipeline", pipeline);
+	right_layout->addWidget(pipeline_label, 0, Qt::AlignTop);
+	right_layout->addWidget(rtsp_pipeline, 1);
+	right_layout->addWidget(pipeline, 1);
 
 	columns->addWidget(left_panel, 1);
 	columns->addWidget(right_panel, 2);
@@ -459,7 +471,7 @@ static bool edit_configuration(QWidget *parent, gstreamer_output_config *config)
 	QDialogButtonBox *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
 	main_layout->addWidget(buttons, 0, Qt::AlignRight);
 
-	auto update_visibility = [&dialog, left_form, right_panel, right_form, source_type, source, scene, render_mode, mode, mount, service, rtsp_pipeline, http_port, web_root, pipeline]() {
+	auto update_visibility = [&dialog, left_panel, left_form, right_panel, pipeline_label, source_type, source, scene, render_mode, mode, mount, service, rtsp_pipeline, http_port, web_root, pipeline]() {
 		const QString cur_source_type = source_type->currentText();
 		left_form->setRowVisible(source, cur_source_type == "Source");
 		left_form->setRowVisible(scene, cur_source_type == "Scene");
@@ -494,13 +506,18 @@ static bool edit_configuration(QWidget *parent, gstreamer_output_config *config)
 		left_form->setRowVisible(web_root, is_webrtc);
 
 		right_panel->setVisible(!is_webrtc);
-		right_form->setRowVisible(rtsp_pipeline, is_rtsp);
-		right_form->setRowVisible(pipeline, is_pipe);
+		if (is_rtsp) {
+			pipeline_label->setText("RTSP pipeline");
+			rtsp_pipeline->setVisible(true);
+			pipeline->setVisible(false);
+		} else if (is_pipe) {
+			pipeline_label->setText("Pipeline");
+			rtsp_pipeline->setVisible(false);
+			pipeline->setVisible(true);
+		}
 
 		if (is_webrtc) {
-			dialog.resize(420, 340);
-		} else {
-			dialog.resize(760, 380);
+			dialog.resize(left_panel->sizeHint().width() + 24, left_panel->sizeHint().height() + 50);
 		}
 		dialog.adjustSize();
 	};

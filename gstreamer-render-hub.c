@@ -12,6 +12,7 @@
 #include <gst/gst.h>
 #include <gst/app/gstappsrc.h>
 #include <gst/app/gstappsink.h>
+#include <gst/video/video.h>
 #include <gst/rtsp-server/rtsp-server.h>
 
 #include <stdlib.h>
@@ -31,6 +32,7 @@ struct gst_hub_branch {
 	GstRTSPMedia *media;
 	GMutex lock;
 	bool active;
+	bool waiting_for_keyframe;
 	int client_count;
 	struct gst_master_hub *hub;
 	struct gst_hub_branch *next;
@@ -46,6 +48,7 @@ struct gst_master_hub {
 	uint32_t height;
 	uint32_t fps_num;
 	uint32_t fps_den;
+	uint64_t frame_index;
 
 	// Double-buffered GPU ping-pong render targets
 	gs_texrender_t *texrender[2];
@@ -155,7 +158,7 @@ static GstElement *create_master_encoder_pipeline(struct gst_master_hub *hub,
 		pipe_desc = g_strdup_printf(
 			"appsrc name=hub_appsrc is-live=true format=GST_FORMAT_TIME do-timestamp=true "
 			"caps=\"video/x-raw, format=BGRA, width=%u, height=%u, framerate=%u/%u\" ! "
-			"%s ! h264parse config-interval=-1 ! "
+			"%s ! h264parse config-interval=1 ! "
 			"appsink name=hub_appsink sync=false drop=true max-buffers=1",
 			hub->width, hub->height, hub->fps_num, hub->fps_den,
 			encoder_elem);
@@ -197,10 +200,7 @@ static void hub_render_callback(void *param, uint32_t cx, uint32_t cy)
 	if (hub->texrender[cur]) {
 		gs_texrender_begin(hub->texrender[cur], hub->width, hub->height);
 		gs_enable_blending(false);
-		gs_matrix_push();
-		gs_ortho(0.0f, (float)hub->width, 0.0f, (float)hub->height, -100.0f, 100.0f);
 		obs_view_render(hub->view);
-		gs_matrix_pop();
 		gs_texrender_end(hub->texrender[cur]);
 
 		// Copy texture into staging surface for zero-stall DMA
@@ -230,7 +230,12 @@ static void hub_render_callback(void *param, uint32_t cx, uint32_t cy)
 					}
 					gst_buffer_unmap(buf, &map);
 
-					GST_BUFFER_DURATION(buf) = gst_util_uint64_scale_int(GST_SECOND, hub->fps_den, hub->fps_num);
+					uint64_t duration = gst_util_uint64_scale_int(GST_SECOND, hub->fps_den, hub->fps_num);
+					GST_BUFFER_PTS(buf) = hub->frame_index * duration;
+					GST_BUFFER_DTS(buf) = GST_BUFFER_PTS(buf);
+					GST_BUFFER_DURATION(buf) = duration;
+					hub->frame_index++;
+
 					gst_app_src_push_buffer(GST_APP_SRC(hub->appsrc), buf);
 				} else {
 					gst_buffer_unref(buf);
@@ -257,13 +262,30 @@ static gpointer hub_worker_loop(gpointer arg)
 
 		GstBuffer *buf = gst_sample_get_buffer(sample);
 		if (buf) {
+			const bool is_keyframe = !GST_BUFFER_FLAG_IS_SET(buf, GST_BUFFER_FLAG_DELTA_UNIT);
+
 			g_mutex_lock(&hub->branch_lock);
 			struct gst_hub_branch *curr = hub->branches;
 			while (curr) {
 				g_mutex_lock(&curr->lock);
 				if (curr->active && curr->appsrc) {
-					// Push a copy/ref to this RTSP client's pipeline
-					gst_app_src_push_buffer(GST_APP_SRC(curr->appsrc), gst_buffer_ref(buf));
+					// Drop delta frames for newly joined clients until first keyframe arrives
+					if (curr->waiting_for_keyframe) {
+						if (!is_keyframe) {
+							g_mutex_unlock(&curr->lock);
+							curr = curr->next;
+							continue;
+						}
+						curr->waiting_for_keyframe = false;
+						blog(LOG_INFO, "[obs-gstreamer-hub] Keyframe delivered to '%s', client playback starting",
+							curr->name ? curr->name : "branch");
+					}
+
+					// Copy buffer and clear timestamps so the branch's live appsrc stamps against the RTSP clock
+					GstBuffer *out_buf = gst_buffer_copy(buf);
+					GST_BUFFER_PTS(out_buf) = GST_CLOCK_TIME_NONE;
+					GST_BUFFER_DTS(out_buf) = GST_CLOCK_TIME_NONE;
+					gst_app_src_push_buffer(GST_APP_SRC(curr->appsrc), out_buf);
 				}
 				g_mutex_unlock(&curr->lock);
 				curr = curr->next;
@@ -300,6 +322,7 @@ static void media_configure_cb(GstRTSPMediaFactory *factory, GstRTSPMedia *media
 	}
 	branch->appsrc = appsrc;
 	branch->client_count++;
+	branch->waiting_for_keyframe = true;
 
 	if (branch->media && branch->media != media) {
 		g_signal_handlers_disconnect_by_data(branch->media, branch);
@@ -319,6 +342,11 @@ static void media_configure_cb(GstRTSPMediaFactory *factory, GstRTSPMedia *media
 			if (branch->hub->pipe) {
 				gst_element_set_state(branch->hub->pipe, GST_STATE_PLAYING);
 			}
+		}
+		// Request immediate IDR keyframe from upstream encoder so client begins playback instantly
+		if (branch->hub->appsink) {
+			GstEvent *event = gst_video_event_new_upstream_force_key_unit(GST_CLOCK_TIME_NONE, TRUE, 0);
+			gst_element_send_event(branch->hub->appsink, event);
 		}
 	}
 
@@ -634,7 +662,7 @@ gst_hub_branch_t *gst_render_hub_start_branch(const gst_hub_output_params_t *par
 	const char *default_launch_str =
 		"( appsrc name=appsrc_video is-live=true format=GST_FORMAT_TIME do-timestamp=true "
 		"caps=\"video/x-h264, stream-format=byte-stream, alignment=au\" ! "
-		"h264parse config-interval=-1 ! rtph264pay name=pay0 pt=96 config-interval=1 )";
+		"h264parse config-interval=1 ! rtph264pay name=pay0 pt=96 config-interval=1 )";
 
 	const char *launch_str = (params->rtsp_pipeline && params->rtsp_pipeline[0]) ?
 		params->rtsp_pipeline : default_launch_str;
