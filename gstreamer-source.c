@@ -36,6 +36,16 @@ struct gstreamer_source_data
 	bool use_timestamps_video;
 	bool use_timestamps_audio;
 
+	// Cached Video Format State (Calculated ONLY on caps change)
+	GstCaps                 *last_video_caps;
+	size_t                   video_offset[3];
+	struct obs_source_frame  cached_frame; // Pre-filled video frame template
+
+	// Cached Audio Format State (Calculated ONLY on caps change)
+	GstCaps                 *last_audio_caps;
+	uint32_t                 audio_bpf;
+	struct obs_source_audio  cached_audio; // Pre-filled audio packet template
+
 	enum obs_media_state obs_media_state;
 };
 
@@ -142,6 +152,126 @@ static GstBusSyncReply bus_sync_handler(GstBus *bus, GstMessage *message, gpoint
 }
 
 /* --------------------------------------------------------------------------
+ * Update Video Format Cache (Called ONLY on stream start or caps change)
+ * -------------------------------------------------------------------------- */
+static bool update_video_format_cache(struct gstreamer_source_data *data, GstCaps *caps)
+{
+	if (!data || !caps) return false;
+
+	if (data->last_video_caps) gst_caps_unref(data->last_video_caps);
+	data->last_video_caps = gst_caps_ref(caps);
+
+	GstVideoInfo v_info;
+	if (!gst_video_info_from_caps(&v_info, caps))
+	{
+		data->cached_frame.format = VIDEO_FORMAT_NONE;
+		return false;
+	}
+
+	// Pre-fill the persistent cached frame template (zero-initialized without memset)
+	data->cached_frame = (struct obs_source_frame){ 0 };
+	data->cached_frame.width = v_info.width;
+	data->cached_frame.height = v_info.height;
+	data->cached_frame.linesize[0] = v_info.stride[0];
+	data->cached_frame.linesize[1] = v_info.stride[1];
+	data->cached_frame.linesize[2] = v_info.stride[2];
+
+	data->video_offset[0] = v_info.offset[0];
+	data->video_offset[1] = v_info.offset[1];
+	data->video_offset[2] = v_info.offset[2];
+
+	enum video_range_type range = VIDEO_RANGE_DEFAULT;
+	switch (v_info.colorimetry.range)
+	{
+		case GST_VIDEO_COLOR_RANGE_0_255: range = VIDEO_RANGE_FULL; data->cached_frame.full_range = true; break;
+		case GST_VIDEO_COLOR_RANGE_16_235: range = VIDEO_RANGE_PARTIAL; data->cached_frame.full_range = false; break;
+		default: data->cached_frame.full_range = false; break;
+	}
+
+	enum video_colorspace cs = VIDEO_CS_DEFAULT;
+	switch (v_info.colorimetry.matrix)
+	{
+		case GST_VIDEO_COLOR_MATRIX_BT709: cs = VIDEO_CS_709; break;
+		case GST_VIDEO_COLOR_MATRIX_BT601: cs = VIDEO_CS_601; break;
+		default: break;
+	}
+
+	video_format_get_parameters(cs, range, data->cached_frame.color_matrix, data->cached_frame.color_range_min, data->cached_frame.color_range_max);
+
+	switch (v_info.finfo->format)
+	{
+		case GST_VIDEO_FORMAT_I420: data->cached_frame.format = VIDEO_FORMAT_I420; break;
+		case GST_VIDEO_FORMAT_NV12: data->cached_frame.format = VIDEO_FORMAT_NV12; break;
+		case GST_VIDEO_FORMAT_BGRA: data->cached_frame.format = VIDEO_FORMAT_BGRA; break;
+		case GST_VIDEO_FORMAT_BGRx: data->cached_frame.format = VIDEO_FORMAT_BGRX; break;
+		case GST_VIDEO_FORMAT_RGBx: data->cached_frame.format = VIDEO_FORMAT_RGBA; break;
+		case GST_VIDEO_FORMAT_RGBA: data->cached_frame.format = VIDEO_FORMAT_RGBA; break;
+		case GST_VIDEO_FORMAT_UYVY: data->cached_frame.format = VIDEO_FORMAT_UYVY; break;
+		case GST_VIDEO_FORMAT_YUY2: data->cached_frame.format = VIDEO_FORMAT_YUY2; break;
+		case GST_VIDEO_FORMAT_YVYU: data->cached_frame.format = VIDEO_FORMAT_YVYU; break;
+
+#ifdef GST_VIDEO_FORMAT_I420_10LE
+		case GST_VIDEO_FORMAT_I420_10LE: data->cached_frame.format = VIDEO_FORMAT_I010; break;
+		case GST_VIDEO_FORMAT_P010_10LE: data->cached_frame.format = VIDEO_FORMAT_P010; break;
+		case GST_VIDEO_FORMAT_I422_10LE: data->cached_frame.format = VIDEO_FORMAT_I210; break;
+		case GST_VIDEO_FORMAT_Y444_12LE: data->cached_frame.format = VIDEO_FORMAT_I412; break;
+#endif
+
+		default:
+			data->cached_frame.format = VIDEO_FORMAT_NONE;
+			blog(LOG_ERROR, "[obs-gstreamer-source] Unknown video format: %s", v_info.finfo ? v_info.finfo->name : "unspecified");
+			break;
+	}
+
+	return (data->cached_frame.format != VIDEO_FORMAT_NONE);
+}
+
+/* --------------------------------------------------------------------------
+ * Update Audio Format Cache (Called ONLY on stream start or caps change)
+ * -------------------------------------------------------------------------- */
+static bool update_audio_format_cache(struct gstreamer_source_data *data, GstCaps *caps)
+{
+	if (!data || !caps) return false;
+
+	if (data->last_audio_caps) gst_caps_unref(data->last_audio_caps);
+	data->last_audio_caps = gst_caps_ref(caps);
+
+	GstAudioInfo a_info;
+	if (!gst_audio_info_from_caps(&a_info, caps))
+	{
+		data->cached_audio.format = AUDIO_FORMAT_UNKNOWN;
+		return false;
+	}
+
+	data->cached_audio = (struct obs_source_audio){ 0 };
+	data->cached_audio.samples_per_sec = a_info.rate;
+	data->audio_bpf = a_info.bpf;
+
+	switch (a_info.channels)
+	{
+		case 1: data->cached_audio.speakers = SPEAKERS_MONO; break;
+		case 2: data->cached_audio.speakers = SPEAKERS_STEREO; break;
+		case 3: data->cached_audio.speakers = SPEAKERS_2POINT1; break;
+		case 4: data->cached_audio.speakers = SPEAKERS_4POINT0; break;
+		case 5: data->cached_audio.speakers = SPEAKERS_4POINT1; break;
+		case 6: data->cached_audio.speakers = SPEAKERS_5POINT1; break;
+		case 8: data->cached_audio.speakers = SPEAKERS_7POINT1; break;
+		default: data->cached_audio.speakers = SPEAKERS_UNKNOWN; break;
+	}
+
+	switch (a_info.finfo->format)
+	{
+		case GST_AUDIO_FORMAT_U8: data->cached_audio.format = AUDIO_FORMAT_U8BIT; break;
+		case GST_AUDIO_FORMAT_S16LE: data->cached_audio.format = AUDIO_FORMAT_16BIT; break;
+		case GST_AUDIO_FORMAT_S32LE: data->cached_audio.format = AUDIO_FORMAT_32BIT; break;
+		case GST_AUDIO_FORMAT_F32LE: data->cached_audio.format = AUDIO_FORMAT_FLOAT; break;
+		default: data->cached_audio.format = AUDIO_FORMAT_UNKNOWN; break;
+	}
+
+	return (data->cached_audio.format != AUDIO_FORMAT_UNKNOWN && data->audio_bpf > 0);
+}
+
+/* --------------------------------------------------------------------------
  * Video Sample Pull Callback (Hot path: executed 60-120x/sec)
  * -------------------------------------------------------------------------- */
 static GstFlowReturn video_new_sample(GstAppSink *appsink, gpointer user_data)
@@ -160,11 +290,22 @@ static GstFlowReturn video_new_sample(GstAppSink *appsink, gpointer user_data)
 		return GST_FLOW_OK;
 	}
 
-	GstVideoInfo video_info;
-	if (!gst_video_info_from_caps(&video_info, caps))
+	// 2-tier caps check: fast pointer compare + semantic equality
+	if (caps != data->last_video_caps)
 	{
-		gst_sample_unref(sample);
-		return GST_FLOW_OK;
+		if (!data->last_video_caps || !gst_caps_is_equal(caps, data->last_video_caps))
+		{
+			if (!update_video_format_cache(data, caps))
+			{
+				gst_sample_unref(sample);
+				return GST_FLOW_OK;
+			}
+		}
+		else
+		{
+			gst_caps_unref(data->last_video_caps);
+			data->last_video_caps = gst_caps_ref(caps);
+		}
 	}
 
 	GstMapInfo info;
@@ -174,74 +315,15 @@ static GstFlowReturn video_new_sample(GstAppSink *appsink, gpointer user_data)
 		return GST_FLOW_OK;
 	}
 
-	struct obs_source_frame frame = {};
+	// Single struct assignment copies all pre-calculated dimensions, format, linesizes & color matrix
+	struct obs_source_frame frame = data->cached_frame;
 
 	if (data->use_timestamps_video && GST_CLOCK_TIME_IS_VALID(GST_BUFFER_PTS(buffer))) frame.timestamp = GST_BUFFER_PTS(buffer);
 	else frame.timestamp = os_gettime_ns();
 
-	frame.width = video_info.width;
-	frame.height = video_info.height;
-	frame.linesize[0] = video_info.stride[0];
-	frame.linesize[1] = video_info.stride[1];
-	frame.linesize[2] = video_info.stride[2];
-	frame.data[0] = info.data + video_info.offset[0];
-	frame.data[1] = info.data + video_info.offset[1];
-	frame.data[2] = info.data + video_info.offset[2];
-
-	enum video_range_type range = VIDEO_RANGE_DEFAULT;
-	switch (video_info.colorimetry.range)
-	{
-		case GST_VIDEO_COLOR_RANGE_0_255:
-			range = VIDEO_RANGE_FULL;
-			frame.full_range = 1;
-			break;
-
-		case GST_VIDEO_COLOR_RANGE_16_235:
-			range = VIDEO_RANGE_PARTIAL;
-			break;
-
-		default: break;
-	}
-
-	enum video_colorspace cs = VIDEO_CS_DEFAULT;
-	switch (video_info.colorimetry.matrix)
-	{
-		case GST_VIDEO_COLOR_MATRIX_BT709:
-			cs = VIDEO_CS_709;
-			break;
-
-		case GST_VIDEO_COLOR_MATRIX_BT601:
-			cs = VIDEO_CS_601;
-			break;
-
-		default: break;
-	}
-
-	video_format_get_parameters(cs, range, frame.color_matrix, frame.color_range_min, frame.color_range_max);
-
-	switch (video_info.finfo->format)
-	{
-		case GST_VIDEO_FORMAT_I420: frame.format = VIDEO_FORMAT_I420; break;
-		case GST_VIDEO_FORMAT_NV12: frame.format = VIDEO_FORMAT_NV12; break;
-		case GST_VIDEO_FORMAT_BGRA: frame.format = VIDEO_FORMAT_BGRA; break;
-		case GST_VIDEO_FORMAT_BGRx: frame.format = VIDEO_FORMAT_BGRX; break;
-		case GST_VIDEO_FORMAT_RGBx: frame.format = VIDEO_FORMAT_RGBA; break;
-		case GST_VIDEO_FORMAT_RGBA: frame.format = VIDEO_FORMAT_RGBA; break;
-		case GST_VIDEO_FORMAT_UYVY: frame.format = VIDEO_FORMAT_UYVY; break;
-		case GST_VIDEO_FORMAT_YUY2: frame.format = VIDEO_FORMAT_YUY2; break;
-		case GST_VIDEO_FORMAT_YVYU: frame.format = VIDEO_FORMAT_YVYU; break;
-			
-	#ifdef GST_VIDEO_FORMAT_I420_10LE
-		case GST_VIDEO_FORMAT_I420_10LE: frame.format = VIDEO_FORMAT_I010; break;
-		case GST_VIDEO_FORMAT_P010_10LE: frame.format = VIDEO_FORMAT_P010; break;
-		case GST_VIDEO_FORMAT_I422_10LE: frame.format = VIDEO_FORMAT_I210; break;
-		case GST_VIDEO_FORMAT_Y444_12LE: frame.format = VIDEO_FORMAT_I412; break;
-	#endif
-
-		default: frame.format = VIDEO_FORMAT_NONE;
-			blog(LOG_ERROR, "[obs-gstreamer-source] Unknown video format: %s", video_info.finfo ? video_info.finfo->name : "unspecified");
-			break;
-	}
+	frame.data[0] = info.data + data->video_offset[0];
+	frame.data[1] = info.data + data->video_offset[1];
+	frame.data[2] = info.data + data->video_offset[2];
 
 	obs_source_output_video(data->gstreamer_source, &frame);
 
@@ -257,81 +339,59 @@ static GstFlowReturn video_new_sample(GstAppSink *appsink, gpointer user_data)
 static GstFlowReturn audio_new_sample(GstAppSink *appsink, gpointer user_data)
 {
 	struct gstreamer_source_data *data = (struct gstreamer_source_data *)user_data;
-	if (!data || !data->gstreamer_source)
-		return GST_FLOW_OK;
+	if (!data || !data->gstreamer_source) return GST_FLOW_OK;
 
 	GstSample *sample = gst_app_sink_pull_sample(appsink);
-	if (!sample)
-		return GST_FLOW_OK;
+	if (!sample) return GST_FLOW_OK;
 
 	GstBuffer *buffer = gst_sample_get_buffer(sample);
 	GstCaps *caps = gst_sample_get_caps(sample);
-	if (!buffer || !caps) {
+	if (!buffer || !caps)
+	{
 		gst_sample_unref(sample);
 		return GST_FLOW_OK;
 	}
 
-	GstAudioInfo audio_info;
-	if (!gst_audio_info_from_caps(&audio_info, caps)) {
-		gst_sample_unref(sample);
-		return GST_FLOW_OK;
+	// 2-tier caps check: fast pointer compare + semantic equality
+	if (caps != data->last_audio_caps)
+	{
+		if (!data->last_audio_caps || !gst_caps_is_equal(caps, data->last_audio_caps))
+		{
+			if (!update_audio_format_cache(data, caps))
+			{
+				gst_sample_unref(sample);
+				return GST_FLOW_OK;
+			}
+		}
+		else
+		{
+			gst_caps_unref(data->last_audio_caps);
+			data->last_audio_caps = gst_caps_ref(caps);
+		}
 	}
 
 	GstMapInfo info;
-	if (!gst_buffer_map(buffer, &info, GST_MAP_READ)) {
+	if (!gst_buffer_map(buffer, &info, GST_MAP_READ))
+	{
 		gst_sample_unref(sample);
 		return GST_FLOW_OK;
 	}
 
-	// Safe zero-division protection
-	if (audio_info.bpf == 0 || audio_info.rate == 0 || info.size == 0) {
+	if (info.size == 0 || data->audio_bpf == 0)
+	{
 		gst_buffer_unmap(buffer, &info);
 		gst_sample_unref(sample);
 		return GST_FLOW_OK;
 	}
 
-	struct obs_source_audio audio = {};
+	// Single struct assignment copies all pre-calculated sample rate, speakers & format
+	struct obs_source_audio audio = data->cached_audio;
 
-	audio.frames = info.size / audio_info.bpf;
-	audio.samples_per_sec = audio_info.rate;
+	audio.frames = info.size / data->audio_bpf;
 	audio.data[0] = info.data;
 
-	if (data->use_timestamps_audio && GST_CLOCK_TIME_IS_VALID(GST_BUFFER_PTS(buffer))) {
-		audio.timestamp = GST_BUFFER_PTS(buffer);
-	} else {
-		audio.timestamp = os_gettime_ns();
-	}
-
-	switch (audio_info.channels) {
-	case 1: audio.speakers = SPEAKERS_MONO; break;
-	case 2: audio.speakers = SPEAKERS_STEREO; break;
-	case 3: audio.speakers = SPEAKERS_2POINT1; break;
-	case 4: audio.speakers = SPEAKERS_4POINT0; break;
-	case 5: audio.speakers = SPEAKERS_4POINT1; break;
-	case 6: audio.speakers = SPEAKERS_5POINT1; break;
-	case 8: audio.speakers = SPEAKERS_7POINT1; break;
-	default:
-		audio.speakers = SPEAKERS_UNKNOWN;
-		break;
-	}
-
-	switch (audio_info.finfo->format) {
-	case GST_AUDIO_FORMAT_U8:
-		audio.format = AUDIO_FORMAT_U8BIT;
-		break;
-	case GST_AUDIO_FORMAT_S16LE:
-		audio.format = AUDIO_FORMAT_16BIT;
-		break;
-	case GST_AUDIO_FORMAT_S32LE:
-		audio.format = AUDIO_FORMAT_32BIT;
-		break;
-	case GST_AUDIO_FORMAT_F32LE:
-		audio.format = AUDIO_FORMAT_FLOAT;
-		break;
-	default:
-		audio.format = AUDIO_FORMAT_UNKNOWN;
-		break;
-	}
+	if (data->use_timestamps_audio && GST_CLOCK_TIME_IS_VALID(GST_BUFFER_PTS(buffer))) audio.timestamp = GST_BUFFER_PTS(buffer);
+	else audio.timestamp = os_gettime_ns();
 
 	obs_source_output_audio(data->gstreamer_source, &audio);
 
@@ -347,12 +407,12 @@ static GstFlowReturn audio_new_sample(GstAppSink *appsink, gpointer user_data)
  * -------------------------------------------------------------------------- */
 static void create_pipeline(struct gstreamer_source_data *data, obs_data_t *settings)
 {
-	if (!data || !settings)
-		return;
+	if (!data || !settings) return;
 
 	GError *err = NULL;
 	const char *user_pipeline = obs_data_get_string(settings, "pipeline");
-	if (!user_pipeline || !*user_pipeline) {
+	if (!user_pipeline || !*user_pipeline)
+	{
 		blog(LOG_WARNING, "[obs-gstreamer-source] No pipeline specified");
 		return;
 	}
@@ -360,10 +420,13 @@ static void create_pipeline(struct gstreamer_source_data *data, obs_data_t *sett
 	bool raw_pipeline = obs_data_get_bool(settings, "raw_pipeline");
 	gchar *pipeline_str = NULL;
 
-	if (raw_pipeline) {
+	if (raw_pipeline)
+	{
 		// Full Raw User Pipeline: zero string prepending or mangling
 		pipeline_str = g_strdup(user_pipeline);
-	} else {
+	}
+	else
+	{
 		// Assisted Mode: prepend video/audio sink chains connected to video. and audio.
 		pipeline_str = g_strdup_printf(
 #ifdef GST_VIDEO_FORMAT_I420_10LE
@@ -376,74 +439,64 @@ static void create_pipeline(struct gstreamer_source_data *data, obs_data_t *sett
 			user_pipeline);
 	}
 
-	blog(LOG_INFO, "[obs-gstreamer-source] Launching pipeline (raw=%d): %s",
-	     raw_pipeline, pipeline_str);
+	blog(LOG_INFO, "[obs-gstreamer-source] Launching pipeline (raw=%d): %s", raw_pipeline, pipeline_str);
 
 	data->pipe = gst_parse_launch(pipeline_str, &err);
 	g_free(pipeline_str);
 
-	if (err != NULL) {
+	if (err != NULL)
+	{
 		const char *source_name = obs_source_get_name(data->gstreamer_source);
-		blog(LOG_ERROR, "[obs-gstreamer-source] %s: Cannot start pipeline: %s",
-		     source_name ? source_name : "gstreamer-source", err->message);
+		blog(LOG_ERROR, "[obs-gstreamer-source] %s: Cannot start pipeline: %s", source_name ? source_name : "gstreamer-source", err->message);
 		g_error_free(err);
+
 		data->obs_media_state = OBS_MEDIA_STATE_ERROR;
 		obs_source_output_video(data->gstreamer_source, NULL);
 		return;
 	}
 
-	// Locate video appsink (supports "video_appsink" or "video")
+	// Locate video appsink (supports "video_appsink")
 	GstElement *v_sink = gst_bin_get_by_name(GST_BIN(data->pipe), "video_appsink");
-	if (!v_sink)
-		v_sink = gst_bin_get_by_name(GST_BIN(data->pipe), "video");
+	if (v_sink)
+	{
+		if (GST_IS_APP_SINK(v_sink))
+		{
+			GstAppSinkCallbacks video_cbs = {NULL, NULL, video_new_sample};
+			gst_app_sink_set_callbacks(GST_APP_SINK(v_sink), &video_cbs, data, NULL);
 
-	if (v_sink && GST_IS_APP_SINK(v_sink)) {
-		GstAppSinkCallbacks video_cbs = {NULL, NULL, video_new_sample};
-		gst_app_sink_set_callbacks(GST_APP_SINK(v_sink), &video_cbs, data, NULL);
-
-		bool sync_video = obs_data_get_bool(settings, "sync_appsink_video");
-		g_object_set(v_sink,
-			     "sync", sync_video ? TRUE : FALSE,
-			     "max-buffers", 2,
-			     "drop", TRUE,
-			     NULL);
+			bool sync_video = obs_data_get_bool(settings, "sync_appsink_video");
+			g_object_set(v_sink, "sync", sync_video ? TRUE : FALSE, "max-buffers", 2, "drop", TRUE, NULL);
+		}
 		gst_object_unref(v_sink); // Bin holds primary reference; safe to unref lookup
-	} else if (v_sink) {
-		gst_object_unref(v_sink);
 	}
 
-	// Locate audio appsink (supports "audio_appsink" or "audio")
+	// Locate audio appsink (supports "audio_appsink")
 	GstElement *a_sink = gst_bin_get_by_name(GST_BIN(data->pipe), "audio_appsink");
-	if (!a_sink)
-		a_sink = gst_bin_get_by_name(GST_BIN(data->pipe), "audio");
+	if (a_sink)
+	{
+		if (GST_IS_APP_SINK(a_sink))
+		{
+			GstAppSinkCallbacks audio_cbs = {NULL, NULL, audio_new_sample};
+			gst_app_sink_set_callbacks(GST_APP_SINK(a_sink), &audio_cbs, data, NULL);
 
-	if (a_sink && GST_IS_APP_SINK(a_sink)) {
-		GstAppSinkCallbacks audio_cbs = {NULL, NULL, audio_new_sample};
-		gst_app_sink_set_callbacks(GST_APP_SINK(a_sink), &audio_cbs, data, NULL);
-
-		bool sync_audio = obs_data_get_bool(settings, "sync_appsink_audio");
-		g_object_set(a_sink,
-			     "sync", sync_audio ? TRUE : FALSE,
-			     "max-buffers", 8,
-			     "drop", TRUE,
-			     NULL);
+			bool sync_audio = obs_data_get_bool(settings, "sync_appsink_audio");
+			g_object_set(a_sink, "sync", sync_audio ? TRUE : FALSE, "max-buffers", 8, "drop", TRUE, NULL);
+		}
 		gst_object_unref(a_sink); // Bin holds primary reference; safe to unref lookup
-	} else if (a_sink) {
-		gst_object_unref(a_sink);
 	}
 
 	// Attach synchronous bus handler (Zero additional thread)
 	GstBus *bus = gst_element_get_bus(data->pipe);
-	if (bus) {
+	if (bus)
+	{
 		gst_bus_set_sync_handler(bus, bus_sync_handler, data, NULL);
 		gst_object_unref(bus);
 	}
 
 	// Configure optional fixed latency
 	gint latency = (gint)obs_data_get_int(settings, "latency");
-	if (latency > 0) {
-		gst_pipeline_set_latency(GST_PIPELINE(data->pipe), latency * GST_MSECOND);
-	}
+	if (latency > 0) gst_pipeline_set_latency(GST_PIPELINE(data->pipe), latency * GST_MSECOND);
+	
 }
 
 static void start(struct gstreamer_source_data *data, obs_data_t *settings)
@@ -459,21 +512,22 @@ static void start(struct gstreamer_source_data *data, obs_data_t *settings)
 
 	create_pipeline(data, settings);
 
-	if (data->pipe) {
+	if (data->pipe)
+	{
 		gst_element_set_state(data->pipe, GST_STATE_PLAYING);
 	}
 }
 
 static void stop(struct gstreamer_source_data *data)
 {
-	if (!data || !data->pipe)
-		return;
+	if (!data || !data->pipe) return;
 
 	data->obs_media_state = OBS_MEDIA_STATE_STOPPED;
 
 	// Detach bus sync handler before transitioning state to prevent dangling callbacks
 	GstBus *bus = gst_element_get_bus(data->pipe);
-	if (bus) {
+	if (bus)
+	{
 		gst_bus_set_sync_handler(bus, NULL, NULL, NULL);
 		gst_object_unref(bus);
 	}
@@ -482,6 +536,18 @@ static void stop(struct gstreamer_source_data *data)
 	gst_element_set_state(data->pipe, GST_STATE_NULL);
 	gst_object_unref(data->pipe);
 	data->pipe = NULL;
+
+	// Free cached caps
+	if (data->last_video_caps)
+	{
+		gst_caps_unref(data->last_video_caps);
+		data->last_video_caps = NULL;
+	}
+	if (data->last_audio_caps)
+	{
+		gst_caps_unref(data->last_audio_caps);
+		data->last_audio_caps = NULL;
+	}
 
 	obs_source_output_video(data->gstreamer_source, NULL);
 }
@@ -497,14 +563,13 @@ const char *gstreamer_source_get_name(void *type_data)
 
 void *gstreamer_source_create(obs_data_t *settings, obs_source_t *source)
 {
-	struct gstreamer_source_data *data = g_new0(struct gstreamer_source_data, 1);
+	struct gstreamer_source_data *data = bzalloc(sizeof(struct gstreamer_source_data));
 	data->gstreamer_source = source;
 
 	bool nobuf = obs_data_get_bool(settings, "no_buffer");
 	obs_source_set_async_unbuffered(source, nobuf);
 
-	if (!obs_data_get_bool(settings, "stop_on_hide"))
-		start(data, settings);
+	if (!obs_data_get_bool(settings, "stop_on_hide")) start(data, settings);
 
 	return data;
 }
@@ -515,7 +580,7 @@ void gstreamer_source_destroy(void *user_data)
 	if (!data) return;
 
 	stop(data);
-	g_free(data);
+	bfree(data);
 }
 
 void gstreamer_source_update(void *user_data, obs_data_t *settings)
@@ -526,7 +591,8 @@ void gstreamer_source_update(void *user_data, obs_data_t *settings)
 	bool nobuf = obs_data_get_bool(settings, "no_buffer");
 	obs_source_set_async_unbuffered(data->gstreamer_source, nobuf);
 
-	if (obs_data_get_bool(settings, "stop_on_hide") && !obs_source_showing(data->gstreamer_source)) {
+	if (obs_data_get_bool(settings, "stop_on_hide") && !obs_source_showing(data->gstreamer_source))
+	{
 		stop(data);
 		return;
 	}
@@ -539,7 +605,8 @@ void gstreamer_source_show(void *user_data)
 	struct gstreamer_source_data *data = (struct gstreamer_source_data *)user_data;
 	if (!data) return;
 
-	if (data->pipe == NULL) {
+	if (data->pipe == NULL)
+	{
 		obs_data_t *settings = obs_source_get_settings(data->gstreamer_source);
 		start(data, settings);
 		obs_data_release(settings);
@@ -552,8 +619,7 @@ void gstreamer_source_hide(void *user_data)
 	if (!data) return;
 
 	obs_data_t *settings = obs_source_get_settings(data->gstreamer_source);
-	if (obs_data_get_bool(settings, "stop_on_hide"))
-		stop(data);
+	if (obs_data_get_bool(settings, "stop_on_hide")) stop(data);
 	obs_data_release(settings);
 }
 
@@ -569,9 +635,9 @@ int64_t gstreamer_source_get_time(void *user_data)
 	if (!data || !data->pipe) return 0;
 
 	gint64 position = 0;
-	if (gst_element_query_position(data->pipe, GST_FORMAT_TIME, &position)) {
-		if (GST_CLOCK_TIME_IS_VALID(position))
-			return GST_TIME_AS_MSECONDS(position);
+	if (gst_element_query_position(data->pipe, GST_FORMAT_TIME, &position))
+	{
+		if (GST_CLOCK_TIME_IS_VALID(position)) return GST_TIME_AS_MSECONDS(position);
 	}
 	return 0;
 }
@@ -582,9 +648,9 @@ int64_t gstreamer_source_get_duration(void *user_data)
 	if (!data || !data->pipe) return 0;
 
 	gint64 duration = 0;
-	if (gst_element_query_duration(data->pipe, GST_FORMAT_TIME, &duration)) {
-		if (GST_CLOCK_TIME_IS_VALID(duration))
-			return GST_TIME_AS_MSECONDS(duration);
+	if (gst_element_query_duration(data->pipe, GST_FORMAT_TIME, &duration))
+	{
+		if (GST_CLOCK_TIME_IS_VALID(duration)) return GST_TIME_AS_MSECONDS(duration);
 	}
 	return 0;
 }
@@ -646,7 +712,8 @@ static bool on_apply_clicked(obs_properties_t *props, obs_property_t *property, 
 	(void)props;
 	(void)property;
 	struct gstreamer_source_data *src_data = (struct gstreamer_source_data *)data;
-	if (src_data) {
+	if (src_data)
+	{
 		obs_data_t *settings = obs_source_get_settings(src_data->gstreamer_source);
 		start(src_data, settings);
 		obs_data_release(settings);
