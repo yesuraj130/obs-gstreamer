@@ -39,6 +39,9 @@ extern void gstreamer_output_raw_audio(void *data, struct audio_data *frame);
 extern void gstreamer_output_get_defaults(obs_data_t *settings);
 extern obs_properties_t *gstreamer_output_get_properties(void *data);
 
+// gstreamer-source.c
+extern struct obs_source_info gstreamer_source_info;
+
 #ifndef ENABLE_DOCK
 #define ENABLE_DOCK 1
 #endif
@@ -98,6 +101,9 @@ bool obs_module_load(void)
 	};
 	obs_register_output(&output_encoded_info);
 	blog(LOG_INFO, "[obs-gstreamer] Registered encoded output module: hjm-gstreamer-output-encoded");
+
+	obs_register_source(&gstreamer_source_info);
+	blog(LOG_INFO, "[obs-gstreamer] Registered source module: gstreamer-source");
 
 	gstreamer_encoder_tex_register();
 	gstreamer_dock_register();
