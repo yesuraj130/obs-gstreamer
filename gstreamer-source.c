@@ -22,6 +22,7 @@
 
 #include <obs/obs-module.h>
 #include <util/platform.h>
+#include <string.h>
 #include <gst/gst.h>
 #include <gst/video/video.h>
 #include <gst/audio/audio.h>
@@ -32,19 +33,17 @@ struct gstreamer_source_data
 	obs_source_t *gstreamer_source;
 	GstElement   *pipe;
 
-	// Hot-path timing flags (accessed 60-120x per sec in sample callbacks)
-	bool use_timestamps_video;
+	
+	bool use_timestamps_video; //cached settings flags (since accessed in hot path)
 	bool use_timestamps_audio;
-
-	// Cached Video Format State (Calculated ONLY on caps change)
-	GstCaps                 *last_video_caps;
-	size_t                   video_offset[3];
-	struct obs_source_frame  cached_frame; // Pre-filled video frame template
-
-	// Cached Audio Format State (Calculated ONLY on caps change)
-	GstCaps                 *last_audio_caps;
-	uint32_t                 audio_bpf;
-	struct obs_source_audio  cached_audio; // Pre-filled audio packet template
+	
+	GstCaps *last_video_caps; // Cached Video Format State (Calculated ONLY on caps change)
+	size_t video_offset[3];
+	struct obs_source_frame cached_frame; // Pre-filled video frame template
+	
+	GstCaps *last_audio_caps; // Cached Audio Format State (Calculated ONLY on caps change)
+	uint32_t audio_bpf;
+	struct obs_source_audio cached_audio; // Pre-filled audio packet template
 
 	enum obs_media_state obs_media_state;
 };
@@ -58,7 +57,7 @@ static void stop(struct gstreamer_source_data *data);
  * -------------------------------------------------------------------------- */
 static GstBusSyncReply bus_sync_handler(GstBus *bus, GstMessage *message, gpointer user_data)
 {
-	(void)bus;
+	UNUSED_PARAMETER(bus);
 	struct gstreamer_source_data *data = (struct gstreamer_source_data *)user_data;
 	if (!data || !data->gstreamer_source) return GST_BUS_DROP;
 
@@ -158,6 +157,15 @@ static bool update_video_format_cache(struct gstreamer_source_data *data, GstCap
 {
 	if (!data || !caps) return false;
 
+	bool initial = (data->last_video_caps == NULL);
+	const char *source_name = data->gstreamer_source ? obs_source_get_name(data->gstreamer_source) : "gstreamer-source";
+	gchar *caps_str = gst_caps_to_string(caps);
+	blog(LOG_INFO, "[obs-gstreamer-source] %s: Video caps %s: %s",
+			source_name ? source_name : "gstreamer-source",
+			initial ? "initial set" : "changed",
+			caps_str ? caps_str : "unknown");
+	if (caps_str) g_free(caps_str);
+
 	if (data->last_video_caps) gst_caps_unref(data->last_video_caps);
 	data->last_video_caps = gst_caps_ref(caps);
 
@@ -232,6 +240,15 @@ static bool update_video_format_cache(struct gstreamer_source_data *data, GstCap
 static bool update_audio_format_cache(struct gstreamer_source_data *data, GstCaps *caps)
 {
 	if (!data || !caps) return false;
+
+	bool initial = (data->last_audio_caps == NULL);
+	const char *source_name = data->gstreamer_source ? obs_source_get_name(data->gstreamer_source) : "gstreamer-source";
+	gchar *caps_str = gst_caps_to_string(caps);
+	blog(LOG_INFO, "[obs-gstreamer-source] %s: Audio caps %s: %s",
+			source_name ? source_name : "gstreamer-source",
+			initial ? "initial set" : "changed",
+			caps_str ? caps_str : "unknown");
+	if (caps_str) g_free(caps_str);
 
 	if (data->last_audio_caps) gst_caps_unref(data->last_audio_caps);
 	data->last_audio_caps = gst_caps_ref(caps);
@@ -403,8 +420,16 @@ static GstFlowReturn audio_new_sample(GstAppSink *appsink, gpointer user_data)
 
 /* --------------------------------------------------------------------------
  * Pipeline Creation & Launch
- * Supports both Full Raw Pipeline mode and Backward-Compatible mode.
  * -------------------------------------------------------------------------- */
+#ifdef GST_VIDEO_FORMAT_I420_10LE
+	#define DEFAULT_INTERNAL_VIDEO_PIPELINE "videoconvert name=video ! video/x-raw, format={I420,NV12,BGRA,BGRx,RGBx,RGBA,YUY2,YVYU,UYVY,I420_10LE,P010_10LE,I420_12LE,Y444_12LE} ! appsink name=video_appsink"
+#else
+	#define DEFAULT_INTERNAL_VIDEO_PIPELINE "videoconvert name=video ! video/x-raw, format={I420,NV12,BGRA,BGRx,RGBx,RGBA,YUY2,YVYU,UYVY} ! appsink name=video_appsink"
+#endif
+
+#define DEFAULT_INTERNAL_AUDIO_PIPELINE "audioconvert name=audio ! audioresample ! audio/x-raw, format={U8,S16LE,S32LE,F32LE}, channels={1,2,3,4,5,6,8}, layout=interleaved ! appsink name=audio_appsink"
+#define DEFAULT_INTERNAL_PIPELINE DEFAULT_INTERNAL_VIDEO_PIPELINE " " DEFAULT_INTERNAL_AUDIO_PIPELINE
+
 static void create_pipeline(struct gstreamer_source_data *data, obs_data_t *settings)
 {
 	if (!data || !settings) return;
@@ -417,29 +442,21 @@ static void create_pipeline(struct gstreamer_source_data *data, obs_data_t *sett
 		return;
 	}
 
-	bool raw_pipeline = obs_data_get_bool(settings, "raw_pipeline");
+	bool override_internal = obs_data_get_bool(settings, "override_internal_pipeline");
+	const char *default_internal = DEFAULT_INTERNAL_PIPELINE;
+	if (data && data->gstreamer_source)
+	{
+		const char *id = obs_source_get_id(data->gstreamer_source);
+		if (id && strcmp(id, "gstreamer-source-video") == 0)
+			default_internal = DEFAULT_INTERNAL_VIDEO_PIPELINE;
+	}
+	const char *internal_pipeline = override_internal ? obs_data_get_string(settings, "internal_pipeline") : default_internal;
+
 	gchar *pipeline_str = NULL;
-
-	if (raw_pipeline)
-	{
-		// Full Raw User Pipeline: zero string prepending or mangling
-		pipeline_str = g_strdup(user_pipeline);
-	}
-	else
-	{
-		// Assisted Mode: prepend video/audio sink chains connected to video. and audio.
-		pipeline_str = g_strdup_printf(
-#ifdef GST_VIDEO_FORMAT_I420_10LE
-			"videoconvert name=video ! video/x-raw, format={I420,NV12,BGRA,BGRx,RGBx,RGBA,YUY2,YVYU,UYVY,I420_10LE,P010_10LE,I420_12LE,Y444_12LE} ! appsink name=video_appsink "
-#else
-			"videoconvert name=video ! video/x-raw, format={I420,NV12,BGRA,BGRx,RGBx,RGBA,YUY2,YVYU,UYVY} ! appsink name=video_appsink "
-#endif
-			"audioconvert name=audio ! audioresample ! audio/x-raw, format={U8,S16LE,S32LE,F32LE}, channels={1,2,3,4,5,6,8}, layout=interleaved ! appsink name=audio_appsink "
-			"%s",
-			user_pipeline);
-	}
-
-	blog(LOG_INFO, "[obs-gstreamer-source] Launching pipeline (raw=%d): %s", raw_pipeline, pipeline_str);
+	if (internal_pipeline && *internal_pipeline) pipeline_str = g_strdup_printf("%s %s", internal_pipeline, user_pipeline);
+	else pipeline_str = g_strdup(user_pipeline);
+	
+	blog(LOG_INFO, "[obs-gstreamer-source] Launching pipeline (override_internal=%d): %s", override_internal, pipeline_str);
 
 	data->pipe = gst_parse_launch(pipeline_str, &err);
 	g_free(pipeline_str);
@@ -455,8 +472,13 @@ static void create_pipeline(struct gstreamer_source_data *data, obs_data_t *sett
 		return;
 	}
 
-	// Locate video appsink (supports "video_appsink")
+	// Locate video appsink (supports "video_appsink" or custom "video")
 	GstElement *v_sink = gst_bin_get_by_name(GST_BIN(data->pipe), "video_appsink");
+	if (!v_sink || !GST_IS_APP_SINK(v_sink))
+	{
+		if (v_sink) gst_object_unref(v_sink);
+		v_sink = gst_bin_get_by_name(GST_BIN(data->pipe), "video");
+	}
 	if (v_sink)
 	{
 		if (GST_IS_APP_SINK(v_sink))
@@ -470,8 +492,13 @@ static void create_pipeline(struct gstreamer_source_data *data, obs_data_t *sett
 		gst_object_unref(v_sink); // Bin holds primary reference; safe to unref lookup
 	}
 
-	// Locate audio appsink (supports "audio_appsink")
+	// Locate audio appsink (supports "audio_appsink" or custom "audio")
 	GstElement *a_sink = gst_bin_get_by_name(GST_BIN(data->pipe), "audio_appsink");
+	if (!a_sink || !GST_IS_APP_SINK(a_sink))
+	{
+		if (a_sink) gst_object_unref(a_sink);
+		a_sink = gst_bin_get_by_name(GST_BIN(data->pipe), "audio");
+	}
 	if (a_sink)
 	{
 		if (GST_IS_APP_SINK(a_sink))
@@ -511,11 +538,7 @@ static void start(struct gstreamer_source_data *data, obs_data_t *settings)
 	data->obs_media_state = OBS_MEDIA_STATE_OPENING;
 
 	create_pipeline(data, settings);
-
-	if (data->pipe)
-	{
-		gst_element_set_state(data->pipe, GST_STATE_PLAYING);
-	}
+	if (data->pipe) gst_element_set_state(data->pipe, GST_STATE_PLAYING);
 }
 
 static void stop(struct gstreamer_source_data *data)
@@ -557,8 +580,14 @@ static void stop(struct gstreamer_source_data *data)
  * -------------------------------------------------------------------------- */
 const char *gstreamer_source_get_name(void *type_data)
 {
-	(void)type_data;
+	UNUSED_PARAMETER(type_data);
 	return "GStreamer Source";
+}
+
+const char *gstreamer_source_video_get_name(void *type_data)
+{
+	UNUSED_PARAMETER(type_data);
+	return "GStreamer Video Source";
 }
 
 void *gstreamer_source_create(obs_data_t *settings, obs_source_t *source)
@@ -661,9 +690,7 @@ void gstreamer_source_set_time(void *user_data, int64_t ms)
 	if (!data || !data->pipe) return;
 
 	// Execute seek directly on pipeline from OBS thread (thread-safe in GStreamer)
-	gst_element_seek_simple(data->pipe, GST_FORMAT_TIME,
-				GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_KEY_UNIT,
-				ms * GST_MSECOND);
+	gst_element_seek_simple(data->pipe, GST_FORMAT_TIME, GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_KEY_UNIT, ms * GST_MSECOND);
 }
 
 void gstreamer_source_play_pause(void *user_data, bool pause)
@@ -692,31 +719,74 @@ void gstreamer_source_stop(void *user_data)
 
 void gstreamer_source_get_defaults(obs_data_t *settings)
 {
-	obs_data_set_default_string(
-		settings, "pipeline",
-		"videotestsrc is-live=true ! video/x-raw, framerate=30/1, width=960, height=540 ! video. "
-		"audiotestsrc wave=ticks is-live=true ! audio/x-raw, channels=2, rate=44100 ! audio.");
-	obs_data_set_default_bool(settings, "raw_pipeline", false);
+	obs_data_set_default_string(settings, "pipeline", "videotestsrc is-live=true ! video/x-raw, framerate=25/1, width=1280, height=720 ! video. audiotestsrc wave=ticks is-live=true ! audio/x-raw, channels=2, rate=44100 ! audio.");
+	obs_data_set_default_bool(settings, "override_internal_pipeline", false);
+	obs_data_set_default_string(settings, "internal_pipeline", DEFAULT_INTERNAL_PIPELINE);
 	obs_data_set_default_bool(settings, "use_timestamps_video", true);
 	obs_data_set_default_bool(settings, "use_timestamps_audio", true);
-	obs_data_set_default_bool(settings, "sync_appsink_video", true);
-	obs_data_set_default_bool(settings, "sync_appsink_audio", true);
+	obs_data_set_default_bool(settings, "sync_appsink_video", false);
+	obs_data_set_default_bool(settings, "sync_appsink_audio", false);
 	obs_data_set_default_bool(settings, "no_buffer", false);
 	obs_data_set_default_int(settings, "latency", 0);
 	obs_data_set_default_bool(settings, "stop_on_hide", true);
-	obs_data_set_default_bool(settings, "clear_on_end", true);
+	obs_data_set_default_bool(settings, "clear_on_end", false);
+}
+
+void gstreamer_source_video_get_defaults(obs_data_t *settings)
+{
+	obs_data_set_default_string(settings, "pipeline", "videotestsrc is-live=true ! video/x-raw, framerate=25/1, width=128, height=720 ! video.");
+	obs_data_set_default_bool(settings, "override_internal_pipeline", false);
+	obs_data_set_default_string(settings, "internal_pipeline", DEFAULT_INTERNAL_VIDEO_PIPELINE);
+	obs_data_set_default_bool(settings, "use_timestamps_video", true);
+	obs_data_set_default_bool(settings, "sync_appsink_video", false);
+	obs_data_set_default_bool(settings, "no_buffer", false);
+	obs_data_set_default_int(settings, "latency", 0);
+	obs_data_set_default_bool(settings, "stop_on_hide", true);
+	obs_data_set_default_bool(settings, "clear_on_end", false);
 }
 
 static bool on_apply_clicked(obs_properties_t *props, obs_property_t *property, void *data)
 {
-	(void)props;
-	(void)property;
+	UNUSED_PARAMETER(props);
+	UNUSED_PARAMETER(property);
 	struct gstreamer_source_data *src_data = (struct gstreamer_source_data *)data;
-	if (src_data)
+	if (src_data && src_data->gstreamer_source)
 	{
 		obs_data_t *settings = obs_source_get_settings(src_data->gstreamer_source);
 		start(src_data, settings);
 		obs_data_release(settings);
+	}
+	return false;
+}
+
+static bool override_internal_modified(obs_properties_t *props, obs_property_t *property, obs_data_t *settings)
+{
+	UNUSED_PARAMETER(property);
+	bool override = obs_data_get_bool(settings, "override_internal_pipeline");
+	obs_property_t *internal_prop = obs_properties_get(props, "internal_pipeline");
+	obs_property_t *reset_prop = obs_properties_get(props, "reset_internal_pipeline");
+
+	if (internal_prop) obs_property_set_enabled(internal_prop, override);
+	if (reset_prop) obs_property_set_enabled(reset_prop, override);
+
+	return true;
+}
+
+static bool on_reset_internal_clicked(obs_properties_t *props, obs_property_t *property, void *data)
+{
+	UNUSED_PARAMETER(props);
+	UNUSED_PARAMETER(property);
+	struct gstreamer_source_data *src_data = (struct gstreamer_source_data *)data;
+	if (src_data && src_data->gstreamer_source)
+	{
+		const char *id = obs_source_get_id(src_data->gstreamer_source);
+		const char *default_internal = (id && strcmp(id, "gstreamer-source-video") == 0)
+			? DEFAULT_INTERNAL_VIDEO_PIPELINE
+			: DEFAULT_INTERNAL_PIPELINE;
+		obs_data_t *settings = obs_source_get_settings(src_data->gstreamer_source);
+		obs_data_set_string(settings, "internal_pipeline", default_internal);
+		obs_data_release(settings);
+		return true;
 	}
 	return false;
 }
@@ -726,19 +796,29 @@ obs_properties_t *gstreamer_source_get_properties(void *data)
 	obs_properties_t *props = obs_properties_create();
 	obs_properties_set_flags(props, OBS_PROPERTIES_DEFER_UPDATE);
 
-	obs_property_t *raw_prop = obs_properties_add_bool(
-		props, "raw_pipeline", "Full Custom Pipeline (No automatic sinks)");
-	obs_property_set_long_description(
-		raw_prop,
-		"When enabled, your pipeline string is executed as-is without any hidden wrapper.\n"
-		"Simply name your sinks: appsink name=video and/or appsink name=audio.");
+	obs_property_t *prop = obs_properties_add_text(props, "pipeline", "Pipeline", OBS_TEXT_MULTILINE);
+	obs_property_set_long_description(prop, "Main user pipeline.\nConnect to video. and audio. elements, or define your own sinks.");
 
-	obs_property_t *prop = obs_properties_add_text(
-		props, "pipeline", "Pipeline", OBS_TEXT_MULTILINE);
-	obs_property_set_long_description(
-		prop,
-		"In Assisted mode: connect to video. and audio. sinks.\n"
-		"In Full Custom mode: output to appsink name=video and appsink name=audio.");
+	obs_property_t *override_prop = obs_properties_add_bool(props, "override_internal_pipeline", "Override internal pipeline");
+	obs_property_set_long_description(override_prop, "Enable to view and customize the internal conversion and appsink elements.");
+	obs_property_set_modified_callback(override_prop, override_internal_modified);
+
+	obs_property_t *internal_prop = obs_properties_add_text(props, "internal_pipeline", "Internal pipeline", OBS_TEXT_MULTILINE);
+	obs_property_set_long_description(internal_prop, "Defines the internal videoconvert/audioconvert and appsink elements connecting to OBS.\nSinks must be named 'video_appsink' (or 'video') and 'audio_appsink' (or 'audio').");
+
+	obs_properties_add_button2(props, "reset_internal_pipeline", "Reset internal pipeline", on_reset_internal_clicked, data);
+
+	struct gstreamer_source_data *src_data = (struct gstreamer_source_data *)data;
+	bool override_enabled = false;
+	if (src_data && src_data->gstreamer_source)
+	{
+		obs_data_t *settings = obs_source_get_settings(src_data->gstreamer_source);
+		override_enabled = obs_data_get_bool(settings, "override_internal_pipeline");
+		obs_data_release(settings);
+	}
+	obs_property_set_enabled(internal_prop, override_enabled);
+	obs_property_t *reset_prop = obs_properties_get(props, "reset_internal_pipeline");
+	if (reset_prop) obs_property_set_enabled(reset_prop, override_enabled);
 
 	obs_properties_add_bool(props, "use_timestamps_video", "Use pipeline time stamps (video)");
 	obs_properties_add_bool(props, "use_timestamps_audio", "Use pipeline time stamps (audio)");
@@ -756,19 +836,85 @@ obs_properties_t *gstreamer_source_get_properties(void *data)
 	return props;
 }
 
+obs_properties_t *gstreamer_source_video_get_properties(void *data)
+{
+	obs_properties_t *props = obs_properties_create();
+	obs_properties_set_flags(props, OBS_PROPERTIES_DEFER_UPDATE);
+
+	obs_property_t *prop = obs_properties_add_text(props, "pipeline", "Pipeline", OBS_TEXT_MULTILINE);
+	obs_property_set_long_description(prop, "Main user pipeline.\nConnect to video. element, or define your own sinks.");
+
+	obs_property_t *override_prop = obs_properties_add_bool(props, "override_internal_pipeline", "Override internal pipeline");
+	obs_property_set_long_description(override_prop, "Enable to view and customize the internal conversion and appsink elements.");
+	obs_property_set_modified_callback(override_prop, override_internal_modified);
+
+	obs_property_t *internal_prop = obs_properties_add_text(props, "internal_pipeline", "Internal pipeline", OBS_TEXT_MULTILINE);
+	obs_property_set_long_description(internal_prop, "Defines the internal videoconvert and appsink elements connecting to OBS.\nSink must be named 'video_appsink' (or 'video').");
+
+	obs_properties_add_button2(props, "reset_internal_pipeline", "Reset internal pipeline", on_reset_internal_clicked, data);
+
+	struct gstreamer_source_data *src_data = (struct gstreamer_source_data *)data;
+	bool override_enabled = false;
+	if (src_data && src_data->gstreamer_source)
+	{
+		obs_data_t *settings = obs_source_get_settings(src_data->gstreamer_source);
+		override_enabled = obs_data_get_bool(settings, "override_internal_pipeline");
+		obs_data_release(settings);
+	}
+	obs_property_set_enabled(internal_prop, override_enabled);
+	obs_property_t *reset_prop = obs_properties_get(props, "reset_internal_pipeline");
+	if (reset_prop) obs_property_set_enabled(reset_prop, override_enabled);
+
+	obs_properties_add_bool(props, "use_timestamps_video", "Use pipeline time stamps (video)");
+	obs_properties_add_bool(props, "sync_appsink_video", "Sync appsink to clock (video)");
+	obs_properties_add_bool(props, "stop_on_hide", "Stop pipeline when hidden");
+	obs_properties_add_bool(props, "clear_on_end", "Clear image data on EOS or error");
+	obs_properties_add_bool(props, "no_buffer", "Disable buffering in OBS");
+
+	obs_property_t *lat_prop = obs_properties_add_int(props, "latency", "Fixed latency (ms)", 0, 10000, 10);
+	obs_property_set_long_description(lat_prop, "Sets a fixed pipeline latency in ms (0 = auto-detect).");
+
+	obs_properties_add_button2(props, "apply", "Apply Changes", on_apply_clicked, data);
+
+	return props;
+}
+
 /* --------------------------------------------------------------------------
  * OBS Source Registration Info
  * -------------------------------------------------------------------------- */
-struct obs_source_info gstreamer_source_info = {
+struct obs_source_info gstreamer_source_info =
+{
 	.id = "gstreamer-source",
 	.type = OBS_SOURCE_TYPE_INPUT,
-	.output_flags = OBS_SOURCE_ASYNC_VIDEO | OBS_SOURCE_AUDIO | OBS_SOURCE_DO_NOT_DUPLICATE,
+	.output_flags = OBS_SOURCE_ASYNC_VIDEO | OBS_SOURCE_AUDIO | OBS_SOURCE_DO_NOT_DUPLICATE | OBS_SOURCE_CONTROLLABLE_MEDIA,
 	.get_name = gstreamer_source_get_name,
 	.create = gstreamer_source_create,
 	.destroy = gstreamer_source_destroy,
 	.update = gstreamer_source_update,
 	.get_defaults = gstreamer_source_get_defaults,
 	.get_properties = gstreamer_source_get_properties,
+	.show = gstreamer_source_show,
+	.hide = gstreamer_source_hide,
+	.media_get_state = gstreamer_source_get_state,
+	.media_get_time = gstreamer_source_get_time,
+	.media_get_duration = gstreamer_source_get_duration,
+	.media_set_time = gstreamer_source_set_time,
+	.media_play_pause = gstreamer_source_play_pause,
+	.media_restart = gstreamer_source_restart,
+	.media_stop = gstreamer_source_stop,
+};
+
+struct obs_source_info gstreamer_source_video_info =
+{
+	.id = "gstreamer-source-video",
+	.type = OBS_SOURCE_TYPE_INPUT,
+	.output_flags = OBS_SOURCE_ASYNC_VIDEO | OBS_SOURCE_DO_NOT_DUPLICATE | OBS_SOURCE_CONTROLLABLE_MEDIA,
+	.get_name = gstreamer_source_video_get_name,
+	.create = gstreamer_source_create,
+	.destroy = gstreamer_source_destroy,
+	.update = gstreamer_source_update,
+	.get_defaults = gstreamer_source_video_get_defaults,
+	.get_properties = gstreamer_source_video_get_properties,
 	.show = gstreamer_source_show,
 	.hide = gstreamer_source_hide,
 	.media_get_state = gstreamer_source_get_state,

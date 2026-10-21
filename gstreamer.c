@@ -41,6 +41,7 @@ extern obs_properties_t *gstreamer_output_get_properties(void *data);
 
 // gstreamer-source.c
 extern struct obs_source_info gstreamer_source_info;
+extern struct obs_source_info gstreamer_source_video_info;
 
 #ifndef ENABLE_DOCK
 #define ENABLE_DOCK 1
@@ -104,6 +105,9 @@ bool obs_module_load(void)
 
 	obs_register_source(&gstreamer_source_info);
 	blog(LOG_INFO, "[obs-gstreamer] Registered source module: gstreamer-source");
+
+	obs_register_source(&gstreamer_source_video_info);
+	blog(LOG_INFO, "[obs-gstreamer] Registered source module: gstreamer-source-video");
 
 	gstreamer_encoder_tex_register();
 	gstreamer_dock_register();
