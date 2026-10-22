@@ -31,9 +31,8 @@
 struct gstreamer_source_data
 {
 	obs_source_t *gstreamer_source;
-	GstElement   *pipe;
-
-	
+	GstElement *pipe;
+	enum obs_media_state obs_media_state;
 	bool use_timestamps_video; //cached settings flags (since accessed in hot path)
 	bool use_timestamps_audio;
 	
@@ -44,8 +43,6 @@ struct gstreamer_source_data
 	GstCaps *last_audio_caps; // Cached Audio Format State (Calculated ONLY on caps change)
 	uint32_t audio_bpf;
 	struct obs_source_audio cached_audio; // Pre-filled audio packet template
-
-	enum obs_media_state obs_media_state;
 };
 
 static void start(struct gstreamer_source_data *data, obs_data_t *settings);
@@ -113,6 +110,8 @@ static GstBusSyncReply bus_sync_handler(GstBus *bus, GstMessage *message, gpoint
 		case GST_MESSAGE_EOS:
 		{
 			data->obs_media_state = OBS_MEDIA_STATE_ENDED;
+			const char *source_name = obs_source_get_name(data->gstreamer_source);
+			blog(LOG_INFO, "[obs-gstreamer-source] %s: EOS (End of Stream) reached", source_name ? source_name : "gstreamer-source");
 
 			// Read clear_on_end
 			obs_data_t *settings = obs_source_get_settings(data->gstreamer_source);
@@ -126,7 +125,13 @@ static GstBusSyncReply bus_sync_handler(GstBus *bus, GstMessage *message, gpoint
 		{
 			gint percent = 0;
 			gst_message_parse_buffering(message, &percent);
-			data->obs_media_state = (percent < 100) ? OBS_MEDIA_STATE_BUFFERING : OBS_MEDIA_STATE_PLAYING;
+			enum obs_media_state new_state = (percent < 100) ? OBS_MEDIA_STATE_BUFFERING : OBS_MEDIA_STATE_PLAYING;
+			if (data->obs_media_state != new_state)
+			{
+				const char *source_name = obs_source_get_name(data->gstreamer_source);
+				blog(LOG_INFO, "[obs-gstreamer-source] %s: Buffering state changed to %s (%d%%)", source_name ? source_name : "gstreamer-source", (percent < 100) ? "buffering" : "playing", percent);
+				data->obs_media_state = new_state;
+			}
 			return GST_BUS_DROP;
 		}
 
@@ -136,6 +141,9 @@ static GstBusSyncReply bus_sync_handler(GstBus *bus, GstMessage *message, gpoint
 			{
 				GstState old_s, new_s;
 				gst_message_parse_state_changed(message, &old_s, &new_s, NULL);
+
+				const char *source_name = obs_source_get_name(data->gstreamer_source);
+				blog(LOG_INFO, "[obs-gstreamer-source] %s: Pipeline state changed from %s to %s", source_name ? source_name : "gstreamer-source", gst_element_state_get_name(old_s), gst_element_state_get_name(new_s));
 
 				if (new_s == GST_STATE_PLAYING) data->obs_media_state = OBS_MEDIA_STATE_PLAYING;
 				else if (new_s == GST_STATE_PAUSED) data->obs_media_state = OBS_MEDIA_STATE_PAUSED;
@@ -160,10 +168,12 @@ static bool update_video_format_cache(struct gstreamer_source_data *data, GstCap
 	bool initial = (data->last_video_caps == NULL);
 	const char *source_name = data->gstreamer_source ? obs_source_get_name(data->gstreamer_source) : "gstreamer-source";
 	gchar *caps_str = gst_caps_to_string(caps);
+
 	blog(LOG_INFO, "[obs-gstreamer-source] %s: Video caps %s: %s",
 			source_name ? source_name : "gstreamer-source",
 			initial ? "initial set" : "changed",
 			caps_str ? caps_str : "unknown");
+			
 	if (caps_str) g_free(caps_str);
 
 	if (data->last_video_caps) gst_caps_unref(data->last_video_caps);
@@ -231,6 +241,16 @@ static bool update_video_format_cache(struct gstreamer_source_data *data, GstCap
 			break;
 	}
 
+	if (data->cached_frame.format != VIDEO_FORMAT_NONE)
+	{
+		blog(LOG_INFO, "[obs-gstreamer-source] %s: Video format cached: %dx%d (%s, %s range, %s colorspace)",
+				source_name ? source_name : "gstreamer-source",
+				v_info.width, v_info.height,
+				v_info.finfo ? v_info.finfo->name : "unknown",
+				range == VIDEO_RANGE_FULL ? "full" : "partial",
+				cs == VIDEO_CS_709 ? "BT.709" : (cs == VIDEO_CS_601 ? "BT.601" : "default"));
+	}
+
 	return (data->cached_frame.format != VIDEO_FORMAT_NONE);
 }
 
@@ -244,10 +264,12 @@ static bool update_audio_format_cache(struct gstreamer_source_data *data, GstCap
 	bool initial = (data->last_audio_caps == NULL);
 	const char *source_name = data->gstreamer_source ? obs_source_get_name(data->gstreamer_source) : "gstreamer-source";
 	gchar *caps_str = gst_caps_to_string(caps);
+
 	blog(LOG_INFO, "[obs-gstreamer-source] %s: Audio caps %s: %s",
 			source_name ? source_name : "gstreamer-source",
 			initial ? "initial set" : "changed",
 			caps_str ? caps_str : "unknown");
+
 	if (caps_str) g_free(caps_str);
 
 	if (data->last_audio_caps) gst_caps_unref(data->last_audio_caps);
@@ -285,6 +307,15 @@ static bool update_audio_format_cache(struct gstreamer_source_data *data, GstCap
 		default: data->cached_audio.format = AUDIO_FORMAT_UNKNOWN; break;
 	}
 
+	if (data->cached_audio.format != AUDIO_FORMAT_UNKNOWN && data->audio_bpf > 0)
+	{
+		blog(LOG_INFO, "[obs-gstreamer-source] %s: Audio format cached: %d Hz, %d channels (%s, %u bytes/frame)",
+				source_name ? source_name : "gstreamer-source",
+				a_info.rate, a_info.channels,
+				a_info.finfo ? a_info.finfo->name : "unknown",
+				(unsigned int)data->audio_bpf);
+	}
+
 	return (data->cached_audio.format != AUDIO_FORMAT_UNKNOWN && data->audio_bpf > 0);
 }
 
@@ -310,6 +341,7 @@ static GstFlowReturn video_new_sample(GstAppSink *appsink, gpointer user_data)
 	// 2-tier caps check: fast pointer compare + semantic equality
 	if (caps != data->last_video_caps)
 	{
+		blog(LOG_INFO, "[obs-gstreamer-source] last_video_caps changed.");
 		if (!data->last_video_caps || !gst_caps_is_equal(caps, data->last_video_caps))
 		{
 			if (!update_video_format_cache(data, caps))
@@ -372,6 +404,7 @@ static GstFlowReturn audio_new_sample(GstAppSink *appsink, gpointer user_data)
 	// 2-tier caps check: fast pointer compare + semantic equality
 	if (caps != data->last_audio_caps)
 	{
+		blog(LOG_INFO, "[obs-gstreamer-source] last_audio_caps changed.");
 		if (!data->last_audio_caps || !gst_caps_is_equal(caps, data->last_audio_caps))
 		{
 			if (!update_audio_format_cache(data, caps))
@@ -472,13 +505,10 @@ static void create_pipeline(struct gstreamer_source_data *data, obs_data_t *sett
 		return;
 	}
 
-	// Locate video appsink (supports "video_appsink" or custom "video")
+	const char *source_name = data->gstreamer_source ? obs_source_get_name(data->gstreamer_source) : "gstreamer-source";
+
+	// Locate video appsink
 	GstElement *v_sink = gst_bin_get_by_name(GST_BIN(data->pipe), "video_appsink");
-	if (!v_sink || !GST_IS_APP_SINK(v_sink))
-	{
-		if (v_sink) gst_object_unref(v_sink);
-		v_sink = gst_bin_get_by_name(GST_BIN(data->pipe), "video");
-	}
 	if (v_sink)
 	{
 		if (GST_IS_APP_SINK(v_sink))
@@ -488,17 +518,17 @@ static void create_pipeline(struct gstreamer_source_data *data, obs_data_t *sett
 
 			bool sync_video = obs_data_get_bool(settings, "sync_appsink_video");
 			g_object_set(v_sink, "sync", sync_video ? TRUE : FALSE, "max-buffers", 2, "drop", TRUE, NULL);
+			blog(LOG_INFO, "[obs-gstreamer-source] %s: Video appsink configured (sync=%s)", source_name ? source_name : "gstreamer-source", sync_video ? "true" : "false");
 		}
 		gst_object_unref(v_sink); // Bin holds primary reference; safe to unref lookup
 	}
-
-	// Locate audio appsink (supports "audio_appsink" or custom "audio")
-	GstElement *a_sink = gst_bin_get_by_name(GST_BIN(data->pipe), "audio_appsink");
-	if (!a_sink || !GST_IS_APP_SINK(a_sink))
+	else
 	{
-		if (a_sink) gst_object_unref(a_sink);
-		a_sink = gst_bin_get_by_name(GST_BIN(data->pipe), "audio");
+		blog(LOG_INFO, "[obs-gstreamer-source] %s: No video appsink found", source_name ? source_name : "gstreamer-source");
 	}
+
+	// Locate audio appsink
+	GstElement *a_sink = gst_bin_get_by_name(GST_BIN(data->pipe), "audio_appsink");
 	if (a_sink)
 	{
 		if (GST_IS_APP_SINK(a_sink))
@@ -508,8 +538,13 @@ static void create_pipeline(struct gstreamer_source_data *data, obs_data_t *sett
 
 			bool sync_audio = obs_data_get_bool(settings, "sync_appsink_audio");
 			g_object_set(a_sink, "sync", sync_audio ? TRUE : FALSE, "max-buffers", 8, "drop", TRUE, NULL);
+			blog(LOG_INFO, "[obs-gstreamer-source] %s: Audio appsink configured (sync=%s)", source_name ? source_name : "gstreamer-source", sync_audio ? "true" : "false");
 		}
 		gst_object_unref(a_sink); // Bin holds primary reference; safe to unref lookup
+	}
+	else
+	{
+		blog(LOG_INFO, "[obs-gstreamer-source] %s: No audio appsink found", source_name ? source_name : "gstreamer-source");
 	}
 
 	// Attach synchronous bus handler (Zero additional thread)
@@ -522,8 +557,11 @@ static void create_pipeline(struct gstreamer_source_data *data, obs_data_t *sett
 
 	// Configure optional fixed latency
 	gint latency = (gint)obs_data_get_int(settings, "latency");
-	if (latency > 0) gst_pipeline_set_latency(GST_PIPELINE(data->pipe), latency * GST_MSECOND);
-	
+	if (latency > 0)
+	{
+		gst_pipeline_set_latency(GST_PIPELINE(data->pipe), latency * GST_MSECOND);
+		blog(LOG_INFO, "[obs-gstreamer-source] %s: Latency set to %d ms", source_name ? source_name : "gstreamer-source", latency);
+	}
 }
 
 static void start(struct gstreamer_source_data *data, obs_data_t *settings)
@@ -531,6 +569,9 @@ static void start(struct gstreamer_source_data *data, obs_data_t *settings)
 	if (!data) return;
 
 	stop(data);
+
+	const char *source_name = data->gstreamer_source ? obs_source_get_name(data->gstreamer_source) : "gstreamer-source";
+	blog(LOG_INFO, "[obs-gstreamer-source] %s: Starting pipeline", source_name ? source_name : "gstreamer-source");
 
 	// Cache hot-path timing flags
 	data->use_timestamps_video = obs_data_get_bool(settings, "use_timestamps_video");
@@ -544,6 +585,9 @@ static void start(struct gstreamer_source_data *data, obs_data_t *settings)
 static void stop(struct gstreamer_source_data *data)
 {
 	if (!data || !data->pipe) return;
+
+	const char *source_name = data->gstreamer_source ? obs_source_get_name(data->gstreamer_source) : "gstreamer-source";
+	blog(LOG_INFO, "[obs-gstreamer-source] %s: Stopping pipeline", source_name ? source_name : "gstreamer-source");
 
 	data->obs_media_state = OBS_MEDIA_STATE_STOPPED;
 
@@ -595,6 +639,9 @@ void *gstreamer_source_create(obs_data_t *settings, obs_source_t *source)
 	struct gstreamer_source_data *data = bzalloc(sizeof(struct gstreamer_source_data));
 	data->gstreamer_source = source;
 
+	const char *source_name = obs_source_get_name(source);
+	blog(LOG_INFO, "[obs-gstreamer-source] %s: Source created", source_name ? source_name : "gstreamer-source");
+
 	bool nobuf = obs_data_get_bool(settings, "no_buffer");
 	obs_source_set_async_unbuffered(source, nobuf);
 
@@ -607,6 +654,9 @@ void gstreamer_source_destroy(void *user_data)
 {
 	struct gstreamer_source_data *data = (struct gstreamer_source_data *)user_data;
 	if (!data) return;
+
+	const char *source_name = data->gstreamer_source ? obs_source_get_name(data->gstreamer_source) : "gstreamer-source";
+	blog(LOG_INFO, "[obs-gstreamer-source] %s: Source destroyed", source_name ? source_name : "gstreamer-source");
 
 	stop(data);
 	bfree(data);
@@ -636,6 +686,8 @@ void gstreamer_source_show(void *user_data)
 
 	if (data->pipe == NULL)
 	{
+		const char *source_name = data->gstreamer_source ? obs_source_get_name(data->gstreamer_source) : "gstreamer-source";
+		blog(LOG_INFO, "[obs-gstreamer-source] %s: Source shown, starting pipeline", source_name ? source_name : "gstreamer-source");
 		obs_data_t *settings = obs_source_get_settings(data->gstreamer_source);
 		start(data, settings);
 		obs_data_release(settings);
@@ -648,7 +700,12 @@ void gstreamer_source_hide(void *user_data)
 	if (!data) return;
 
 	obs_data_t *settings = obs_source_get_settings(data->gstreamer_source);
-	if (obs_data_get_bool(settings, "stop_on_hide")) stop(data);
+	if (obs_data_get_bool(settings, "stop_on_hide"))
+	{
+		const char *source_name = data->gstreamer_source ? obs_source_get_name(data->gstreamer_source) : "gstreamer-source";
+		blog(LOG_INFO, "[obs-gstreamer-source] %s: Source hidden, stopping pipeline (stop_on_hide=true)", source_name ? source_name : "gstreamer-source");
+		stop(data);
+	}
 	obs_data_release(settings);
 }
 
@@ -689,6 +746,9 @@ void gstreamer_source_set_time(void *user_data, int64_t ms)
 	struct gstreamer_source_data *data = (struct gstreamer_source_data *)user_data;
 	if (!data || !data->pipe) return;
 
+	const char *source_name = data->gstreamer_source ? obs_source_get_name(data->gstreamer_source) : "gstreamer-source";
+	blog(LOG_INFO, "[obs-gstreamer-source] %s: Seeking to %lld ms", source_name ? source_name : "gstreamer-source", (long long)ms);
+
 	// Execute seek directly on pipeline from OBS thread (thread-safe in GStreamer)
 	gst_element_seek_simple(data->pipe, GST_FORMAT_TIME, GST_SEEK_FLAG_FLUSH | GST_SEEK_FLAG_KEY_UNIT, ms * GST_MSECOND);
 }
@@ -698,6 +758,9 @@ void gstreamer_source_play_pause(void *user_data, bool pause)
 	struct gstreamer_source_data *data = (struct gstreamer_source_data *)user_data;
 	if (!data || !data->pipe) return;
 
+	const char *source_name = data->gstreamer_source ? obs_source_get_name(data->gstreamer_source) : "gstreamer-source";
+	blog(LOG_INFO, "[obs-gstreamer-source] %s: %s pipeline", source_name ? source_name : "gstreamer-source", pause ? "Pausing" : "Resuming");
+
 	gst_element_set_state(data->pipe, pause ? GST_STATE_PAUSED : GST_STATE_PLAYING);
 }
 
@@ -705,6 +768,9 @@ void gstreamer_source_restart(void *user_data)
 {
 	struct gstreamer_source_data *data = (struct gstreamer_source_data *)user_data;
 	if (!data) return;
+
+	const char *source_name = data->gstreamer_source ? obs_source_get_name(data->gstreamer_source) : "gstreamer-source";
+	blog(LOG_INFO, "[obs-gstreamer-source] %s: Restarting pipeline", source_name ? source_name : "gstreamer-source");
 
 	obs_data_t *settings = obs_source_get_settings(data->gstreamer_source);
 	start(data, settings);
@@ -734,7 +800,7 @@ void gstreamer_source_get_defaults(obs_data_t *settings)
 
 void gstreamer_source_video_get_defaults(obs_data_t *settings)
 {
-	obs_data_set_default_string(settings, "pipeline", "videotestsrc is-live=true ! video/x-raw, framerate=25/1, width=128, height=720 ! video.");
+	obs_data_set_default_string(settings, "pipeline", "videotestsrc is-live=true ! video/x-raw, framerate=25/1, width=1280, height=720 ! video.");
 	obs_data_set_default_bool(settings, "override_internal_pipeline", false);
 	obs_data_set_default_string(settings, "internal_pipeline", DEFAULT_INTERNAL_VIDEO_PIPELINE);
 	obs_data_set_default_bool(settings, "use_timestamps_video", true);
@@ -780,9 +846,7 @@ static bool on_reset_internal_clicked(obs_properties_t *props, obs_property_t *p
 	if (src_data && src_data->gstreamer_source)
 	{
 		const char *id = obs_source_get_id(src_data->gstreamer_source);
-		const char *default_internal = (id && strcmp(id, "gstreamer-source-video") == 0)
-			? DEFAULT_INTERNAL_VIDEO_PIPELINE
-			: DEFAULT_INTERNAL_PIPELINE;
+		const char *default_internal = (id && strcmp(id, "gstreamer-source-video") == 0) ? DEFAULT_INTERNAL_VIDEO_PIPELINE : DEFAULT_INTERNAL_PIPELINE;
 		obs_data_t *settings = obs_source_get_settings(src_data->gstreamer_source);
 		obs_data_set_string(settings, "internal_pipeline", default_internal);
 		obs_data_release(settings);
