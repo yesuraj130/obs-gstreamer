@@ -35,6 +35,7 @@ struct gstreamer_source_data
 	enum obs_media_state obs_media_state;
 	bool use_timestamps_video; //cached settings flags (since accessed in hot path)
 	bool use_timestamps_audio;
+	bool clear_on_end;
 	
 	GstCaps *last_video_caps; // Cached Video Format State (Calculated ONLY on caps change)
 	size_t video_offset[3];
@@ -79,10 +80,7 @@ static GstBusSyncReply bus_sync_handler(GstBus *bus, GstMessage *message, gpoint
 
 			data->obs_media_state = OBS_MEDIA_STATE_ERROR;
 
-			// Read clear_on_end
-			obs_data_t *settings = obs_source_get_settings(data->gstreamer_source);
-			if (obs_data_get_bool(settings, "clear_on_end")) obs_source_output_video(data->gstreamer_source, NULL);
-			obs_data_release(settings);
+			if (data->clear_on_end) obs_source_output_video(data->gstreamer_source, NULL);
 
 			return GST_BUS_DROP;
 		}
@@ -113,10 +111,7 @@ static GstBusSyncReply bus_sync_handler(GstBus *bus, GstMessage *message, gpoint
 			const char *source_name = obs_source_get_name(data->gstreamer_source);
 			blog(LOG_INFO, "[obs-gstreamer-source] %s: EOS (End of Stream) reached", source_name ? source_name : "gstreamer-source");
 
-			// Read clear_on_end
-			obs_data_t *settings = obs_source_get_settings(data->gstreamer_source);
-			if (obs_data_get_bool(settings, "clear_on_end")) obs_source_output_video(data->gstreamer_source, NULL);
-			obs_data_release(settings);
+			if (data->clear_on_end) obs_source_output_video(data->gstreamer_source, NULL);
 
 			return GST_BUS_DROP;
 		}
@@ -173,7 +168,7 @@ static bool update_video_format_cache(struct gstreamer_source_data *data, GstCap
 			source_name ? source_name : "gstreamer-source",
 			initial ? "initial set" : "changed",
 			caps_str ? caps_str : "unknown");
-			
+
 	if (caps_str) g_free(caps_str);
 
 	if (data->last_video_caps) gst_caps_unref(data->last_video_caps);
@@ -472,6 +467,7 @@ static void create_pipeline(struct gstreamer_source_data *data, obs_data_t *sett
 	if (!user_pipeline || !*user_pipeline)
 	{
 		blog(LOG_WARNING, "[obs-gstreamer-source] No pipeline specified");
+		data->obs_media_state = OBS_MEDIA_STATE_NONE;
 		return;
 	}
 
@@ -573,9 +569,10 @@ static void start(struct gstreamer_source_data *data, obs_data_t *settings)
 	const char *source_name = data->gstreamer_source ? obs_source_get_name(data->gstreamer_source) : "gstreamer-source";
 	blog(LOG_INFO, "[obs-gstreamer-source] %s: Starting pipeline", source_name ? source_name : "gstreamer-source");
 
-	// Cache hot-path timing flags
+	// Cache settings flags
 	data->use_timestamps_video = obs_data_get_bool(settings, "use_timestamps_video");
 	data->use_timestamps_audio = obs_data_get_bool(settings, "use_timestamps_audio");
+	data->clear_on_end = obs_data_get_bool(settings, "clear_on_end");
 	data->obs_media_state = OBS_MEDIA_STATE_OPENING;
 
 	create_pipeline(data, settings);
@@ -868,7 +865,7 @@ obs_properties_t *gstreamer_source_get_properties(void *data)
 	obs_property_set_modified_callback(override_prop, override_internal_modified);
 
 	obs_property_t *internal_prop = obs_properties_add_text(props, "internal_pipeline", "Internal pipeline", OBS_TEXT_MULTILINE);
-	obs_property_set_long_description(internal_prop, "Defines the internal videoconvert/audioconvert and appsink elements connecting to OBS.\nSinks must be named 'video_appsink' (or 'video') and 'audio_appsink' (or 'audio').");
+	obs_property_set_long_description(internal_prop, "Defines the internal videoconvert/audioconvert and appsink elements connecting to OBS.\nSinks must be named 'video_appsink' and 'audio_appsink'.");
 
 	obs_properties_add_button2(props, "reset_internal_pipeline", "Reset internal pipeline", on_reset_internal_clicked, data);
 
@@ -913,7 +910,7 @@ obs_properties_t *gstreamer_source_video_get_properties(void *data)
 	obs_property_set_modified_callback(override_prop, override_internal_modified);
 
 	obs_property_t *internal_prop = obs_properties_add_text(props, "internal_pipeline", "Internal pipeline", OBS_TEXT_MULTILINE);
-	obs_property_set_long_description(internal_prop, "Defines the internal videoconvert and appsink elements connecting to OBS.\nSink must be named 'video_appsink' (or 'video').");
+	obs_property_set_long_description(internal_prop, "Defines the internal videoconvert and appsink elements connecting to OBS.\nSink must be named 'video_appsink'.");
 
 	obs_properties_add_button2(props, "reset_internal_pipeline", "Reset internal pipeline", on_reset_internal_clicked, data);
 
