@@ -27,8 +27,7 @@
 
 struct gstreamer_filter_data
 {
-	obs_source_t *source;
-	obs_data_t *settings;
+	obs_source_t *filter_source;
 	GstElement *pipe;
 	GstElement *appsrc;
 	GstElement *appsink;
@@ -55,10 +54,10 @@ static GstBusSyncReply bus_sync_handler(GstBus *bus, GstMessage *message, gpoint
 {
 	UNUSED_PARAMETER(bus);
 	struct gstreamer_filter_data *data = (struct gstreamer_filter_data *)user_data;
-	if (!data || !data->source) return GST_BUS_PASS;
+	if (!data || !data->filter_source) return GST_BUS_PASS;
 
 	const char *src_name = GST_MESSAGE_SRC_NAME(message);
-	const char *source_name = obs_source_get_name(data->source);
+	const char *source_name = obs_source_get_name(data->filter_source);
 
 	switch (GST_MESSAGE_TYPE(message))
 	{
@@ -131,7 +130,7 @@ static void stop_pipeline(struct gstreamer_filter_data *data)
 {
 	if (!data || !data->pipe) return;
 
-	const char *source_name = data->source ? obs_source_get_name(data->source) : "filter";
+	const char *source_name = data->filter_source ? obs_source_get_name(data->filter_source) : "filter";
 	blog(LOG_INFO, "[obs-gstreamer-filter] %s: Stopping filter pipeline", source_name ? source_name : "filter");
 
 	GstBus *bus = gst_element_get_bus(data->pipe);
@@ -201,9 +200,9 @@ const char *gstreamer_filter_get_name_audio(void *type_data)
 
 void *gstreamer_filter_create(obs_data_t *settings, obs_source_t *source)
 {
+	UNUSED_PARAMETER(settings);
 	struct gstreamer_filter_data *data = g_new0(struct gstreamer_filter_data, 1);
-	data->source = source;
-	data->settings = settings;
+	data->filter_source = source;
 
 	const char *source_name = source ? obs_source_get_name(source) : "filter";
 	blog(LOG_INFO, "[obs-gstreamer-filter] %s: Filter instance created", source_name ? source_name : "filter");
@@ -216,7 +215,7 @@ void gstreamer_filter_destroy(void *p)
 	struct gstreamer_filter_data *data = (struct gstreamer_filter_data *)p;
 	if (!data) return;
 
-	const char *source_name = data->source ? obs_source_get_name(data->source) : "filter";
+	const char *source_name = data->filter_source ? obs_source_get_name(data->filter_source) : "filter";
 	blog(LOG_INFO, "[obs-gstreamer-filter] %s: Filter instance destroyed", source_name ? source_name : "filter");
 
 	stop_pipeline(data);
@@ -239,7 +238,7 @@ void gstreamer_filter_update(void *p, obs_data_t *settings)
 	struct gstreamer_filter_data *data = (struct gstreamer_filter_data *)p;
 	if (!data) return;
 
-	const char *source_name = data->source ? obs_source_get_name(data->source) : "filter";
+	const char *source_name = data->filter_source ? obs_source_get_name(data->filter_source) : "filter";
 	blog(LOG_INFO, "[obs-gstreamer-filter] %s: Filter settings updated, resetting pipeline", source_name ? source_name : "filter");
 
 	stop_pipeline(data);
@@ -256,7 +255,7 @@ static bool on_apply_clicked(obs_properties_t *props, obs_property_t *property, 
 	UNUSED_PARAMETER(props);
 	UNUSED_PARAMETER(property);
 	struct gstreamer_filter_data *filter_data = (struct gstreamer_filter_data *)data;
-	if (filter_data) gstreamer_filter_update(filter_data, filter_data->settings);
+	if (filter_data) gstreamer_filter_update(filter_data, NULL);
 	return false;
 }
 
@@ -283,7 +282,7 @@ gstreamer_filter_filter_video(void *p, struct obs_source_frame *frame)
 	{
 		if (data->pipe != NULL)
 		{
-			const char *source_name = data->source ? obs_source_get_name(data->source) : "filter";
+			const char *source_name = data->filter_source ? obs_source_get_name(data->filter_source) : "filter";
 
 			blog(LOG_INFO, "[obs-gstreamer-filter] %s: Video format or resolution changed: %dx%d (fmt %d) -> %dx%d (fmt %d), recreating pipeline",
 			     source_name ? source_name : "filter",
@@ -295,20 +294,23 @@ gstreamer_filter_filter_video(void *p, struct obs_source_frame *frame)
 		}
 
 		if (data->in_error) return frame;
-		
 
 		GstVideoFormat gst_format = obs_to_gst_video_format(frame->format);
 		if (gst_format == GST_VIDEO_FORMAT_UNKNOWN)
 		{
-			const char *source_name = data->source ? obs_source_get_name(data->source) : "filter";
+			const char *source_name = data->filter_source ? obs_source_get_name(data->filter_source) : "filter";
 			blog(LOG_ERROR, "[obs-gstreamer-filter] %s: Unsupported video format: %d", source_name ? source_name : "filter", frame->format);
 			data->in_error = true;
 			return frame;
 		}
 
-		const char *user_pipeline = obs_data_get_string(data->settings, "pipeline");
-		if (!user_pipeline || !*user_pipeline) return frame;
-		
+		obs_data_t *settings = obs_source_get_settings(data->filter_source);
+		const char *user_pipeline = obs_data_get_string(settings, "pipeline");
+		if (!user_pipeline || !*user_pipeline)
+		{
+			obs_data_release(settings);
+			return frame;
+		}
 
 		gst_video_info_set_format(&data->video_info, gst_format, frame->width, frame->height);
 		data->width = frame->width;
@@ -316,7 +318,7 @@ gstreamer_filter_filter_video(void *p, struct obs_source_frame *frame)
 		data->format = frame->format;
 
 		const gchar *format_str = gst_video_format_to_string(gst_format);
-		const char *source_name = data->source ? obs_source_get_name(data->source) : "filter";
+		const char *source_name = data->filter_source ? obs_source_get_name(data->filter_source) : "filter";
 
 		gchar *str = g_strdup_printf(
 			"appsrc name=appsrc format=time ! video/x-raw, width=%d, height=%d, format=%s, framerate=0/1 ! videoconvert ! "
@@ -324,6 +326,8 @@ gstreamer_filter_filter_video(void *p, struct obs_source_frame *frame)
 			frame->width, frame->height, format_str,
 			user_pipeline,
 			frame->width, frame->height, format_str);
+			
+		obs_data_release(settings);
 
 		blog(LOG_INFO, "[obs-gstreamer-filter] %s: Creating video filter pipeline: %s", source_name ? source_name : "filter", str);
 
@@ -463,7 +467,7 @@ gstreamer_filter_filter_audio(void *p, struct obs_audio_data *audio_data)
 	{
 		if (data->pipe != NULL)
 		{
-			const char *source_name = data->source ? obs_source_get_name(data->source) : "filter";
+			const char *source_name = data->filter_source ? obs_source_get_name(data->filter_source) : "filter";
 
 			blog(LOG_INFO, "[obs-gstreamer-filter] %s: Audio format changed: %u Hz %zu ch -> %u Hz %zu ch, recreating pipeline",
 			     source_name ? source_name : "filter",
@@ -475,10 +479,14 @@ gstreamer_filter_filter_audio(void *p, struct obs_audio_data *audio_data)
 		}
 
 		if (data->in_error) return audio_data;
-		
-		const char *user_pipeline = obs_data_get_string(data->settings, "pipeline");
-		if (!user_pipeline || !*user_pipeline) return audio_data;
-		
+
+		obs_data_t *settings = obs_source_get_settings(data->filter_source);
+		const char *user_pipeline = obs_data_get_string(settings, "pipeline");
+		if (!user_pipeline || !*user_pipeline)
+		{
+			obs_data_release(settings);
+			return audio_data;
+		}
 
 		gst_audio_info_init(&data->audio_info);
 		gst_audio_info_set_format(&data->audio_info, GST_AUDIO_FORMAT_F32LE, audio_info.samples_per_sec, (gint)channels, NULL);
@@ -487,7 +495,7 @@ gstreamer_filter_filter_audio(void *p, struct obs_audio_data *audio_data)
 		data->sample_rate = audio_info.samples_per_sec;
 		data->channels = channels;
 
-		const char *source_name = data->source ? obs_source_get_name(data->source) : "filter";
+		const char *source_name = data->filter_source ? obs_source_get_name(data->filter_source) : "filter";
 
 		gchar *str = g_strdup_printf(
 			"appsrc name=appsrc format=time ! audio/x-raw, rate=%d, channels=%d, format=F32LE, layout=non-interleaved ! audioconvert ! "
@@ -495,6 +503,7 @@ gstreamer_filter_filter_audio(void *p, struct obs_audio_data *audio_data)
 			data->audio_info.rate, data->audio_info.channels,
 			user_pipeline,
 			data->audio_info.rate, data->audio_info.channels);
+		obs_data_release(settings);
 
 		blog(LOG_INFO, "[obs-gstreamer-filter] %s: Creating audio filter pipeline: %s", source_name ? source_name : "filter", str);
 
