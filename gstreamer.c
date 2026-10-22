@@ -43,6 +43,10 @@ extern obs_properties_t *gstreamer_output_get_properties(void *data);
 extern struct obs_source_info gstreamer_source_info;
 extern struct obs_source_info gstreamer_source_video_info;
 
+// gstreamer-filter.c
+extern struct obs_source_info gstreamer_filter_video_info;
+extern struct obs_source_info gstreamer_filter_audio_info;
+
 #ifndef ENABLE_DOCK
 #define ENABLE_DOCK 1
 #endif
@@ -108,6 +112,12 @@ bool obs_module_load(void)
 
 	obs_register_source(&gstreamer_source_video_info);
 	blog(LOG_INFO, "[obs-gstreamer] Registered source module: gstreamer-source-video");
+
+	obs_register_source(&gstreamer_filter_video_info);
+	blog(LOG_INFO, "[obs-gstreamer] Registered filter module: gstreamer-filter-video");
+
+	obs_register_source(&gstreamer_filter_audio_info);
+	blog(LOG_INFO, "[obs-gstreamer] Registered filter module: gstreamer-filter-audio");
 
 	gstreamer_encoder_tex_register();
 	gstreamer_dock_register();
