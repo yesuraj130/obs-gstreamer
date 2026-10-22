@@ -46,6 +46,12 @@ struct gstreamer_filter_data
 
 static void stop_pipeline(struct gstreamer_filter_data *data);
 
+static inline const char *get_filter_name(obs_source_t *source)
+{
+	const char *name = source ? obs_source_get_name(source) : NULL;
+	return (name && *name) ? name : "filter";
+}
+
 /* --------------------------------------------------------------------------
  * GStreamer Synchronous Bus Handler
  * Handles bus messages immediately on the posting thread.
@@ -57,7 +63,7 @@ static GstBusSyncReply bus_sync_handler(GstBus *bus, GstMessage *message, gpoint
 	if (!data || !data->filter_source) return GST_BUS_PASS;
 
 	const char *src_name = GST_MESSAGE_SRC_NAME(message);
-	const char *source_name = obs_source_get_name(data->filter_source);
+	const char *source_name = get_filter_name(data->filter_source);
 
 	switch (GST_MESSAGE_TYPE(message))
 	{
@@ -68,7 +74,7 @@ static GstBusSyncReply bus_sync_handler(GstBus *bus, GstMessage *message, gpoint
 			gst_message_parse_error(message, &err, &debug);
 
 			blog(LOG_ERROR, "[obs-gstreamer-filter] %s [%s] ERROR: %s (debug: %s)",
-			     source_name ? source_name : "filter",
+			     source_name,
 			     src_name ? src_name : "pipeline",
 			     err ? err->message : "unknown",
 			     debug ? debug : "none");
@@ -87,7 +93,7 @@ static GstBusSyncReply bus_sync_handler(GstBus *bus, GstMessage *message, gpoint
 			gst_message_parse_warning(message, &err, &debug);
 
 			blog(LOG_WARNING, "[obs-gstreamer-filter] %s [%s] WARNING: %s (debug: %s)",
-			     source_name ? source_name : "filter",
+			     source_name,
 			     src_name ? src_name : "pipeline",
 			     err ? err->message : "unknown",
 			     debug ? debug : "none");
@@ -106,7 +112,7 @@ static GstBusSyncReply bus_sync_handler(GstBus *bus, GstMessage *message, gpoint
 				gst_message_parse_state_changed(message, &old_s, &new_s, &pending_s);
 
 				blog(LOG_INFO, "[obs-gstreamer-filter] %s: Pipeline state changed from %s to %s (pending: %s)",
-				     source_name ? source_name : "filter",
+				     source_name,
 				     gst_element_state_get_name(old_s),
 				     gst_element_state_get_name(new_s),
 				     gst_element_state_get_name(pending_s));
@@ -116,7 +122,7 @@ static GstBusSyncReply bus_sync_handler(GstBus *bus, GstMessage *message, gpoint
 
 		case GST_MESSAGE_EOS:
 		{
-			blog(LOG_INFO, "[obs-gstreamer-filter] %s: End-of-stream reached", source_name ? source_name : "filter");
+			blog(LOG_INFO, "[obs-gstreamer-filter] %s: End-of-stream reached", source_name);
 			break;
 		}
 
@@ -130,8 +136,8 @@ static void stop_pipeline(struct gstreamer_filter_data *data)
 {
 	if (!data || !data->pipe) return;
 
-	const char *source_name = data->filter_source ? obs_source_get_name(data->filter_source) : "filter";
-	blog(LOG_INFO, "[obs-gstreamer-filter] %s: Stopping filter pipeline", source_name ? source_name : "filter");
+	const char *source_name = get_filter_name(data->filter_source);
+	blog(LOG_INFO, "[obs-gstreamer-filter] %s: Stopping filter pipeline", source_name);
 
 	GstBus *bus = gst_element_get_bus(data->pipe);
 	if (bus)
@@ -204,8 +210,8 @@ void *gstreamer_filter_create(obs_data_t *settings, obs_source_t *source)
 	struct gstreamer_filter_data *data = bzalloc(sizeof(struct gstreamer_filter_data));
 	data->filter_source = source;
 
-	const char *source_name = source ? obs_source_get_name(source) : "filter";
-	blog(LOG_INFO, "[obs-gstreamer-filter] %s: Filter instance created", source_name ? source_name : "filter");
+	const char *source_name = get_filter_name(source);
+	blog(LOG_INFO, "[obs-gstreamer-filter] %s: Filter instance created", source_name);
 
 	return data;
 }
@@ -215,8 +221,8 @@ void gstreamer_filter_destroy(void *p)
 	struct gstreamer_filter_data *data = (struct gstreamer_filter_data *)p;
 	if (!data) return;
 
-	const char *source_name = data->filter_source ? obs_source_get_name(data->filter_source) : "filter";
-	blog(LOG_INFO, "[obs-gstreamer-filter] %s: Filter instance destroyed", source_name ? source_name : "filter");
+	const char *source_name = get_filter_name(data->filter_source);
+	blog(LOG_INFO, "[obs-gstreamer-filter] %s: Filter instance destroyed", source_name);
 
 	stop_pipeline(data);
 	bfree(data);
@@ -238,8 +244,8 @@ void gstreamer_filter_update(void *p, obs_data_t *settings)
 	struct gstreamer_filter_data *data = (struct gstreamer_filter_data *)p;
 	if (!data) return;
 
-	const char *source_name = data->filter_source ? obs_source_get_name(data->filter_source) : "filter";
-	blog(LOG_INFO, "[obs-gstreamer-filter] %s: Filter settings updated, resetting pipeline", source_name ? source_name : "filter");
+	const char *source_name = get_filter_name(data->filter_source);
+	blog(LOG_INFO, "[obs-gstreamer-filter] %s: Filter settings updated, resetting pipeline", source_name);
 
 	stop_pipeline(data);
 	data->in_error = false;
@@ -280,12 +286,12 @@ gstreamer_filter_filter_video(void *p, struct obs_source_frame *frame)
 
 	if (data->pipe == NULL || data->width != frame->width || data->height != frame->height || data->format != frame->format)
 	{
+		const char *source_name = get_filter_name(data->filter_source);
+
 		if (data->pipe != NULL)
 		{
-			const char *source_name = data->filter_source ? obs_source_get_name(data->filter_source) : "filter";
-
 			blog(LOG_INFO, "[obs-gstreamer-filter] %s: Video format or resolution changed: %dx%d (fmt %d) -> %dx%d (fmt %d), recreating pipeline",
-			     source_name ? source_name : "filter",
+			     source_name,
 			     data->width, data->height, data->format,
 			     frame->width, frame->height, frame->format);
 
@@ -298,8 +304,7 @@ gstreamer_filter_filter_video(void *p, struct obs_source_frame *frame)
 		GstVideoFormat gst_format = obs_to_gst_video_format(frame->format);
 		if (gst_format == GST_VIDEO_FORMAT_UNKNOWN)
 		{
-			const char *source_name = data->filter_source ? obs_source_get_name(data->filter_source) : "filter";
-			blog(LOG_ERROR, "[obs-gstreamer-filter] %s: Unsupported video format: %d", source_name ? source_name : "filter", frame->format);
+			blog(LOG_ERROR, "[obs-gstreamer-filter] %s: Unsupported video format: %d", source_name, frame->format);
 			data->in_error = true;
 			return frame;
 		}
@@ -318,7 +323,6 @@ gstreamer_filter_filter_video(void *p, struct obs_source_frame *frame)
 		data->format = frame->format;
 
 		const gchar *format_str = gst_video_format_to_string(gst_format);
-		const char *source_name = data->filter_source ? obs_source_get_name(data->filter_source) : "filter";
 
 		gchar *str = g_strdup_printf(
 			"appsrc name=appsrc format=time ! video/x-raw, width=%d, height=%d, format=%s, framerate=0/1 ! videoconvert ! "
@@ -329,7 +333,7 @@ gstreamer_filter_filter_video(void *p, struct obs_source_frame *frame)
 			
 		obs_data_release(settings);
 
-		blog(LOG_INFO, "[obs-gstreamer-filter] %s: Creating video filter pipeline: %s", source_name ? source_name : "filter", str);
+		blog(LOG_INFO, "[obs-gstreamer-filter] %s: Creating video filter pipeline: %s", source_name, str);
 
 		GError *err = NULL;
 		data->pipe = gst_parse_launch(str, &err);
@@ -337,7 +341,7 @@ gstreamer_filter_filter_video(void *p, struct obs_source_frame *frame)
 
 		if (err != NULL)
 		{
-			blog(LOG_ERROR, "[obs-gstreamer-filter] %s: Pipeline parse error: %s", source_name ? source_name : "filter", err->message);
+			blog(LOG_ERROR, "[obs-gstreamer-filter] %s: Pipeline parse error: %s", source_name, err->message);
 			g_error_free(err);
 			data->in_error = true;
 
@@ -354,7 +358,7 @@ gstreamer_filter_filter_video(void *p, struct obs_source_frame *frame)
 
 		if (!data->appsrc || !data->appsink)
 		{
-			blog(LOG_ERROR, "[obs-gstreamer-filter] %s: Failed to locate appsrc or appsink in pipeline", source_name ? source_name : "filter");
+			blog(LOG_ERROR, "[obs-gstreamer-filter] %s: Failed to locate appsrc or appsink in pipeline", source_name);
 			data->in_error = true;
 			stop_pipeline(data);
 			return frame;
@@ -370,13 +374,13 @@ gstreamer_filter_filter_video(void *p, struct obs_source_frame *frame)
 		GstStateChangeReturn ret = gst_element_set_state(data->pipe, GST_STATE_PLAYING);
 		if (ret == GST_STATE_CHANGE_FAILURE)
 		{
-			blog(LOG_ERROR, "[obs-gstreamer-filter] %s: Failed to set pipeline to PLAYING", source_name ? source_name : "filter");
+			blog(LOG_ERROR, "[obs-gstreamer-filter] %s: Failed to set pipeline to PLAYING", source_name);
 			data->in_error = true;
 			stop_pipeline(data);
 			return frame;
 		}
 
-		blog(LOG_INFO, "[obs-gstreamer-filter] %s: Video filter pipeline started successfully (%dx%d %s)", source_name ? source_name : "filter", data->width, data->height, format_str);
+		blog(LOG_INFO, "[obs-gstreamer-filter] %s: Video filter pipeline started successfully (%dx%d %s)", source_name, data->width, data->height, format_str);
 	}
 
 	if (data->in_error || !data->appsrc || !data->appsink) return frame;
@@ -465,12 +469,12 @@ gstreamer_filter_filter_audio(void *p, struct obs_audio_data *audio_data)
 
 	if (data->pipe == NULL || data->sample_rate != audio_info.samples_per_sec || data->channels != channels)
 	{
+		const char *source_name = get_filter_name(data->filter_source);
+
 		if (data->pipe != NULL)
 		{
-			const char *source_name = data->filter_source ? obs_source_get_name(data->filter_source) : "filter";
-
 			blog(LOG_INFO, "[obs-gstreamer-filter] %s: Audio format changed: %u Hz %zu ch -> %u Hz %zu ch, recreating pipeline",
-			     source_name ? source_name : "filter",
+			     source_name,
 			     data->sample_rate, data->channels,
 			     audio_info.samples_per_sec, channels);
 
@@ -495,8 +499,6 @@ gstreamer_filter_filter_audio(void *p, struct obs_audio_data *audio_data)
 		data->sample_rate = audio_info.samples_per_sec;
 		data->channels = channels;
 
-		const char *source_name = data->filter_source ? obs_source_get_name(data->filter_source) : "filter";
-
 		gchar *str = g_strdup_printf(
 			"appsrc name=appsrc format=time ! audio/x-raw, rate=%d, channels=%d, format=F32LE, layout=non-interleaved ! audioconvert ! "
 			"%s ! audioconvert ! audio/x-raw, rate=%d, channels=%d, format=F32LE, layout=non-interleaved ! appsink name=appsink sync=false max-buffers=1 drop=true",
@@ -505,7 +507,7 @@ gstreamer_filter_filter_audio(void *p, struct obs_audio_data *audio_data)
 			data->audio_info.rate, data->audio_info.channels);
 		obs_data_release(settings);
 
-		blog(LOG_INFO, "[obs-gstreamer-filter] %s: Creating audio filter pipeline: %s", source_name ? source_name : "filter", str);
+		blog(LOG_INFO, "[obs-gstreamer-filter] %s: Creating audio filter pipeline: %s", source_name, str);
 
 		GError *err = NULL;
 		data->pipe = gst_parse_launch(str, &err);
@@ -513,7 +515,7 @@ gstreamer_filter_filter_audio(void *p, struct obs_audio_data *audio_data)
 
 		if (err != NULL)
 		{
-			blog(LOG_ERROR, "[obs-gstreamer-filter] %s: Audio pipeline parse error: %s", source_name ? source_name : "filter", err->message);
+			blog(LOG_ERROR, "[obs-gstreamer-filter] %s: Audio pipeline parse error: %s", source_name, err->message);
 			g_error_free(err);
 			data->in_error = true;
 
@@ -530,7 +532,7 @@ gstreamer_filter_filter_audio(void *p, struct obs_audio_data *audio_data)
 
 		if (!data->appsrc || !data->appsink)
 		{
-			blog(LOG_ERROR, "[obs-gstreamer-filter] %s: Failed to locate appsrc or appsink in audio pipeline", source_name ? source_name : "filter");
+			blog(LOG_ERROR, "[obs-gstreamer-filter] %s: Failed to locate appsrc or appsink in audio pipeline", source_name);
 			data->in_error = true;
 			stop_pipeline(data);
 			return audio_data;
@@ -546,13 +548,13 @@ gstreamer_filter_filter_audio(void *p, struct obs_audio_data *audio_data)
 		GstStateChangeReturn ret = gst_element_set_state(data->pipe, GST_STATE_PLAYING);
 		if (ret == GST_STATE_CHANGE_FAILURE)
 		{
-			blog(LOG_ERROR, "[obs-gstreamer-filter] %s: Failed to set audio pipeline to PLAYING", source_name ? source_name : "filter");
+			blog(LOG_ERROR, "[obs-gstreamer-filter] %s: Failed to set audio pipeline to PLAYING", source_name);
 			data->in_error = true;
 			stop_pipeline(data);
 			return audio_data;
 		}
 
-		blog(LOG_INFO, "[obs-gstreamer-filter] %s: Audio filter pipeline started successfully (%d Hz, %d channels)", source_name ? source_name : "filter", data->audio_info.rate, data->audio_info.channels);
+		blog(LOG_INFO, "[obs-gstreamer-filter] %s: Audio filter pipeline started successfully (%d Hz, %d channels)", source_name, data->audio_info.rate, data->audio_info.channels);
 	}
 
 	if (data->in_error || !data->appsrc || !data->appsink) return audio_data;
