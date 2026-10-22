@@ -201,7 +201,7 @@ const char *gstreamer_filter_get_name_audio(void *type_data)
 void *gstreamer_filter_create(obs_data_t *settings, obs_source_t *source)
 {
 	UNUSED_PARAMETER(settings);
-	struct gstreamer_filter_data *data = g_new0(struct gstreamer_filter_data, 1);
+	struct gstreamer_filter_data *data = bzalloc(sizeof(struct gstreamer_filter_data));
 	data->filter_source = source;
 
 	const char *source_name = source ? obs_source_get_name(source) : "filter";
@@ -219,7 +219,7 @@ void gstreamer_filter_destroy(void *p)
 	blog(LOG_INFO, "[obs-gstreamer-filter] %s: Filter instance destroyed", source_name ? source_name : "filter");
 
 	stop_pipeline(data);
-	g_free(data);
+	bfree(data);
 }
 
 void gstreamer_filter_get_defaults_video(obs_data_t *settings)
