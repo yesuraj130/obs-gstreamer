@@ -319,6 +319,10 @@ struct obs_source_frame *gstreamer_filter_video(void *p, struct obs_source_frame
 		return frame;
 	}
 
+	// =========================================================================
+	// 1. INGESTION: Feed OBS Video Frame into GStreamer appsrc
+	// =========================================================================
+	// Create a new empty GStreamer buffer to hold the input frame.
 	GstBuffer *in_buffer = gst_buffer_new();
 	if (!in_buffer) return frame;
 
@@ -326,11 +330,15 @@ struct obs_source_frame *gstreamer_filter_video(void *p, struct obs_source_frame
 	gint strides[GST_VIDEO_MAX_PLANES] = {0};
 	gsize current_offset = 0;
 
+	// OBS frames can be multi-planar (e.g. NV12 has 2 planes: Y and UV; I420 has 3: Y, U, V).
+	// Assuming all planes were contiguous at frame->data[0] can cause memory corruption if planes are allocated separately.
+	// Instead, wrap each plane's pointer into its own GstMemory block.
 	for (guint p = 0; p < GST_VIDEO_INFO_N_PLANES(&data->video_info); p++)
 	{
 		guint plane_height = get_plane_height(&data->video_info, p);
 		gsize plane_size = (gsize)frame->linesize[p] * plane_height;
 
+		// Wrap OBS plane memory as read-only memory block without duplicating buffers
 		GstMemory *mem = gst_memory_new_wrapped(GST_MEMORY_FLAG_READONLY, frame->data[p], plane_size, 0, plane_size, NULL, NULL);
 		gst_buffer_append_memory(in_buffer, mem);
 
@@ -339,43 +347,60 @@ struct obs_source_frame *gstreamer_filter_video(void *p, struct obs_source_frame
 		current_offset += plane_size;
 	}
 
-	gst_buffer_add_video_meta_full(
-		in_buffer,
-		GST_VIDEO_FRAME_FLAG_NONE,
-		data->video_info.finfo->format,
-		data->video_info.width,
-		data->video_info.height,
-		GST_VIDEO_INFO_N_PLANES(&data->video_info),
-		offsets,
-		strides
-	);
+	// Attach explicit video metadata (format, dimensions, offsets, and line strides)
+	// so downstream GStreamer elements know the exact planar layout and row pitch.
+	gst_buffer_add_video_meta_full(in_buffer, GST_VIDEO_FRAME_FLAG_NONE, data->video_info.finfo->format, data->video_info.width, data->video_info.height,
+			GST_VIDEO_INFO_N_PLANES(&data->video_info), offsets, strides);
 
+	// Propagate OBS frame timestamp (PTS) and push into pipeline's appsrc
 	GST_BUFFER_PTS(in_buffer) = frame->timestamp;
 	gst_app_src_push_buffer(GST_APP_SRC(data->appsrc), in_buffer);
 
+	// =========================================================================
+	// 2. EXTRACTION: Pull processed frame from appsink (with 100ms timeout)
+	// =========================================================================
+	// Use non-blocking try_pull with timeout to avoid deadlocking OBS video thread, if the GStreamer pipeline stalls or drops a frame.
 	GstSample *sample = gst_app_sink_try_pull_sample(GST_APP_SINK(data->appsink), 100 * GST_MSECOND);
-	if (sample == NULL) return frame;
+	if (sample == NULL)
+	{ 
+		blog(LOG_ERROR, "[obs-gstreamer-filter] %s: GStreamer pipeline dropped frame.", get_filter_source_name(data->filter_source));
+		return frame;
+	}
 
 	GstBuffer *out_buffer = gst_sample_get_buffer(sample);
 	if (out_buffer)
 	{
+		// Derive video info dynamically from sample caps if available
+		const GstVideoInfo *vinfo_ptr = &data->video_info;
+		GstCaps *caps = gst_sample_get_caps(sample);
+		GstVideoInfo sample_vinfo;
+		if (caps && gst_video_info_from_caps(&sample_vinfo, caps)) vinfo_ptr = &sample_vinfo;
+
 		GstVideoFrame out_vframe;
-		if (gst_video_frame_map(&out_vframe, &data->video_info, out_buffer, GST_MAP_READ))
+		if (gst_video_frame_map(&out_vframe, vinfo_ptr, out_buffer, GST_MAP_READ))
 		{
+			// =================================================================
+			// 3. COPY BACK TO OBS: Plane-by-Plane with Adaptive Fast Path
+			// =================================================================
+			// Iterate over each plane (e.g. 1 for RGBA/YUY2, 2 for NV12, 3 for I420)
 			for (guint p = 0; p < GST_VIDEO_FRAME_N_PLANES(&out_vframe); p++)
 			{
 				const guint8 *src = GST_VIDEO_FRAME_PLANE_DATA(&out_vframe, p);
 				guint8 *dst = frame->data[p];
 				guint src_stride = GST_VIDEO_FRAME_PLANE_STRIDE(&out_vframe, p);
 				guint dst_stride = frame->linesize[p];
-				guint plane_height = gst_get_plane_height(&data->video_info, p);
+				guint plane_height = gst_get_plane_height(&out_vframe.info, p);
 
 				if (src_stride == dst_stride)
 				{
+					// =================================================================
+					// FAST PATH: If strides match, copies the entire plane in a single memcpy call, (The inner row loop below is skipped!)
+					// =================================================================
 					memcpy(dst, src, dst_stride * plane_height);
 				}
 				else
 				{
+					// FALLBACK PATH: If strides differ, we must copy row-by-row respecting each line's stride to prevent visual tearing.
 					guint copy_stride = (src_stride < dst_stride) ? src_stride : dst_stride;
 					for (guint h = 0; h < plane_height; h++)
 					{
@@ -396,6 +421,8 @@ struct obs_audio_data *gstreamer_filter_filter_audio(void *p, struct obs_audio_d
 	struct gstreamer_filter_data *data = (struct gstreamer_filter_data *)p;
 	if (!data || !audio_data) return audio_data;
 
+	if (data->in_error) return audio_data;
+
 	struct obs_audio_info audio_info;
 	obs_get_audio_info(&audio_info);
 	size_t channels = get_audio_channels(audio_info.speakers);
@@ -403,12 +430,10 @@ struct obs_audio_data *gstreamer_filter_filter_audio(void *p, struct obs_audio_d
 
 	if (data->pipe == NULL || data->sample_rate != audio_info.samples_per_sec || data->channels != channels)
 	{
-		const char *source_name = get_filter_source_name(data->filter_source);
-
 		if (data->pipe != NULL)
 		{
 			blog(LOG_INFO, "[obs-gstreamer-filter] %s: Audio format changed: %u Hz %zu ch -> %u Hz %zu ch, recreating pipeline",
-			     source_name,
+			     get_filter_source_name(data->filter_source),
 			     data->sample_rate, data->channels,
 			     audio_info.samples_per_sec, channels);
 
@@ -416,20 +441,19 @@ struct obs_audio_data *gstreamer_filter_filter_audio(void *p, struct obs_audio_d
 			data->in_error = false;
 		}
 
-		if (data->in_error) return audio_data;
-
 		obs_data_t *settings = obs_source_get_settings(data->filter_source);
 		const char *user_pipeline = obs_data_get_string(settings, "pipeline");
+		obs_data_release(settings);
 		if (!user_pipeline || !*user_pipeline)
 		{
-			obs_data_release(settings);
+			blog(LOG_ERROR, "[obs-gstreamer-filter] %s: Unable to get user pipeline", get_filter_source_name(data->filter_source));
+			data->in_error = true;
 			return audio_data;
 		}
 
 		gst_audio_info_init(&data->audio_info);
 		gst_audio_info_set_format(&data->audio_info, GST_AUDIO_FORMAT_F32LE, audio_info.samples_per_sec, (gint)channels, NULL);
 		data->audio_info.layout = GST_AUDIO_LAYOUT_NON_INTERLEAVED;
-
 		data->sample_rate = audio_info.samples_per_sec;
 		data->channels = channels;
 
@@ -439,9 +463,8 @@ struct obs_audio_data *gstreamer_filter_filter_audio(void *p, struct obs_audio_d
 			data->audio_info.rate, data->audio_info.channels,
 			user_pipeline,
 			data->audio_info.rate, data->audio_info.channels);
-		obs_data_release(settings);
 
-		blog(LOG_INFO, "[obs-gstreamer-filter] %s: Creating audio filter pipeline: %s", source_name, str);
+		blog(LOG_INFO, "[obs-gstreamer-filter] %s: Creating audio filter pipeline: %s", get_filter_source_name(data->filter_source), str);
 
 		GError *err = NULL;
 		data->pipe = gst_parse_launch(str, &err);
@@ -449,15 +472,15 @@ struct obs_audio_data *gstreamer_filter_filter_audio(void *p, struct obs_audio_d
 
 		if (err != NULL)
 		{
-			blog(LOG_ERROR, "[obs-gstreamer-filter] %s: Audio pipeline parse error: %s", source_name, err->message);
+			blog(LOG_ERROR, "[obs-gstreamer-filter] %s: Audio pipeline parse error: %s", get_filter_source_name(data->filter_source), err->message);
 			g_error_free(err);
-			data->in_error = true;
-
 			if (data->pipe)
 			{
 				gst_object_unref(data->pipe);
 				data->pipe = NULL;
 			}
+
+			data->in_error = true;
 			return audio_data;
 		}
 
@@ -466,9 +489,10 @@ struct obs_audio_data *gstreamer_filter_filter_audio(void *p, struct obs_audio_d
 
 		if (!data->appsrc || !data->appsink)
 		{
-			blog(LOG_ERROR, "[obs-gstreamer-filter] %s: Failed to locate appsrc or appsink in audio pipeline", source_name);
-			data->in_error = true;
+			blog(LOG_ERROR, "[obs-gstreamer-filter] %s: Failed to locate appsrc or appsink in audio pipeline", get_filter_source_name(data->filter_source));
 			stop_pipeline(data);
+
+			data->in_error = true;
 			return audio_data;
 		}
 
@@ -482,16 +506,23 @@ struct obs_audio_data *gstreamer_filter_filter_audio(void *p, struct obs_audio_d
 		GstStateChangeReturn ret = gst_element_set_state(data->pipe, GST_STATE_PLAYING);
 		if (ret == GST_STATE_CHANGE_FAILURE)
 		{
-			blog(LOG_ERROR, "[obs-gstreamer-filter] %s: Failed to set audio pipeline to PLAYING", source_name);
-			data->in_error = true;
+			blog(LOG_ERROR, "[obs-gstreamer-filter] %s: Failed to set audio pipeline to PLAYING", get_filter_source_name(data->filter_source));
 			stop_pipeline(data);
+
+			data->in_error = true;
 			return audio_data;
 		}
 
-		blog(LOG_INFO, "[obs-gstreamer-filter] %s: Audio filter pipeline started successfully (%d Hz, %d channels)", source_name, data->audio_info.rate, data->audio_info.channels);
+		blog(LOG_INFO, "[obs-gstreamer-filter] %s: Audio filter pipeline started successfully (%d Hz, %d channels)", get_filter_source_name(data->filter_source), data->audio_info.rate, data->audio_info.channels);
 	}
 
-	if (data->in_error || !data->appsrc || !data->appsink) return audio_data;
+	if (data->in_error || !data->appsrc || !data->appsink)
+	{
+		blog(LOG_ERROR, "[obs-gstreamer-filter] %s: Failed to get appsrc or appsink in audio data", get_filter_source_name(data->filter_source));
+		stop_pipeline(data);
+
+		return audio_data;
+	}
 
 	gint channel_size = (gint)(sizeof(float) * audio_data->frames);
 	gint total_bytes = channel_size * (gint)data->channels;
@@ -501,15 +532,7 @@ struct obs_audio_data *gstreamer_filter_filter_audio(void *p, struct obs_audio_d
 
 	for (size_t i = 0; i < data->channels; i++)
 	{
-		GstMemory *mem = gst_memory_new_wrapped(
-			GST_MEMORY_FLAG_READONLY,
-			audio_data->data[i],
-			channel_size,
-			0,
-			channel_size,
-			NULL,
-			NULL
-		);
+		GstMemory *mem = gst_memory_new_wrapped(GST_MEMORY_FLAG_READONLY, audio_data->data[i], channel_size, 0, channel_size, NULL, NULL);
 		gst_buffer_append_memory(buffer, mem);
 	}
 
@@ -522,6 +545,7 @@ struct obs_audio_data *gstreamer_filter_filter_audio(void *p, struct obs_audio_d
 	if (sample == NULL) return audio_data;
 
 	buffer = gst_sample_get_buffer(sample);
+	GstMapInfo info;
 	if (buffer && gst_buffer_map(buffer, &info, GST_MAP_READ))
 	{
 		if (info.size == (gsize)total_bytes)
