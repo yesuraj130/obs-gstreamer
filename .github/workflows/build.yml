@@ -165,12 +165,10 @@ jobs:
           }
           Expand-Archive -Path "obs-src.zip" -DestinationPath "obs-src"
 
-          # Provide headers
+          # Provide headers exclusively in obs-sdk\include\obs to prevent duplicate header redefinitions in MSVC
           Copy-Item -Recurse -Force "obs-src\obs-studio-$obs_version\libobs\*" "obs-sdk\include\obs\"
-          Copy-Item -Recurse -Force "obs-src\obs-studio-$obs_version\libobs\*" "obs-sdk\include\"
           if (Test-Path "obs-src\obs-studio-$obs_version\frontend\api") {
             Copy-Item -Recurse -Force "obs-src\obs-studio-$obs_version\frontend\api\*" "obs-sdk\include\obs\"
-            Copy-Item -Recurse -Force "obs-src\obs-studio-$obs_version\frontend\api\*" "obs-sdk\include\"
           }
 
           # Generate obsconfig.h (normally produced by CMake build for OBS 28+)
@@ -196,7 +194,6 @@ jobs:
             '#endif'
           )
           $obsConfigLines | Out-File -FilePath "obs-sdk\include\obs\obsconfig.h" -Encoding ascii
-          $obsConfigLines | Out-File -FilePath "obs-sdk\include\obsconfig.h" -Encoding ascii
 
           # Generate MSVC import library for obs.dll
           "EXPORTS" | Out-File -FilePath "obs.def" -Encoding ascii
@@ -220,7 +217,7 @@ jobs:
               "Description: OBS Studio library",
               "Version: $obs_version",
               "Libs: -L`${libdir} -lobs",
-              "Cflags: -I`${includedir} -I`${includedir}/obs"
+              "Cflags: -I`${includedir}/obs -I`${includedir}"
           )
           $libobsLines | Out-File -FilePath "obs-sdk\lib\pkgconfig\libobs.pc" -Encoding ascii
 
@@ -233,7 +230,7 @@ jobs:
               "Description: OBS Studio Frontend API library",
               "Version: $obs_version",
               "Libs: -L`${libdir} -lobs-frontend-api",
-              "Cflags: -I`${includedir} -I`${includedir}/obs"
+              "Cflags: -I`${includedir}/obs -I`${includedir}"
           )
           $frontendLines | Out-File -FilePath "obs-sdk\lib\pkgconfig\obs-frontend-api.pc" -Encoding ascii
 
@@ -293,7 +290,7 @@ jobs:
           # Add directories to PATH, PKG_CONFIG_PATH, INCLUDE, and LIB
           $env:PATH = "$gstRoot\bin;$($env:QTDIR)\bin;C:\ProgramData\chocolatey\bin;$env:PATH"
           $env:PKG_CONFIG_PATH = "$sdkPkgPath;$gstPkgPath;$sdkPkgFwd;$gstPkgFwd"
-          $env:INCLUDE = "$sdkFullPath\include;$sdkFullPath\include\obs;$gstRoot\include\gstreamer-1.0;$gstRoot\lib\gstreamer-1.0\include;$env:INCLUDE"
+          $env:INCLUDE = "$sdkFullPath\include\obs;$sdkFullPath\include;$gstRoot\include\gstreamer-1.0;$gstRoot\lib\gstreamer-1.0\include;$env:INCLUDE"
           $env:LIB = "$sdkFullPath\lib;$gstRoot\lib;$env:LIB"
 
           Write-Host "Verifying pkg-config resolution..."
@@ -309,8 +306,8 @@ jobs:
             -Dcpp_std=c++17 `
             -Dwebrtc=disabled `
             -Dpkg_config_path="$sdkPkgFwd,$gstPkgFwd" `
-            -Dc_args="-I$sdkIncludeFwd/include -I$sdkIncludeFwd/include/obs" `
-            -Dcpp_args="-I$sdkIncludeFwd/include -I$sdkIncludeFwd/include/obs $qtArgs"
+            -Dc_args="-I$sdkIncludeFwd/include/obs -I$sdkIncludeFwd/include" `
+            -Dcpp_args="-I$sdkIncludeFwd/include/obs -I$sdkIncludeFwd/include $qtArgs"
           ninja -C build-win64
 
       - name: Package OBS 30+ (64-bit Win10/11) Release Archive

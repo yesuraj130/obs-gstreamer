@@ -18,7 +18,7 @@
  * along with obs-gstreamer. If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <obs/obs-module.h>
+#include <obs-module.h>
 #include <util/platform.h>
 #include <gst/gst.h>
 #include <gst/video/video.h>
