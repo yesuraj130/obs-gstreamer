@@ -1,5 +1,5 @@
 /*
- * obs-gstreamer: Master Hardware Encoder Pipeline & Subscriber Hub
+ * obs-gstreamer: Master Hardware Encoder Pipeline & Pub-Sub Subscriber Hub (Optimized Pure GPU Zero-Copy Mode)
  */
 
 #include "gstreamer-master-pipeline.h"
@@ -18,44 +18,17 @@ static GstElement *create_master_encoder_pipeline(gst_master_pipeline_t *hub, co
 {
 	gchar *pipe_desc = NULL;
 
+#ifdef _WIN32
+	const char *gpu_mem_caps = "video/x-raw(memory:D3D11Memory)";
+	const char *convert_elem = "d3d11convert";
+#else
+	const char *gpu_mem_caps = "video/x-raw(memory:GLMemory)";
+	const char *convert_elem = "glcolorconvert";
+#endif
+
 	if (custom_master_pipe && custom_master_pipe[0])
 	{
-		if (strstr(custom_master_pipe, "appsrc") && strstr(custom_master_pipe, "appsink"))
-		{
-			int u_count = 0;
-			bool has_invalid = false;
-			const char *p = custom_master_pipe;
-			while ((p = strchr(p, '%')) != NULL)
-			{
-				if (*(p + 1) == 'u')
-				{
-					u_count++;
-					p += 2;
-				}
-				else if (*(p + 1) == '%')
-				{
-					p += 2;
-				}
-				else
-				{
-					has_invalid = true;
-					break;
-				}
-			}
-			if (!has_invalid && u_count == 4) pipe_desc = g_strdup_printf(custom_master_pipe, hub->width, hub->height, hub->fps_num, hub->fps_den);
-			else if (!has_invalid && u_count == 2) pipe_desc = g_strdup_printf(custom_master_pipe, hub->width, hub->height);
-			else pipe_desc = g_strdup(custom_master_pipe);	
-		}
-		else
-		{
-			pipe_desc = g_strdup_printf(
-				"appsrc name=hub_appsrc is-live=true format=GST_FORMAT_TIME do-timestamp=true "
-				"caps=\"video/x-raw, format=BGRA, width=%u, height=%u, framerate=%u/%u\" ! "
-				"%s ! "
-				"appsink name=hub_appsink sync=false drop=true max-buffers=1",
-				hub->width, hub->height, hub->fps_num, hub->fps_den,
-				custom_master_pipe);
-		}
+		pipe_desc = g_strdup(custom_master_pipe);
 	}
 	else
 	{
@@ -66,34 +39,33 @@ static GstElement *create_master_encoder_pipeline(gst_master_pipeline_t *hub, co
 
 		gchar *encoder_elem = NULL;
 		if (encoder_type && g_strcmp0(encoder_type, "nvh264enc") == 0) 
-			encoder_elem = g_strdup_printf("videoconvert ! nvh264enc tune=zerolatency bframes=0 rc-lookahead=0 gop-size=%d bitrate=%d", gop_size, bitrate);
+			encoder_elem = g_strdup_printf("%s ! nvh264enc tune=zerolatency bframes=0 rc-lookahead=0 gop-size=%d bitrate=%d", convert_elem, gop_size, bitrate);
 		else if (encoder_type && g_strcmp0(encoder_type, "qsvh264enc") == 0) 
-			encoder_elem = g_strdup_printf("videoconvert ! qsvh264enc gop-size=%d bitrate=%d", gop_size, bitrate);
+			encoder_elem = g_strdup_printf("%s ! qsvh264enc gop-size=%d bitrate=%d", convert_elem, gop_size, bitrate);
 		else if (encoder_type && g_strcmp0(encoder_type, "vaapih264enc") == 0) 
-			encoder_elem = g_strdup_printf("videoconvert ! vaapih264enc keyframe-period=%d bitrate=%d", gop_size, bitrate);
+			encoder_elem = g_strdup_printf("%s ! vaapih264enc keyframe-period=%d bitrate=%d", convert_elem, gop_size, bitrate);
 		 else 
-			encoder_elem = g_strdup_printf("videoconvert ! x264enc tune=zerolatency speed-preset=ultrafast bframes=0 key-int-max=%d bitrate=%d", gop_size, bitrate);
-		
+			encoder_elem = g_strdup_printf("%s ! x264enc tune=zerolatency speed-preset=ultrafast bframes=0 key-int-max=%d bitrate=%d", convert_elem, gop_size, bitrate);
 
 		pipe_desc = g_strdup_printf(
 			"appsrc name=hub_appsrc is-live=true format=GST_FORMAT_TIME do-timestamp=true "
-			"caps=\"video/x-raw, format=BGRA, width=%u, height=%u, framerate=%u/%u\" ! "
+			"caps=\"%s, width=%u, height=%u, format=RGBA, framerate=%u/%u\" ! "
 			"%s ! h264parse config-interval=1 ! "
 			"appsink name=hub_appsink sync=false drop=true max-buffers=1",
-			hub->width, hub->height, hub->fps_num, hub->fps_den,
+			gpu_mem_caps, hub->width, hub->height, hub->fps_num, hub->fps_den,
 			encoder_elem);
 
 		g_free(encoder_elem);
 	}
 
-	blog(LOG_INFO, "[obs-gstreamer-master] Launching master pipeline: %s", pipe_desc);
+	blog(LOG_INFO, "[obs-gstreamer-master] Launching Optimized Pure GPU Zero-Copy master pipeline: %s", pipe_desc);
 	GError *error = NULL;
 	GstElement *pipe = gst_parse_launch(pipe_desc, &error);
 	g_free(pipe_desc);
 
 	if (error)
 	{
-		blog(LOG_ERROR, "[obs-gstreamer-master] Failed to create master encoder pipeline: %s", error->message);
+		blog(LOG_ERROR, "[obs-gstreamer-master] Failed to create pure GPU master pipeline: %s", error->message);
 		g_clear_error(&error);
 		return NULL;
 	}
@@ -101,98 +73,180 @@ static GstElement *create_master_encoder_pipeline(gst_master_pipeline_t *hub, co
 	return pipe;
 }
 
-/* Event-driven GStreamer Appsink New-Sample Callback */
-static GstFlowReturn on_new_sample_cb(GstAppSink *sink, gpointer user_data)
+/* Native GStreamer Appsink Callback */
+static GstFlowReturn video_new_sample_cb(GstAppSink *sink, gpointer user_data)
 {
 	gst_master_pipeline_t *hub = (gst_master_pipeline_t *)user_data;
+	if (!hub) return GST_FLOW_OK;
+
 	GstSample *sample = gst_app_sink_pull_sample(sink);
 	if (!sample) return GST_FLOW_OK;
 
 	GstBuffer *buf = gst_sample_get_buffer(sample);
-	if (buf)
+	GstCaps *caps = gst_sample_get_caps(sample);
+	if (!buf || !caps)
 	{
-		const bool is_keyframe = !GST_BUFFER_FLAG_IS_SET(buf, GST_BUFFER_FLAG_DELTA_UNIT);
+		gst_sample_unref(sample);
+		return GST_FLOW_OK;
+	}
 
-		g_mutex_lock(&hub->branch_lock);
-		gst_subscriber_branch_t *curr = hub->branches;
-		while (curr)
+	const bool is_keyframe = !GST_BUFFER_FLAG_IS_SET(buf, GST_BUFFER_FLAG_DELTA_UNIT);
+
+	GPtrArray *subs = (GPtrArray *)g_atomic_pointer_get(&hub->subscribers_atomic);
+	if (subs)
+	{
+		for (guint i = 0; i < subs->len; i++)
 		{
-			g_mutex_lock(&curr->lock);
-			if (curr->active && curr->appsrc && !curr->is_pipeline)
+			gst_pipeline_subscriber_t *sub = g_ptr_array_index(subs, i);
+			if (sub && sub->cb)
 			{
-				if (curr->waiting_for_keyframe)
-				{
-					if (!is_keyframe)
-					{
-						g_mutex_unlock(&curr->lock);
-						curr = curr->next;
-						continue;
-					}
-					curr->waiting_for_keyframe = false;
-					blog(LOG_INFO, "[obs-gstreamer-master] Keyframe delivered to '%s', client playback starting", curr->name ? curr->name : "branch");
-				}
-
-				GstBuffer *out_buf = gst_buffer_copy(buf);
-				GST_BUFFER_PTS(out_buf) = GST_CLOCK_TIME_NONE;
-				GST_BUFFER_DTS(out_buf) = GST_CLOCK_TIME_NONE;
-				gst_app_src_push_buffer(GST_APP_SRC(curr->appsrc), out_buf);
+				sub->cb(buf, is_keyframe, sub->user_data);
 			}
-			g_mutex_unlock(&curr->lock);
-			curr = curr->next;
 		}
-		g_mutex_unlock(&hub->branch_lock);
 	}
 
 	gst_sample_unref(sample);
 	return GST_FLOW_OK;
 }
 
+/* Zero-Copy GPU Frame Push using native GPU texture handles */
 void gst_master_pipeline_push_raw_frame(gst_master_pipeline_t *hub, const uint8_t *data, uint32_t linesize)
+{
+	UNUSED_PARAMETER(data);
+	UNUSED_PARAMETER(linesize);
+	if (!hub || !hub->texrender[hub->pingpong_idx]) return;
+
+	gs_texture_t *source_tex = gs_texrender_get_texture(hub->texrender[hub->pingpong_idx]);
+	if (!source_tex) return;
+
+	void *gpu_handle = gs_texture_get_obj(source_tex);
+	if (!gpu_handle) return;
+
+	GstBuffer *in_buf = gst_buffer_new();
+	if (!in_buf) return;
+
+	GstMemory *mem = gst_memory_new_wrapped(GST_MEMORY_FLAG_READONLY, gpu_handle, sizeof(void *), 0, sizeof(void *), NULL, NULL);
+	gst_buffer_append_memory(in_buf, mem);
+
+	uint64_t duration = gst_util_uint64_scale_int(GST_SECOND, hub->fps_den, hub->fps_num);
+	GST_BUFFER_PTS(in_buf) = hub->frame_index * duration;
+	GST_BUFFER_DTS(in_buf) = GST_BUFFER_PTS(in_buf);
+	GST_BUFFER_DURATION(in_buf) = duration;
+	hub->frame_index++;
+
+	if (hub->appsrc && g_atomic_int_get(&hub->connected_client_count) > 0)
+	{
+		gst_app_src_push_buffer(GST_APP_SRC(hub->appsrc), gst_buffer_ref(in_buf));
+	}
+
+	gst_buffer_unref(in_buf);
+}
+
+gst_pipeline_subscriber_t *gst_master_pipeline_subscribe(gst_master_pipeline_t *hub, gst_master_frame_cb cb, gpointer user_data, const char *name)
+{
+	if (!hub) return NULL;
+
+	gst_pipeline_subscriber_t *sub = bzalloc(sizeof(gst_pipeline_subscriber_t));
+	sub->cb = cb;
+	sub->user_data = user_data;
+	sub->name = bstrdup(name ? name : "Subscriber");
+	sub->waiting_for_keyframe = true;
+
+	g_mutex_lock(&hub->subscriber_mutex);
+
+	GPtrArray *old_subs = (GPtrArray *)hub->subscribers_atomic;
+	GPtrArray *new_subs = g_ptr_array_new_full(old_subs ? old_subs->len + 1 : 1, g_free);
+
+	if (old_subs)
+	{
+		for (guint i = 0; i < old_subs->len; i++)
+		{
+			g_ptr_array_add(new_subs, g_ptr_array_index(old_subs, i));
+		}
+	}
+	g_ptr_array_add(new_subs, sub);
+
+	g_atomic_pointer_set(&hub->subscribers_atomic, new_subs);
+
+	g_mutex_unlock(&hub->subscriber_mutex);
+
+	if (old_subs)
+	{
+		g_ptr_array_free(old_subs, TRUE);
+	}
+
+	blog(LOG_INFO, "[obs-gstreamer-master] Subscriber '%s' added", sub->name);
+	return sub;
+}
+
+void gst_master_pipeline_unsubscribe(gst_master_pipeline_t *hub, gst_pipeline_subscriber_t *sub)
+{
+	if (!hub || !sub) return;
+
+	g_mutex_lock(&hub->subscriber_mutex);
+
+	GPtrArray *old_subs = (GPtrArray *)hub->subscribers_atomic;
+	GPtrArray *new_subs = g_ptr_array_new_full(old_subs ? old_subs->len : 1, g_free);
+
+	if (old_subs)
+	{
+		for (guint i = 0; i < old_subs->len; i++)
+		{
+			gst_pipeline_subscriber_t *existing = g_ptr_array_index(old_subs, i);
+			if (existing != sub)
+			{
+				g_ptr_array_add(new_subs, existing);
+			}
+		}
+	}
+
+	g_atomic_pointer_set(&hub->subscribers_atomic, new_subs);
+
+	g_mutex_unlock(&hub->subscriber_mutex);
+
+	if (old_subs)
+	{
+		g_ptr_array_free(old_subs, TRUE);
+	}
+
+	blog(LOG_INFO, "[obs-gstreamer-master] Subscriber '%s' removed", sub->name ? sub->name : "Subscriber");
+	bfree(sub->name);
+	bfree(sub);
+}
+
+void gst_master_pipeline_update_client_count(gst_master_pipeline_t *hub, int delta)
 {
 	if (!hub) return;
 
-	size_t frame_bytes = (size_t)hub->width * (size_t)hub->height * 4;
-	GstBuffer *buf = gst_buffer_new_allocate(NULL, frame_bytes, NULL);
-	if (!buf) return;
+	int prev = g_atomic_int_add(&hub->connected_client_count, delta);
+	int updated = prev + delta;
+	if (updated < 0)
+	{
+		g_atomic_int_set(&hub->connected_client_count, 0);
+		updated = 0;
+	}
 
-	GstMapInfo map;
-	if (gst_buffer_map(buf, &map, GST_MAP_WRITE)) {
-		if (linesize == hub->width * 4) {
-			memcpy(map.data, data, frame_bytes);
-		} else {
-			for (uint32_t y = 0; y < hub->height; y++) {
-				memcpy(map.data + y * hub->width * 4, data + y * linesize, hub->width * 4);
-			}
+	if (prev == 0 && updated > 0)
+	{
+		blog(LOG_INFO, "[obs-gstreamer-master] First client connected! Activating master encoder pipeline.");
+		if (hub->pipe)
+		{
+			gst_element_set_state(hub->pipe, GST_STATE_PLAYING);
 		}
-		gst_buffer_unmap(buf, &map);
-
-		uint64_t duration = gst_util_uint64_scale_int(GST_SECOND, hub->fps_den, hub->fps_num);
-		GST_BUFFER_PTS(buf) = hub->frame_index * duration;
-		GST_BUFFER_DTS(buf) = GST_BUFFER_PTS(buf);
-		GST_BUFFER_DURATION(buf) = duration;
-		hub->frame_index++;
-
-		// Push to master encoder if clients active
-		if (hub->appsrc && g_atomic_int_get(&hub->connected_client_count) > 0) {
-			gst_app_src_push_buffer(GST_APP_SRC(hub->appsrc), gst_buffer_ref(buf));
+		if (hub->appsink)
+		{
+			GstEvent *event = gst_video_event_new_upstream_force_key_unit(GST_CLOCK_TIME_NONE, TRUE, 0);
+			gst_element_send_event(hub->appsink, event);
 		}
-
-		// Push raw frames directly to custom pipeline subscribers (Always Pushing)
-		if (g_atomic_int_get(&hub->pipeline_branch_count) > 0) {
-			g_mutex_lock(&hub->branch_lock);
-			gst_subscriber_branch_t *curr = hub->branches;
-			while (curr) {
-				if (curr->active && curr->is_pipeline && curr->appsrc) {
-					gst_app_src_push_buffer(GST_APP_SRC(curr->appsrc), gst_buffer_ref(buf));
-				}
-				curr = curr->next;
-			}
-			g_mutex_unlock(&hub->branch_lock);
+	}
+	else if (prev > 0 && updated == 0)
+	{
+		blog(LOG_INFO, "[obs-gstreamer-master] Last client disconnected. Pausing encoder pipeline (0%% CPU/GPU usage).");
+		hub->first_frame_primed = false;
+		if (hub->pipe)
+		{
+			gst_element_set_state(hub->pipe, GST_STATE_PAUSED);
 		}
-
-		gst_buffer_unref(buf);
-	} else {
-		gst_buffer_unref(buf);
 	}
 }
 
@@ -201,7 +255,7 @@ gst_master_pipeline_t *gst_master_pipeline_get_or_create(const char *source_type
                                                          int bitrate_kbps, int keyint_sec, uint32_t width, uint32_t height, uint32_t fps_num, uint32_t fps_den)
 {
 	gst_master_pipeline_t *hub = bzalloc(sizeof(gst_master_pipeline_t));
-	g_mutex_init(&hub->branch_lock);
+	g_mutex_init(&hub->subscriber_mutex);
 
 	hub->source_type = bstrdup(source_type ? source_type : "Program Output");
 	hub->source_name = bstrdup(source_name ? source_name : "");
@@ -224,7 +278,7 @@ gst_master_pipeline_t *gst_master_pipeline_get_or_create(const char *source_type
 	if (!hub->source) {
 		blog(LOG_ERROR, "[obs-gstreamer-master] Failed to resolve source '%s' of type '%s'",
 			hub->source_name, hub->source_type);
-		g_mutex_clear(&hub->branch_lock);
+		g_mutex_clear(&hub->subscriber_mutex);
 		bfree(hub->source_type);
 		bfree(hub->source_name);
 		bfree(hub);
@@ -237,12 +291,10 @@ gst_master_pipeline_t *gst_master_pipeline_get_or_create(const char *source_type
 	obs_enter_graphics();
 	hub->texrender[0] = gs_texrender_create(GS_RGBA, GS_ZS_NONE);
 	hub->texrender[1] = gs_texrender_create(GS_RGBA, GS_ZS_NONE);
-	hub->stagesurf[0] = gs_stagesurface_create(hub->width, hub->height, GS_RGBA);
-	hub->stagesurf[1] = gs_stagesurface_create(hub->width, hub->height, GS_RGBA);
 	obs_leave_graphics();
 
-	if (!hub->texrender[0] || !hub->texrender[1] || !hub->stagesurf[0] || !hub->stagesurf[1]) {
-		blog(LOG_ERROR, "[obs-gstreamer-master] Failed to allocate GPU texrender or stagesurf");
+	if (!hub->texrender[0] || !hub->texrender[1]) {
+		blog(LOG_ERROR, "[obs-gstreamer-master] Failed to allocate GPU texrender");
 		gst_master_pipeline_destroy(hub);
 		return NULL;
 	}
@@ -267,15 +319,13 @@ gst_master_pipeline_t *gst_master_pipeline_get_or_create(const char *source_type
 	hub->connected_client_count = 0;
 	gst_element_set_state(hub->pipe, GST_STATE_PAUSED);
 
-	// Enable event-driven signals on appsink
-	g_object_set(G_OBJECT(hub->appsink), "emit-signals", TRUE, NULL);
-	g_signal_connect(hub->appsink, "new-sample", G_CALLBACK(on_new_sample_cb), hub);
+	GstAppSinkCallbacks sink_cbs = {NULL, NULL, video_new_sample_cb};
+	gst_app_sink_set_callbacks(GST_APP_SINK(hub->appsink), &sink_cbs, hub, NULL);
 
 	hub->rtsp_context = g_main_context_new();
 	hub->rtsp_loop = g_main_loop_new(hub->rtsp_context, FALSE);
 	hub->rtsp_thread = g_thread_new("gst_hub_rtsp_loop", (GThreadFunc)g_main_loop_run, hub->rtsp_loop);
 
-	// Register OBS main render callback
 	obs_add_main_render_callback(hub_render_callback, hub);
 	hub->render_hook_active = true;
 
@@ -289,10 +339,6 @@ void gst_master_pipeline_destroy(gst_master_pipeline_t *hub)
 	if (hub->render_hook_active) {
 		obs_remove_main_render_callback(hub_render_callback, hub);
 		hub->render_hook_active = false;
-	}
-
-	if (hub->appsink) {
-		g_signal_handlers_disconnect_by_data(hub->appsink, hub);
 	}
 
 	if (hub->rtsp_loop) {
@@ -325,10 +371,6 @@ void gst_master_pipeline_destroy(gst_master_pipeline_t *hub)
 			gs_texrender_destroy(hub->texrender[i]);
 			hub->texrender[i] = NULL;
 		}
-		if (hub->stagesurf[i]) {
-			gs_stagesurface_destroy(hub->stagesurf[i]);
-			hub->stagesurf[i] = NULL;
-		}
 	}
 	obs_leave_graphics();
 
@@ -341,8 +383,23 @@ void gst_master_pipeline_destroy(gst_master_pipeline_t *hub)
 		hub->source = NULL;
 	}
 
+	GPtrArray *subs = (GPtrArray *)hub->subscribers_atomic;
+	if (subs)
+	{
+		for (guint i = 0; i < subs->len; i++)
+		{
+			gst_pipeline_subscriber_t *sub = g_ptr_array_index(subs, i);
+			if (sub)
+			{
+				bfree(sub->name);
+				bfree(sub);
+			}
+		}
+		g_ptr_array_free(subs, TRUE);
+	}
+
 	bfree(hub->source_type);
 	bfree(hub->source_name);
-	g_mutex_clear(&hub->branch_lock);
+	g_mutex_clear(&hub->subscriber_mutex);
 	bfree(hub);
 }

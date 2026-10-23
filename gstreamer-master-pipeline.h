@@ -1,5 +1,5 @@
 /*
- * obs-gstreamer: Master Hardware Encoder Pipeline & Subscriber Hub
+ * obs-gstreamer: Master Hardware Encoder Pipeline & Pub-Sub Subscriber Hub
  */
 
 #ifndef GSTREAMER_MASTER_PIPELINE_H
@@ -15,23 +15,16 @@ extern "C" {
 #endif
 
 typedef struct gst_master_pipeline gst_master_pipeline_t;
-typedef struct gst_subscriber_branch gst_subscriber_branch_t;
+typedef struct gst_pipeline_subscriber gst_pipeline_subscriber_t;
 
-typedef void (*gst_subscriber_packet_cb)(gst_subscriber_branch_t *branch, GstBuffer *buf, bool is_keyframe, gpointer user_data);
+/* Callback signature for receiving encoded H.264 frames */
+typedef void (*gst_master_frame_cb)(GstBuffer *buf, bool is_keyframe, gpointer user_data);
 
-struct gst_subscriber_branch {
+struct gst_pipeline_subscriber {
+	gst_master_frame_cb cb;
+	gpointer user_data;
 	char *name;
-	char *service;
-	char *mount_point;
-	bool active;
-	bool is_pipeline;
 	bool waiting_for_keyframe;
-	int client_count;
-	GstElement *appsrc;
-	GstElement *pipe;
-	GMutex lock;
-	gst_master_pipeline_t *pipeline;
-	gst_subscriber_branch_t *next;
 };
 
 struct gst_master_pipeline {
@@ -64,9 +57,11 @@ struct gst_master_pipeline {
 
 	gint connected_client_count;
 	gint pipeline_branch_count;
-	GMutex branch_lock;
-	gst_subscriber_branch_t *branches;
-	size_t active_branch_count;
+
+	// Lock-free Copy-on-Write Pub-Sub Subscriber List
+	gpointer subscribers_atomic; // GPtrArray* containing gst_pipeline_subscriber_t*
+	GMutex subscriber_mutex;     // Only locked during slow path (subscribe/unsubscribe)
+
 	bool render_hook_active;
 };
 
@@ -79,13 +74,10 @@ void gst_master_pipeline_destroy(gst_master_pipeline_t *pipeline);
 
 void gst_master_pipeline_push_raw_frame(gst_master_pipeline_t *pipeline, const uint8_t *data, uint32_t linesize);
 
-gst_subscriber_branch_t *gst_master_pipeline_add_branch(gst_master_pipeline_t *pipeline, const char *name,
-                                                        const char *service, const char *mount_point,
-                                                        const char *launch_str, bool is_pipeline);
-
-void gst_master_pipeline_remove_branch(gst_master_pipeline_t *pipeline, gst_subscriber_branch_t *branch);
-
-void gst_master_pipeline_shutdown_all(void);
+/* Pub-Sub API */
+gst_pipeline_subscriber_t *gst_master_pipeline_subscribe(gst_master_pipeline_t *pipeline, gst_master_frame_cb cb, gpointer user_data, const char *name);
+void gst_master_pipeline_unsubscribe(gst_master_pipeline_t *pipeline, gst_pipeline_subscriber_t *sub);
+void gst_master_pipeline_update_client_count(gst_master_pipeline_t *pipeline, int delta);
 
 #ifdef __cplusplus
 }
