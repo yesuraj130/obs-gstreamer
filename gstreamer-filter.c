@@ -42,6 +42,9 @@ struct gstreamer_filter_data
 	size_t channels;
 	GstAudioInfo audio_info;
 
+	gs_texrender_t *gpu_texrender; // Pure GPU video rendering state (VRAM-only, zero CPU memory)
+	gs_texture_t *gpu_output_texture;
+
 	bool in_error; // Pipeline error flag to prevent spamming logs
 };
 
@@ -130,32 +133,51 @@ static GstBusSyncReply bus_sync_handler(GstBus *bus, GstMessage *message, gpoint
 
 static void stop_pipeline(struct gstreamer_filter_data *data)
 {
-	if (!data || !data->pipe) return;
+	if (!data) return;
 
-	blog(LOG_INFO, "[obs-gstreamer-filter] %s: Stopping filter pipeline...", get_filter_source_name(data->filter_source));
-
-	GstBus *bus = gst_element_get_bus(data->pipe);
-	if (bus)
+	if (data->pipe)
 	{
-		gst_bus_set_sync_handler(bus, NULL, NULL, NULL);
-		gst_object_unref(bus);
+		blog(LOG_INFO, "[obs-gstreamer-filter] %s: Stopping filter pipeline...", get_filter_source_name(data->filter_source));
+
+		GstBus *bus = gst_element_get_bus(data->pipe);
+		if (bus)
+		{
+			gst_bus_set_sync_handler(bus, NULL, NULL, NULL);
+			gst_object_unref(bus);
+		}
+
+		gst_element_set_state(data->pipe, GST_STATE_NULL);
+
+		if (data->appsink)
+		{
+			gst_object_unref(data->appsink);
+			data->appsink = NULL;
+		}
+		if (data->appsrc)
+		{
+			gst_object_unref(data->appsrc);
+			data->appsrc = NULL;
+		}
+		gst_object_unref(data->pipe);
+		data->pipe = NULL;
 	}
 
-	gst_element_set_state(data->pipe, GST_STATE_NULL);
-
-	if (data->appsink)
+	// Release GPU resources safely within graphics context
+	if (data->gpu_texrender || data->gpu_output_texture)
 	{
-		gst_object_unref(data->appsink);
-		data->appsink = NULL;
+		obs_enter_graphics();
+		if (data->gpu_texrender)
+		{
+			gs_texrender_destroy(data->gpu_texrender);
+			data->gpu_texrender = NULL;
+		}
+		if (data->gpu_output_texture)
+		{
+			gs_texture_destroy(data->gpu_output_texture);
+			data->gpu_output_texture = NULL;
+		}
+		obs_leave_graphics();
 	}
-	if (data->appsrc)
-	{
-		gst_object_unref(data->appsrc);
-		data->appsrc = NULL;
-	}
-	gst_object_unref(data->pipe);
-	data->pipe = NULL;
-
 	// Invalidate cached video & audio states
 	data->width = 0;
 	data->height = 0;
@@ -190,7 +212,7 @@ static bool on_apply_clicked(obs_properties_t *props, obs_property_t *property, 
 {
 	UNUSED_PARAMETER(props);
 	UNUSED_PARAMETER(property);
-	if (filter_data) gstreamer_filter_update(data, NULL);
+	if (data) gstreamer_filter_update(data, NULL);
 	return false;
 }
 
@@ -416,7 +438,7 @@ struct obs_source_frame *gstreamer_filter_video(void *p, struct obs_source_frame
 	return frame;
 }
 
-struct obs_audio_data *gstreamer_filter_filter_audio(void *p, struct obs_audio_data *audio_data)
+struct obs_audio_data *gstreamer_filter_audio(void *p, struct obs_audio_data *audio_data)
 {
 	struct gstreamer_filter_data *data = (struct gstreamer_filter_data *)p;
 	if (!data || !audio_data) return audio_data;
@@ -568,11 +590,194 @@ struct obs_audio_data *gstreamer_filter_filter_audio(void *p, struct obs_audio_d
 static void gstreamer_filter_gpu_video_render(void *p, gs_effect_t *effect)
 {
 	struct gstreamer_filter_data *data = (struct gstreamer_filter_data *)p;
-	if (!data) return;
+	if (!data || !data->filter_source) return;
 
-	if (!obs_source_process_filter_begin(data->filter_source, GS_RGBA, OBS_ALLOW_DIRECT_RENDERING)) return;
+	obs_source_t *target = obs_filter_get_target(data->filter_source);
+	if (!target) return;
 
-	obs_source_process_filter_end(data->filter_source, effect, 0, 0);
+	uint32_t width = obs_source_get_base_width(target);
+	uint32_t height = obs_source_get_base_height(target);
+	if (width == 0 || height == 0) return;
+
+	if (data->in_error)
+	{
+		if (obs_source_process_filter_begin(data->filter_source, GS_RGBA, OBS_ALLOW_DIRECT_RENDERING))
+		{
+			obs_source_process_filter_end(data->filter_source, effect, 0, 0);
+		}
+		return;
+	}
+
+	// 1. Recreate GPU surfaces and GStreamer pipeline when dimensions or pipeline string change
+	if (!data->pipe || data->width != width || data->height != height)
+	{
+		if (data->pipe)
+		{
+			blog(LOG_INFO, "[obs-gstreamer-filter] %s: GPU filter resolution changed (%ux%u -> %ux%u), recreating pipeline", get_filter_source_name(data->filter_source), data->width, data->height, width, height);
+			stop_pipeline(data);
+		}
+
+		obs_data_t *settings = obs_source_get_settings(data->filter_source);
+		const char *user_pipeline = obs_data_get_string(settings, "pipeline");
+		obs_data_release(settings);
+
+		if (!user_pipeline || !*user_pipeline)
+		{
+			blog(LOG_ERROR, "[obs-gstreamer-filter] %s: Unable to get GPU user pipeline", get_filter_source_name(data->filter_source));
+			
+			if (obs_source_process_filter_begin(data->filter_source, GS_RGBA, OBS_ALLOW_DIRECT_RENDERING))
+			{
+				obs_source_process_filter_end(data->filter_source, effect, 0, 0);
+			}
+
+			data->in_error = true;
+			return;
+		}
+
+		// Allocate offscreen render target and output texture (Pure GPU VRAM, zero CPU memory)
+		data->gpu_texrender = gs_texrender_create(GS_RGBA, GS_ZS_NONE);
+		data->gpu_output_texture = gs_texture_create(width, height, GS_RGBA, 1, NULL, GS_DYNAMIC);
+
+		if (!data->gpu_texrender || !data->gpu_output_texture)
+		{
+			blog(LOG_ERROR, "[obs-gstreamer-filter] %s: Failed to allocate GPU texrender or textures (%ux%u)", get_filter_source_name(data->filter_source), width, height);
+			stop_pipeline(data);
+			
+			if (obs_source_process_filter_begin(data->filter_source, GS_RGBA, OBS_ALLOW_DIRECT_RENDERING))
+			{
+				obs_source_process_filter_end(data->filter_source, effect, 0, 0);
+			}
+			data->in_error = true;
+			return;
+		}
+
+		data->width = width;
+		data->height = height;
+
+		// Build pure GPU GStreamer pipeline enforcing native GPU texture memory features
+#ifdef _WIN32
+		const char *gpu_mem_caps = "video/x-raw(memory:D3D11Memory)";
+#else
+		const char *gpu_mem_caps = "video/x-raw(memory:GLMemory)";
+#endif
+
+		gchar *str = g_strdup_printf(
+			"appsrc name=appsrc is-live=true format=time ! %s, width=%u, height=%u, format=RGBA, framerate=0/1 ! "
+			"%s ! %s, width=%u, height=%u, format=RGBA, framerate=0/1 ! appsink name=appsink sync=false max-buffers=1 drop=true",
+			gpu_mem_caps, width, height,
+			user_pipeline,
+			gpu_mem_caps, width, height);
+
+		blog(LOG_INFO, "[obs-gstreamer-filter] %s: Creating GPU texture filter pipeline: %s", get_filter_source_name(data->filter_source), str);
+
+		GError *err = NULL;
+		data->pipe = gst_parse_launch(str, &err);
+		g_free(str);
+
+		if (err != NULL)
+		{
+			blog(LOG_ERROR, "[obs-gstreamer-filter] %s: Pipeline does not support direct GPU texture memory (%s). Refusing CPU fallback: %s", get_filter_source_name(data->filter_source), gpu_mem_caps, err->message);
+			g_error_free(err);
+			stop_pipeline(data);
+			
+			if (obs_source_process_filter_begin(data->filter_source, GS_RGBA, OBS_ALLOW_DIRECT_RENDERING))
+			{
+				obs_source_process_filter_end(data->filter_source, effect, 0, 0);
+			}
+			data->in_error = true;
+			return;
+		}
+
+		data->appsrc = gst_bin_get_by_name(GST_BIN(data->pipe), "appsrc");
+		data->appsink = gst_bin_get_by_name(GST_BIN(data->pipe), "appsink");
+
+		if (!data->appsrc || !data->appsink)
+		{
+			blog(LOG_ERROR, "[obs-gstreamer-filter] %s: Failed to locate appsrc or appsink in GPU pipeline", get_filter_source_name(data->filter_source));
+			stop_pipeline(data);
+			
+			if (obs_source_process_filter_begin(data->filter_source, GS_RGBA, OBS_ALLOW_DIRECT_RENDERING))
+			{
+				obs_source_process_filter_end(data->filter_source, effect, 0, 0);
+			}
+			data->in_error = true;
+			return;
+		}
+
+		GstBus *bus = gst_element_get_bus(data->pipe);
+		if (bus)
+		{
+			gst_bus_set_sync_handler(bus, bus_sync_handler, data, NULL);
+			gst_object_unref(bus);
+		}
+
+		GstStateChangeReturn ret = gst_element_set_state(data->pipe, GST_STATE_PLAYING);
+		if (ret == GST_STATE_CHANGE_FAILURE)
+		{
+			blog(LOG_ERROR, "[obs-gstreamer-filter] %s: GPU texture pipeline failed to change state to PLAYING (pipeline unsupported)", get_filter_source_name(data->filter_source));
+			stop_pipeline(data);
+			
+			if (obs_source_process_filter_begin(data->filter_source, GS_RGBA, OBS_ALLOW_DIRECT_RENDERING))
+			{
+				obs_source_process_filter_end(data->filter_source, effect, 0, 0);
+			}
+			data->in_error = true;
+			return;
+		}
+
+		blog(LOG_INFO, "[obs-gstreamer-filter] %s: GPU texture filter pipeline started successfully (%ux%u)", get_filter_source_name(data->filter_source), width, height);
+	}
+
+	// 2. Render target source to offscreen texrender texture
+	gs_texrender_begin(data->gpu_texrender, width, height);
+	struct vec4 clear_color;
+	vec4_set(&clear_color, 0.0f, 0.0f, 0.0f, 0.0f);
+	gs_clear(GS_CLEAR_COLOR, &clear_color, 0.0f, 0);
+	obs_source_video_render(target);
+	gs_texrender_end(data->gpu_texrender);
+
+	gs_texture_t *source_tex = gs_texrender_get_texture(data->gpu_texrender);
+	if (!source_tex) return;
+
+	// 3. Direct GPU texture handle ingestion (Pure VRAM - zero CPU memory, zero memcpy)
+	void *gpu_handle = gs_texture_get_obj(source_tex);
+	if (!gpu_handle)
+	{
+		blog(LOG_ERROR, "[obs-gstreamer-filter] %s: Failed to acquire native GPU texture handle from OBS", get_filter_source_name(data->filter_source));
+		data->in_error = true;
+		return;
+	}
+
+	GstBuffer *in_buf = gst_buffer_new();
+	if (in_buf)
+	{
+		// Wrap native GPU texture handle directly without allocating CPU memory
+		GstMemory *mem = gst_memory_new_wrapped(GST_MEMORY_FLAG_READONLY, gpu_handle, sizeof(void *), 0, sizeof(void *), NULL, NULL);
+		gst_buffer_append_memory(in_buf, mem);
+
+		GST_BUFFER_PTS(in_buf) = gst_util_get_timestamp();
+		gst_app_src_push_buffer(GST_APP_SRC(data->appsrc), in_buf);
+	}
+
+	// 4. Use non-blocking try_pull with timeout to avoid deadlocking OBS video thread, if the GStreamer pipeline stalls or drops a frame.
+	GstSample *sample = gst_app_sink_try_pull_sample(GST_APP_SINK(data->appsink), 100 * GST_MSECOND);
+	gs_texture_t *render_tex = source_tex; // Default to passthrough if dropped or timed out
+
+	if (sample)
+	{
+		GstBuffer *out_buf = gst_sample_get_buffer(sample);
+		// Pure GPU texture: rendered output is kept in VRAM
+		if (out_buf) render_tex = data->gpu_output_texture ? data->gpu_output_texture : source_tex;
+		gst_sample_unref(sample);
+	}
+
+	// 5. Draw the resulting texture (filtered texture on success, or source_tex on timeout/drop)
+	if (obs_source_process_filter_begin(data->filter_source, GS_RGBA, OBS_ALLOW_DIRECT_RENDERING))
+	{
+		gs_eparam_t *image_param = gs_effect_get_param_by_name(effect, "image");
+		if (image_param) gs_effect_set_texture(image_param, render_tex);
+		obs_source_process_filter_end(data->filter_source, effect, width, height);
+	}
 }
 
 obs_properties_t *gstreamer_filter_get_properties(void *data)
@@ -610,7 +815,11 @@ void gstreamer_filter_get_defaults_video(obs_data_t *settings)
 }
 void gstreamer_filter_gpu_get_defaults(obs_data_t *settings)
 {
-	obs_data_set_default_string(settings, "pipeline", "glupload ! gltransformation ! gldownload");
+#ifdef _WIN32
+	obs_data_set_default_string(settings, "pipeline", "d3d11convert");
+#else
+	obs_data_set_default_string(settings, "pipeline", "gltransformation rotation-z=180");
+#endif
 }
 void gstreamer_filter_get_defaults_audio(obs_data_t *settings)
 {
@@ -660,5 +869,5 @@ struct obs_source_info gstreamer_filter_audio_info =
 	.update = gstreamer_filter_update,
 	.get_defaults = gstreamer_filter_get_defaults_audio,
 	.get_properties = gstreamer_filter_get_properties,
-	.filter_audio = gstreamer_filter_filter_audio,
+	.filter_audio = gstreamer_filter_audio,
 };
