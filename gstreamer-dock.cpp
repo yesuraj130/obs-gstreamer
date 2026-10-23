@@ -839,7 +839,9 @@ static void edit_master_pipeline(QWidget *parent, gstreamer_dock_state *state)
 }
 
 static bool g_dock_registered = false;
+#if !((defined(LIBOBS_API_MAJOR_VER) && (LIBOBS_API_MAJOR_VER >= 30)) || (defined(LIBOBS_API_VER) && (LIBOBS_API_VER >= 0x1E000000)))
 static QDockWidget *g_dock_widget = nullptr;
+#endif
 static const char *DOCK_ID = "obs-gstreamer-dock";
 
 static void dock_frontend_event(enum obs_frontend_event event, void *private_data)

@@ -43,7 +43,6 @@ struct gstreamer_filter_data
 	GstAudioInfo audio_info;
 
 	gs_texrender_t *gpu_texrender; // Pure GPU video rendering state (VRAM-only, zero CPU memory)
-	gs_texture_t *gpu_output_texture;
 
 	bool in_error; // Pipeline error flag to prevent spamming logs
 };
@@ -163,19 +162,11 @@ static void stop_pipeline(struct gstreamer_filter_data *data)
 	}
 
 	// Release GPU resources safely within graphics context
-	if (data->gpu_texrender || data->gpu_output_texture)
+	if (data->gpu_texrender)
 	{
 		obs_enter_graphics();
-		if (data->gpu_texrender)
-		{
-			gs_texrender_destroy(data->gpu_texrender);
-			data->gpu_texrender = NULL;
-		}
-		if (data->gpu_output_texture)
-		{
-			gs_texture_destroy(data->gpu_output_texture);
-			data->gpu_output_texture = NULL;
-		}
+		gs_texrender_destroy(data->gpu_texrender);
+		data->gpu_texrender = NULL;
 		obs_leave_graphics();
 	}
 	// Invalidate cached video & audio states
@@ -357,7 +348,7 @@ struct obs_source_frame *gstreamer_filter_video(void *p, struct obs_source_frame
 	// Instead, wrap each plane's pointer into its own GstMemory block.
 	for (guint p = 0; p < GST_VIDEO_INFO_N_PLANES(&data->video_info); p++)
 	{
-		guint plane_height = get_plane_height(&data->video_info, p);
+		guint plane_height = gst_get_plane_height(&data->video_info, p);
 		gsize plane_size = (gsize)frame->linesize[p] * plane_height;
 
 		// Wrap OBS plane memory as read-only memory block without duplicating buffers
@@ -587,6 +578,14 @@ struct obs_audio_data *gstreamer_filter_audio(void *p, struct obs_audio_data *au
 	return audio_data;
 }
 
+static inline void gstreamer_filter_gpu_passthrough(obs_source_t *source, gs_effect_t *effect)
+{
+	if (obs_source_process_filter_begin(source, GS_RGBA, OBS_ALLOW_DIRECT_RENDERING))
+	{
+		obs_source_process_filter_end(source, effect, 0, 0);
+	}
+}
+
 static void gstreamer_filter_gpu_video_render(void *p, gs_effect_t *effect)
 {
 	struct gstreamer_filter_data *data = (struct gstreamer_filter_data *)p;
@@ -601,10 +600,7 @@ static void gstreamer_filter_gpu_video_render(void *p, gs_effect_t *effect)
 
 	if (data->in_error)
 	{
-		if (obs_source_process_filter_begin(data->filter_source, GS_RGBA, OBS_ALLOW_DIRECT_RENDERING))
-		{
-			obs_source_process_filter_end(data->filter_source, effect, 0, 0);
-		}
+		gstreamer_filter_gpu_passthrough(data->filter_source, effect);
 		return;
 	}
 
@@ -624,29 +620,19 @@ static void gstreamer_filter_gpu_video_render(void *p, gs_effect_t *effect)
 		if (!user_pipeline || !*user_pipeline)
 		{
 			blog(LOG_ERROR, "[obs-gstreamer-filter] %s: Unable to get GPU user pipeline", get_filter_source_name(data->filter_source));
-			
-			if (obs_source_process_filter_begin(data->filter_source, GS_RGBA, OBS_ALLOW_DIRECT_RENDERING))
-			{
-				obs_source_process_filter_end(data->filter_source, effect, 0, 0);
-			}
-
+			gstreamer_filter_gpu_passthrough(data->filter_source, effect);
 			data->in_error = true;
 			return;
 		}
 
-		// Allocate offscreen render target and output texture (Pure GPU VRAM, zero CPU memory)
+		// Allocate offscreen render target (Pure GPU VRAM, zero CPU memory)
 		data->gpu_texrender = gs_texrender_create(GS_RGBA, GS_ZS_NONE);
-		data->gpu_output_texture = gs_texture_create(width, height, GS_RGBA, 1, NULL, GS_DYNAMIC);
 
-		if (!data->gpu_texrender || !data->gpu_output_texture)
+		if (!data->gpu_texrender)
 		{
-			blog(LOG_ERROR, "[obs-gstreamer-filter] %s: Failed to allocate GPU texrender or textures (%ux%u)", get_filter_source_name(data->filter_source), width, height);
+			blog(LOG_ERROR, "[obs-gstreamer-filter] %s: Failed to allocate GPU texrender (%ux%u)", get_filter_source_name(data->filter_source), width, height);
 			stop_pipeline(data);
-			
-			if (obs_source_process_filter_begin(data->filter_source, GS_RGBA, OBS_ALLOW_DIRECT_RENDERING))
-			{
-				obs_source_process_filter_end(data->filter_source, effect, 0, 0);
-			}
+			gstreamer_filter_gpu_passthrough(data->filter_source, effect);
 			data->in_error = true;
 			return;
 		}
@@ -679,11 +665,7 @@ static void gstreamer_filter_gpu_video_render(void *p, gs_effect_t *effect)
 			blog(LOG_ERROR, "[obs-gstreamer-filter] %s: Pipeline does not support direct GPU texture memory (%s). Refusing CPU fallback: %s", get_filter_source_name(data->filter_source), gpu_mem_caps, err->message);
 			g_error_free(err);
 			stop_pipeline(data);
-			
-			if (obs_source_process_filter_begin(data->filter_source, GS_RGBA, OBS_ALLOW_DIRECT_RENDERING))
-			{
-				obs_source_process_filter_end(data->filter_source, effect, 0, 0);
-			}
+			gstreamer_filter_gpu_passthrough(data->filter_source, effect);
 			data->in_error = true;
 			return;
 		}
@@ -695,11 +677,7 @@ static void gstreamer_filter_gpu_video_render(void *p, gs_effect_t *effect)
 		{
 			blog(LOG_ERROR, "[obs-gstreamer-filter] %s: Failed to locate appsrc or appsink in GPU pipeline", get_filter_source_name(data->filter_source));
 			stop_pipeline(data);
-			
-			if (obs_source_process_filter_begin(data->filter_source, GS_RGBA, OBS_ALLOW_DIRECT_RENDERING))
-			{
-				obs_source_process_filter_end(data->filter_source, effect, 0, 0);
-			}
+			gstreamer_filter_gpu_passthrough(data->filter_source, effect);
 			data->in_error = true;
 			return;
 		}
@@ -716,11 +694,7 @@ static void gstreamer_filter_gpu_video_render(void *p, gs_effect_t *effect)
 		{
 			blog(LOG_ERROR, "[obs-gstreamer-filter] %s: GPU texture pipeline failed to change state to PLAYING (pipeline unsupported)", get_filter_source_name(data->filter_source));
 			stop_pipeline(data);
-			
-			if (obs_source_process_filter_begin(data->filter_source, GS_RGBA, OBS_ALLOW_DIRECT_RENDERING))
-			{
-				obs_source_process_filter_end(data->filter_source, effect, 0, 0);
-			}
+			gstreamer_filter_gpu_passthrough(data->filter_source, effect);
 			data->in_error = true;
 			return;
 		}
@@ -767,7 +741,7 @@ static void gstreamer_filter_gpu_video_render(void *p, gs_effect_t *effect)
 	{
 		GstBuffer *out_buf = gst_sample_get_buffer(sample);
 		// Pure GPU texture: rendered output is kept in VRAM
-		if (out_buf) render_tex = data->gpu_output_texture ? data->gpu_output_texture : source_tex;
+		if (out_buf) render_tex = source_tex;
 		gst_sample_unref(sample);
 	}
 

@@ -27,6 +27,10 @@
 
 #if ENABLE_WEBRTC
 
+#ifndef GST_USE_UNSTABLE_API
+#define GST_USE_UNSTABLE_API
+#endif
+
 #include <gst/app/app.h>
 #include <gst/sdp/sdp.h>
 #include <gst/video/video.h>
