@@ -103,6 +103,8 @@ deps = [
   dependency('gstreamer-app-1.0'),
   dependency('gstreamer-net-1.0'),
   dependency('gstreamer-rtsp-server-1.0'),
+  dependency('gstreamer-gl-1.0', required : false),
+  dependency('gstreamer-d3d11-1.0', required : false),
 ]
 
 if qt_dep.found() and obs_frontend_dep.found()

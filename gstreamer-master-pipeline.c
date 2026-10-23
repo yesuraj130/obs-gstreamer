@@ -1,5 +1,5 @@
 /*
- * obs-gstreamer: Master Hardware Encoder Pipeline & Pub-Sub Subscriber Hub (Optimized Pure GPU Zero-Copy Mode)
+ * obs-gstreamer: Master Hardware Encoder Pipeline & Pub-Sub Subscriber Hub (Native Direct GPU Memory)
  */
 
 #include "gstreamer-master-pipeline.h"
@@ -58,14 +58,14 @@ static GstElement *create_master_encoder_pipeline(gst_master_pipeline_t *hub, co
 		g_free(encoder_elem);
 	}
 
-	blog(LOG_INFO, "[obs-gstreamer-master] Launching Optimized Pure GPU Zero-Copy master pipeline: %s", pipe_desc);
+	blog(LOG_INFO, "[obs-gstreamer-master] Launching Native Direct GPU Master Pipeline: %s", pipe_desc);
 	GError *error = NULL;
 	GstElement *pipe = gst_parse_launch(pipe_desc, &error);
 	g_free(pipe_desc);
 
 	if (error)
 	{
-		blog(LOG_ERROR, "[obs-gstreamer-master] Failed to create pure GPU master pipeline: %s", error->message);
+		blog(LOG_ERROR, "[obs-gstreamer-master] Failed to create direct GPU master pipeline: %s", error->message);
 		g_clear_error(&error);
 		return NULL;
 	}
@@ -73,7 +73,6 @@ static GstElement *create_master_encoder_pipeline(gst_master_pipeline_t *hub, co
 	return pipe;
 }
 
-/* Native GStreamer Appsink Callback */
 static GstFlowReturn video_new_sample_cb(GstAppSink *sink, gpointer user_data)
 {
 	gst_master_pipeline_t *hub = (gst_master_pipeline_t *)user_data;
@@ -109,7 +108,7 @@ static GstFlowReturn video_new_sample_cb(GstAppSink *sink, gpointer user_data)
 	return GST_FLOW_OK;
 }
 
-/* Zero-Copy GPU Frame Push using native GPU texture handles */
+/* Direct Native GPU Frame Push using pipeline's valid GstGLContext / GstD3D11Device */
 void gst_master_pipeline_push_raw_frame(gst_master_pipeline_t *hub, const uint8_t *data, uint32_t linesize)
 {
 	UNUSED_PARAMETER(data);
@@ -125,7 +124,52 @@ void gst_master_pipeline_push_raw_frame(gst_master_pipeline_t *hub, const uint8_
 	GstBuffer *in_buf = gst_buffer_new();
 	if (!in_buf) return;
 
-	GstMemory *mem = gst_memory_new_wrapped(GST_MEMORY_FLAG_READONLY, gpu_handle, sizeof(void *), 0, sizeof(void *), NULL, NULL);
+	GstMemory *mem = NULL;
+
+#ifdef _WIN32
+	if (hub->d3d11_allocator && hub->d3d11_device)
+	{
+		mem = gst_d3d11_allocator_alloc_wrapped(
+			GST_D3D11_ALLOCATOR(hub->d3d11_allocator),
+			hub->d3d11_device,
+			(ID3D11Texture2D *)gpu_handle,
+			sizeof(void *),
+			NULL,
+			NULL);
+	}
+#else
+	if (hub->gl_context && hub->gl_allocator)
+	{
+		GLuint tex_id = (GLuint)(uintptr_t)gpu_handle;
+		GstVideoInfo vinfo;
+		gst_video_info_set_format(&vinfo, GST_VIDEO_FORMAT_RGBA, hub->width, hub->height);
+
+		GstGLVideoAllocationParams *params = gst_gl_video_allocation_params_new_wrapped_texture(
+			hub->gl_context,
+			NULL,
+			&vinfo,
+			0,
+			NULL,
+			GST_GL_TEXTURE_TARGET_2D,
+			GST_GL_RGBA,
+			tex_id,
+			NULL,
+			NULL);
+
+		if (params)
+		{
+			mem = gst_gl_memory_allocator_alloc(GST_GL_MEMORY_ALLOCATOR(hub->gl_allocator), params);
+			gst_gl_allocation_params_free((GstGLAllocationParams *)params);
+		}
+	}
+#endif
+
+	if (!mem)
+	{
+		gst_buffer_unref(in_buf);
+		return;
+	}
+
 	gst_buffer_append_memory(in_buf, mem);
 
 	uint64_t duration = gst_util_uint64_scale_int(GST_SECOND, hub->fps_den, hub->fps_num);
@@ -302,6 +346,26 @@ gst_master_pipeline_t *gst_master_pipeline_get_or_create(const char *source_type
 	hub->pingpong_idx = 0;
 	hub->first_frame_primed = false;
 
+	// Initialize Native GPU Contexts
+#ifdef _WIN32
+	GError *err = NULL;
+	hub->d3d11_device = gst_d3d11_device_new(0, &err);
+	if (hub->d3d11_device)
+	{
+		hub->d3d11_allocator = GST_ALLOCATOR(gst_d3d11_allocator_new(hub->d3d11_device));
+	}
+#else
+	hub->gl_display = gst_gl_display_new();
+	if (hub->gl_display)
+	{
+		hub->gl_context = gst_gl_context_new(hub->gl_display);
+		if (hub->gl_context)
+		{
+			hub->gl_allocator = GST_ALLOCATOR(gst_gl_memory_allocator_get_default(hub->gl_context));
+		}
+	}
+#endif
+
 	hub->pipe = create_master_encoder_pipeline(hub, custom_master_pipe, encoder_type, bitrate_kbps, keyint_sec);
 	if (!hub->pipe) {
 		gst_master_pipeline_destroy(hub);
@@ -356,6 +420,30 @@ void gst_master_pipeline_destroy(gst_master_pipeline_t *hub)
 		g_main_context_unref(hub->rtsp_context);
 		hub->rtsp_context = NULL;
 	}
+
+#ifdef _WIN32
+	if (hub->d3d11_allocator) {
+		gst_object_unref(hub->d3d11_allocator);
+		hub->d3d11_allocator = NULL;
+	}
+	if (hub->d3d11_device) {
+		gst_object_unref(hub->d3d11_device);
+		hub->d3d11_device = NULL;
+	}
+#else
+	if (hub->gl_allocator) {
+		gst_object_unref(hub->gl_allocator);
+		hub->gl_allocator = NULL;
+	}
+	if (hub->gl_context) {
+		gst_object_unref(hub->gl_context);
+		hub->gl_context = NULL;
+	}
+	if (hub->gl_display) {
+		gst_object_unref(hub->gl_display);
+		hub->gl_display = NULL;
+	}
+#endif
 
 	if (hub->pipe) {
 		gst_element_set_state(hub->pipe, GST_STATE_NULL);
