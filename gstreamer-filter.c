@@ -132,7 +132,7 @@ static void stop_pipeline(struct gstreamer_filter_data *data)
 {
 	if (!data || !data->pipe) return;
 
-	blog(LOG_INFO, "[obs-gstreamer-filter] %s: Stopping filter pipeline", get_filter_source_name(data->filter_source));
+	blog(LOG_INFO, "[obs-gstreamer-filter] %s: Stopping filter pipeline...", get_filter_source_name(data->filter_source));
 
 	GstBus *bus = gst_element_get_bus(data->pipe);
 	if (bus)
@@ -205,19 +205,20 @@ void gstreamer_filter_destroy(void *p)
 	bfree(data);
 }
 
-struct obs_source_frame *gstreamer_filter_filter_video(void *p, struct obs_source_frame *frame)
+struct obs_source_frame *gstreamer_filter_video(void *p, struct obs_source_frame *frame)
 {
 	struct gstreamer_filter_data *data = (struct gstreamer_filter_data *)p;
 	if (!data || !frame) return frame;
 
+	//If already error in previous frame, skip executing again.
+	if (data->in_error) return frame;
+
 	if (data->pipe == NULL || data->width != frame->width || data->height != frame->height || data->format != frame->format)
 	{
-		const char *source_name = get_filter_source_name(data->filter_source);
-
 		if (data->pipe != NULL)
 		{
-			blog(LOG_INFO, "[obs-gstreamer-filter] %s: Video format or resolution changed: %dx%d (fmt %d) -> %dx%d (fmt %d), recreating pipeline",
-			     source_name,
+			blog(LOG_INFO, "[obs-gstreamer-filter] %s: Video format or resolution changed: %dx%d (fmt %d) -> %dx%d (fmt %d), recreating pipeline...",
+			     get_filter_source_name(data->filter_source),
 			     data->width, data->height, data->format,
 			     frame->width, frame->height, frame->format);
 
@@ -225,21 +226,21 @@ struct obs_source_frame *gstreamer_filter_filter_video(void *p, struct obs_sourc
 			data->in_error = false;
 		}
 
-		if (data->in_error) return frame;
-
-		GstVideoFormat gst_format = obs_to_gst_video_format(frame->format);
-		if (gst_format == GST_VIDEO_FORMAT_UNKNOWN)
+		obs_data_t *settings = obs_source_get_settings(data->filter_source);
+		const char *user_pipeline = obs_data_get_string(settings, "pipeline");
+		obs_data_release(settings);
+		if (!user_pipeline || !*user_pipeline)
 		{
-			blog(LOG_ERROR, "[obs-gstreamer-filter] %s: Unsupported video format: %d", source_name, frame->format);
+			blog(LOG_ERROR, "[obs-gstreamer-filter] %s: Unable to get user pipeline", get_filter_source_name(data->filter_source));
 			data->in_error = true;
 			return frame;
 		}
 
-		obs_data_t *settings = obs_source_get_settings(data->filter_source);
-		const char *user_pipeline = obs_data_get_string(settings, "pipeline");
-		if (!user_pipeline || !*user_pipeline)
+		GstVideoFormat gst_format = obs_to_gst_video_format(frame->format);
+		if (gst_format == GST_VIDEO_FORMAT_UNKNOWN)
 		{
-			obs_data_release(settings);
+			blog(LOG_ERROR, "[obs-gstreamer-filter] %s: Unsupported video format: %d", get_filter_source_name(data->filter_source), frame->format);
+			data->in_error = true;
 			return frame;
 		}
 
@@ -256,10 +257,8 @@ struct obs_source_frame *gstreamer_filter_filter_video(void *p, struct obs_sourc
 			frame->width, frame->height, format_str,
 			user_pipeline,
 			frame->width, frame->height, format_str);
-			
-		obs_data_release(settings);
 
-		blog(LOG_INFO, "[obs-gstreamer-filter] %s: Creating video filter pipeline: %s", source_name, str);
+		blog(LOG_INFO, "[obs-gstreamer-filter] %s: Creating video filter pipeline: %s", get_filter_source_name(data->filter_source), str);
 
 		GError *err = NULL;
 		data->pipe = gst_parse_launch(str, &err);
@@ -267,15 +266,15 @@ struct obs_source_frame *gstreamer_filter_filter_video(void *p, struct obs_sourc
 
 		if (err != NULL)
 		{
-			blog(LOG_ERROR, "[obs-gstreamer-filter] %s: Pipeline parse error: %s", source_name, err->message);
+			blog(LOG_ERROR, "[obs-gstreamer-filter] %s: Pipeline parse error: %s", get_filter_source_name(data->filter_source), err->message);
 			g_error_free(err);
-			data->in_error = true;
-
 			if (data->pipe)
 			{
 				gst_object_unref(data->pipe);
 				data->pipe = NULL;
 			}
+
+			data->in_error = true;
 			return frame;
 		}
 
@@ -284,9 +283,10 @@ struct obs_source_frame *gstreamer_filter_filter_video(void *p, struct obs_sourc
 
 		if (!data->appsrc || !data->appsink)
 		{
-			blog(LOG_ERROR, "[obs-gstreamer-filter] %s: Failed to locate appsrc or appsink in pipeline", source_name);
-			data->in_error = true;
+			blog(LOG_ERROR, "[obs-gstreamer-filter] %s: Failed to locate appsrc or appsink in pipeline", get_filter_source_name(data->filter_source));
 			stop_pipeline(data);
+
+			data->in_error = true;
 			return frame;
 		}
 
@@ -300,16 +300,24 @@ struct obs_source_frame *gstreamer_filter_filter_video(void *p, struct obs_sourc
 		GstStateChangeReturn ret = gst_element_set_state(data->pipe, GST_STATE_PLAYING);
 		if (ret == GST_STATE_CHANGE_FAILURE)
 		{
-			blog(LOG_ERROR, "[obs-gstreamer-filter] %s: Failed to set pipeline to PLAYING", source_name);
-			data->in_error = true;
+			blog(LOG_ERROR, "[obs-gstreamer-filter] %s: Failed to set pipeline to PLAYING", get_filter_source_name(data->filter_source));
 			stop_pipeline(data);
+
+			data->in_error = true;
 			return frame;
 		}
 
-		blog(LOG_INFO, "[obs-gstreamer-filter] %s: Video filter pipeline started successfully (%dx%d %s)", source_name, data->width, data->height, format_str);
+		blog(LOG_INFO, "[obs-gstreamer-filter] %s: Video filter pipeline started successfully (%dx%d %s)", get_filter_source_name(data->filter_source), data->width, data->height, format_str);
 	}
 
-	if (data->in_error || !data->appsrc || !data->appsink) return frame;
+	if (!data->appsrc || !data->appsink)
+	{
+		blog(LOG_ERROR, "[obs-gstreamer-filter] %s: Failed to get appsrc or appsink in data", get_filter_source_name(data->filter_source));
+		stop_pipeline(data);
+
+		data->in_error = true;
+		return frame;
+	}
 
 	GstBuffer *in_buffer = gst_buffer_new();
 	if (!in_buffer) return frame;
@@ -323,15 +331,7 @@ struct obs_source_frame *gstreamer_filter_filter_video(void *p, struct obs_sourc
 		guint plane_height = get_plane_height(&data->video_info, p);
 		gsize plane_size = (gsize)frame->linesize[p] * plane_height;
 
-		GstMemory *mem = gst_memory_new_wrapped(
-			GST_MEMORY_FLAG_READONLY,
-			frame->data[p],
-			plane_size,
-			0,
-			plane_size,
-			NULL,
-			NULL
-		);
+		GstMemory *mem = gst_memory_new_wrapped(GST_MEMORY_FLAG_READONLY, frame->data[p], plane_size, 0, plane_size, NULL, NULL);
 		gst_buffer_append_memory(in_buffer, mem);
 
 		offsets[p] = current_offset;
@@ -608,7 +608,7 @@ struct obs_source_info gstreamer_filter_video_info =
 	.update = gstreamer_filter_update,
 	.get_defaults = gstreamer_filter_get_defaults_video,
 	.get_properties = gstreamer_filter_get_properties,
-	.filter_video = gstreamer_filter_filter_video,
+	.filter_video = gstreamer_filter_video,
 };
 
 struct obs_source_info gstreamer_filter_video_gpu_info =
