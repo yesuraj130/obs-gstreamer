@@ -409,7 +409,7 @@ gstreamer_filter_filter_video(void *p, struct obs_source_frame *frame)
 				guint8 *dst = frame->data[p];
 				guint src_stride = GST_VIDEO_FRAME_PLANE_STRIDE(&out_vframe, p);
 				guint dst_stride = frame->linesize[p];
-				guint plane_height = get_plane_height(&data->video_info, p);
+				guint plane_height = gst_get_plane_height(&data->video_info, p);
 
 				if (src_stride == dst_stride)
 				{

@@ -123,7 +123,4 @@ static inline guint gst_get_plane_height(const GstVideoInfo *info, guint plane)
 	return GST_VIDEO_INFO_HEIGHT(info);
 }
 
-static inline guint get_plane_height(const GstVideoInfo *info, guint plane)
-{
-	return gst_get_plane_height(info, plane);
-}
+
