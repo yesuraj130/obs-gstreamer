@@ -164,50 +164,14 @@ static void stop_pipeline(struct gstreamer_filter_data *data)
 	data->channels = 0;
 }
 
-const char *gstreamer_filter_get_name_video(void *type_data)
-{
-	UNUSED_PARAMETER(type_data);
-	return "GStreamer Video Filter (CPU)";
-}
-
-const char *gstreamer_filter_get_name_audio(void *type_data)
-{
-	UNUSED_PARAMETER(type_data);
-	return "GStreamer Audio Filter";
-}
-
 void *gstreamer_filter_create(obs_data_t *settings, obs_source_t *source)
 {
 	UNUSED_PARAMETER(settings);
 	struct gstreamer_filter_data *data = bzalloc(sizeof(struct gstreamer_filter_data));
 	data->filter_source = source;
 
-	const char *source_name = get_filter_source_name(source);
-	blog(LOG_INFO, "[obs-gstreamer-filter] %s: Filter instance created", source_name);
-
+	blog(LOG_INFO, "[obs-gstreamer-filter] %s: Filter instance created", get_filter_source_name(source));
 	return data;
-}
-
-void gstreamer_filter_destroy(void *p)
-{
-	struct gstreamer_filter_data *data = (struct gstreamer_filter_data *)p;
-	if (!data) return;
-
-	const char *source_name = get_filter_source_name(data->filter_source);
-	blog(LOG_INFO, "[obs-gstreamer-filter] %s: Filter instance destroyed", source_name);
-
-	stop_pipeline(data);
-	bfree(data);
-}
-
-void gstreamer_filter_get_defaults_video(obs_data_t *settings)
-{
-	obs_data_set_default_string(settings, "pipeline", "videoflip video-direction=horiz");
-}
-
-void gstreamer_filter_get_defaults_audio(obs_data_t *settings)
-{
-	obs_data_set_default_string(settings, "pipeline", "audioecho delay=200000000 intensity=0.3");
 }
 
 void gstreamer_filter_update(void *p, obs_data_t *settings)
@@ -216,8 +180,7 @@ void gstreamer_filter_update(void *p, obs_data_t *settings)
 	struct gstreamer_filter_data *data = (struct gstreamer_filter_data *)p;
 	if (!data) return;
 
-	const char *source_name = get_filter_source_name(data->filter_source);
-	blog(LOG_INFO, "[obs-gstreamer-filter] %s: Filter settings updated, resetting pipeline", source_name);
+	blog(LOG_INFO, "[obs-gstreamer-filter] %s: Filter settings updated, resetting pipeline", get_filter_source_name(data->filter_source));
 
 	stop_pipeline(data);
 	data->in_error = false;
@@ -227,26 +190,22 @@ static bool on_apply_clicked(obs_properties_t *props, obs_property_t *property, 
 {
 	UNUSED_PARAMETER(props);
 	UNUSED_PARAMETER(property);
-	struct gstreamer_filter_data *filter_data = (struct gstreamer_filter_data *)data;
-	if (filter_data) gstreamer_filter_update(filter_data, NULL);
+	if (filter_data) gstreamer_filter_update(data, NULL);
 	return false;
 }
 
-obs_properties_t *gstreamer_filter_get_properties(void *data)
+void gstreamer_filter_destroy(void *p)
 {
-	obs_properties_t *props = obs_properties_create();
+	struct gstreamer_filter_data *data = (struct gstreamer_filter_data *)p;
+	if (!data) return;
 
-	obs_properties_set_flags(props, OBS_PROPERTIES_DEFER_UPDATE);
+	blog(LOG_INFO, "[obs-gstreamer-filter] %s: Filter instance to be destroyed", get_filter_source_name(data->filter_source));
 
-	obs_property_t *prop = obs_properties_add_text(props, "pipeline", "Pipeline", OBS_TEXT_MULTILINE);
-	obs_property_set_long_description(prop, "Use \"identity\" for passthru");
-	obs_properties_add_button2(props, "apply", "Apply", on_apply_clicked, data);
-
-	return props;
+	stop_pipeline(data);
+	bfree(data);
 }
 
-struct obs_source_frame *
-gstreamer_filter_filter_video(void *p, struct obs_source_frame *frame)
+struct obs_source_frame *gstreamer_filter_filter_video(void *p, struct obs_source_frame *frame)
 {
 	struct gstreamer_filter_data *data = (struct gstreamer_filter_data *)p;
 	if (!data || !frame) return frame;
@@ -432,8 +391,7 @@ gstreamer_filter_filter_video(void *p, struct obs_source_frame *frame)
 	return frame;
 }
 
-struct obs_audio_data *
-gstreamer_filter_filter_audio(void *p, struct obs_audio_data *audio_data)
+struct obs_audio_data *gstreamer_filter_filter_audio(void *p, struct obs_audio_data *audio_data)
 {
 	struct gstreamer_filter_data *data = (struct gstreamer_filter_data *)p;
 	if (!data || !audio_data) return audio_data;
@@ -583,20 +541,6 @@ gstreamer_filter_filter_audio(void *p, struct obs_audio_data *audio_data)
 	return audio_data;
 }
 
-/* --------------------------------------------------------------------------
- * OBS Filter Source Registration Info
- * -------------------------------------------------------------------------- */
-const char *gstreamer_filter_get_name_video_gpu(void *type_data)
-{
-	UNUSED_PARAMETER(type_data);
-	return "GStreamer Video Filter (GPU)";
-}
-
-void gstreamer_filter_gpu_get_defaults(obs_data_t *settings)
-{
-	obs_data_set_default_string(settings, "pipeline", "glupload ! gltransformation ! gldownload");
-}
-
 static void gstreamer_filter_gpu_video_render(void *p, gs_effect_t *effect)
 {
 	struct gstreamer_filter_data *data = (struct gstreamer_filter_data *)p;
@@ -607,6 +551,52 @@ static void gstreamer_filter_gpu_video_render(void *p, gs_effect_t *effect)
 	obs_source_process_filter_end(data->filter_source, effect, 0, 0);
 }
 
+obs_properties_t *gstreamer_filter_get_properties(void *data)
+{
+	obs_properties_t *props = obs_properties_create();
+	obs_properties_set_flags(props, OBS_PROPERTIES_DEFER_UPDATE);
+
+	obs_property_t *prop = obs_properties_add_text(props, "pipeline", "Pipeline", OBS_TEXT_MULTILINE);
+	obs_property_set_long_description(prop, "Use \"identity\" for passthru");
+	obs_properties_add_button2(props, "apply", "Apply", on_apply_clicked, data);
+
+	return props;
+}
+
+const char *gstreamer_filter_get_name_video(void *type_data)
+{
+	UNUSED_PARAMETER(type_data);
+	return "GStreamer Video Filter (CPU)";
+}
+const char *gstreamer_filter_get_name_video_gpu(void *type_data)
+{
+	UNUSED_PARAMETER(type_data);
+	return "GStreamer Video Filter (GPU)";
+}
+const char *gstreamer_filter_get_name_audio(void *type_data)
+{
+	UNUSED_PARAMETER(type_data);
+	return "GStreamer Audio Filter";
+}
+
+
+void gstreamer_filter_get_defaults_video(obs_data_t *settings)
+{
+	obs_data_set_default_string(settings, "pipeline", "videoflip video-direction=horiz");
+}
+void gstreamer_filter_gpu_get_defaults(obs_data_t *settings)
+{
+	obs_data_set_default_string(settings, "pipeline", "glupload ! gltransformation ! gldownload");
+}
+void gstreamer_filter_get_defaults_audio(obs_data_t *settings)
+{
+	obs_data_set_default_string(settings, "pipeline", "audioecho delay=200000000 intensity=0.3");
+}
+
+
+/* --------------------------------------------------------------------------
+ * OBS Filter Source Registration Info
+ * -------------------------------------------------------------------------- */
 struct obs_source_info gstreamer_filter_video_info =
 {
 	.id = "gstreamer-filter-video",
