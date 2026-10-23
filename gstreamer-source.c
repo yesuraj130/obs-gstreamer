@@ -27,6 +27,7 @@
 #include <gst/video/video.h>
 #include <gst/audio/audio.h>
 #include <gst/app/app.h>
+#include "gstreamer-helper.h"
 
 struct gstreamer_source_data
 {
@@ -46,8 +47,10 @@ struct gstreamer_source_data
 	struct obs_source_audio cached_audio; // Pre-filled audio packet template
 };
 
-static void start(struct gstreamer_source_data *data, obs_data_t *settings);
-static void stop(struct gstreamer_source_data *data);
+static inline const char *get_gstreamer_source_name(obs_source_t *source)
+{
+	return obs_source_get_name_safe(source, "gstreamer-source");
+}
 
 /* --------------------------------------------------------------------------
  * GStreamer Synchronous Bus Handler (Zero Additional Threading)
@@ -59,6 +62,9 @@ static GstBusSyncReply bus_sync_handler(GstBus *bus, GstMessage *message, gpoint
 	struct gstreamer_source_data *data = (struct gstreamer_source_data *)user_data;
 	if (!data || !data->gstreamer_source) return GST_BUS_DROP;
 
+	const char *src_name = GST_MESSAGE_SRC_NAME(message);
+	if (!src_name) src_name = "pipeline";
+
 	switch (GST_MESSAGE_TYPE(message))
 	{
 		case GST_MESSAGE_ERROR:
@@ -66,12 +72,9 @@ static GstBusSyncReply bus_sync_handler(GstBus *bus, GstMessage *message, gpoint
 			GError *err = NULL;
 			gchar *debug = NULL;
 			gst_message_parse_error(message, &err, &debug);
-			const char *source_name = obs_source_get_name(data->gstreamer_source);
-			const char *src_name = GST_MESSAGE_SRC_NAME(message);
 
 			blog(LOG_ERROR, "[obs-gstreamer-source] %s [%s] ERROR: %s (debug: %s)",
-					source_name ? source_name : "gstreamer-source",
-					src_name ? src_name : "pipeline",
+					get_gstreamer_source_name(data->gstreamer_source), src_name,
 					err ? err->message : "unknown",
 					debug ? debug : "none");
 
@@ -90,12 +93,9 @@ static GstBusSyncReply bus_sync_handler(GstBus *bus, GstMessage *message, gpoint
 			GError *err = NULL;
 			gchar *debug = NULL;
 			gst_message_parse_warning(message, &err, &debug);
-			const char *source_name = obs_source_get_name(data->gstreamer_source);
-			const char *src_name = GST_MESSAGE_SRC_NAME(message);
 
 			blog(LOG_WARNING, "[obs-gstreamer-source] %s [%s] WARNING: %s (debug: %s)",
-					source_name ? source_name : "gstreamer-source",
-					src_name ? src_name : "pipeline",
+					get_gstreamer_source_name(data->gstreamer_source), src_name,
 					err ? err->message : "unknown",
 					debug ? debug : "none");
 
@@ -108,8 +108,7 @@ static GstBusSyncReply bus_sync_handler(GstBus *bus, GstMessage *message, gpoint
 		case GST_MESSAGE_EOS:
 		{
 			data->obs_media_state = OBS_MEDIA_STATE_ENDED;
-			const char *source_name = obs_source_get_name(data->gstreamer_source);
-			blog(LOG_INFO, "[obs-gstreamer-source] %s: EOS (End of Stream) reached", source_name ? source_name : "gstreamer-source");
+			blog(LOG_INFO, "[obs-gstreamer-source] %s [%s]: EOS (End of Stream) reached", get_gstreamer_source_name(data->gstreamer_source), src_name);
 
 			if (data->clear_on_end) obs_source_output_video(data->gstreamer_source, NULL);
 
@@ -123,8 +122,7 @@ static GstBusSyncReply bus_sync_handler(GstBus *bus, GstMessage *message, gpoint
 			enum obs_media_state new_state = (percent < 100) ? OBS_MEDIA_STATE_BUFFERING : OBS_MEDIA_STATE_PLAYING;
 			if (data->obs_media_state != new_state)
 			{
-				const char *source_name = obs_source_get_name(data->gstreamer_source);
-				blog(LOG_INFO, "[obs-gstreamer-source] %s: Buffering state changed to %s (%d%%)", source_name ? source_name : "gstreamer-source", (percent < 100) ? "buffering" : "playing", percent);
+				blog(LOG_INFO, "[obs-gstreamer-source] %s [%s]: Buffering state changed to %s (%d%%)", get_gstreamer_source_name(data->gstreamer_source), src_name, (percent < 100) ? "buffering" : "playing", percent);
 				data->obs_media_state = new_state;
 			}
 			return GST_BUS_DROP;
@@ -137,8 +135,7 @@ static GstBusSyncReply bus_sync_handler(GstBus *bus, GstMessage *message, gpoint
 				GstState old_s, new_s;
 				gst_message_parse_state_changed(message, &old_s, &new_s, NULL);
 
-				const char *source_name = obs_source_get_name(data->gstreamer_source);
-				blog(LOG_INFO, "[obs-gstreamer-source] %s: Pipeline state changed from %s to %s", source_name ? source_name : "gstreamer-source", gst_element_state_get_name(old_s), gst_element_state_get_name(new_s));
+				blog(LOG_INFO, "[obs-gstreamer-source] %s [%s]: Pipeline state changed from %s to %s", get_gstreamer_source_name(data->gstreamer_source), src_name, gst_element_state_get_name(old_s), gst_element_state_get_name(new_s));
 
 				if (new_s == GST_STATE_PLAYING) data->obs_media_state = OBS_MEDIA_STATE_PLAYING;
 				else if (new_s == GST_STATE_PAUSED) data->obs_media_state = OBS_MEDIA_STATE_PAUSED;
@@ -147,7 +144,7 @@ static GstBusSyncReply bus_sync_handler(GstBus *bus, GstMessage *message, gpoint
 			return GST_BUS_DROP;
 		}
 
-		default: break;
+		default: blog(LOG_INFO, "[obs-gstreamer-source] %s [%s]: Unknown message of type %s received.", get_gstreamer_source_name(data->gstreamer_source), src_name, gst_message_type_get_name(GST_MESSAGE_TYPE(message))); break;
 	}
 
 	return GST_BUS_DROP;
@@ -211,29 +208,10 @@ static bool update_video_format_cache(struct gstreamer_source_data *data, GstCap
 
 	video_format_get_parameters(cs, range, data->cached_frame.color_matrix, data->cached_frame.color_range_min, data->cached_frame.color_range_max);
 
-	switch (v_info.finfo->format)
+	data->cached_frame.format = gst_to_obs_video_format(v_info.finfo->format);
+	if (data->cached_frame.format == VIDEO_FORMAT_NONE)
 	{
-		case GST_VIDEO_FORMAT_I420: data->cached_frame.format = VIDEO_FORMAT_I420; break;
-		case GST_VIDEO_FORMAT_NV12: data->cached_frame.format = VIDEO_FORMAT_NV12; break;
-		case GST_VIDEO_FORMAT_BGRA: data->cached_frame.format = VIDEO_FORMAT_BGRA; break;
-		case GST_VIDEO_FORMAT_BGRx: data->cached_frame.format = VIDEO_FORMAT_BGRX; break;
-		case GST_VIDEO_FORMAT_RGBx: data->cached_frame.format = VIDEO_FORMAT_RGBA; break;
-		case GST_VIDEO_FORMAT_RGBA: data->cached_frame.format = VIDEO_FORMAT_RGBA; break;
-		case GST_VIDEO_FORMAT_UYVY: data->cached_frame.format = VIDEO_FORMAT_UYVY; break;
-		case GST_VIDEO_FORMAT_YUY2: data->cached_frame.format = VIDEO_FORMAT_YUY2; break;
-		case GST_VIDEO_FORMAT_YVYU: data->cached_frame.format = VIDEO_FORMAT_YVYU; break;
-
-#ifdef GST_VIDEO_FORMAT_I420_10LE
-		case GST_VIDEO_FORMAT_I420_10LE: data->cached_frame.format = VIDEO_FORMAT_I010; break;
-		case GST_VIDEO_FORMAT_P010_10LE: data->cached_frame.format = VIDEO_FORMAT_P010; break;
-		case GST_VIDEO_FORMAT_I422_10LE: data->cached_frame.format = VIDEO_FORMAT_I210; break;
-		case GST_VIDEO_FORMAT_Y444_12LE: data->cached_frame.format = VIDEO_FORMAT_I412; break;
-#endif
-
-		default:
-			data->cached_frame.format = VIDEO_FORMAT_NONE;
-			blog(LOG_ERROR, "[obs-gstreamer-source] Unknown video format: %s", v_info.finfo ? v_info.finfo->name : "unspecified");
-			break;
+		blog(LOG_ERROR, "[obs-gstreamer-source] Unknown video format: %s", v_info.finfo ? v_info.finfo->name : "unspecified");
 	}
 
 	if (data->cached_frame.format != VIDEO_FORMAT_NONE)
@@ -560,25 +538,6 @@ static void create_pipeline(struct gstreamer_source_data *data, obs_data_t *sett
 	}
 }
 
-static void start(struct gstreamer_source_data *data, obs_data_t *settings)
-{
-	if (!data) return;
-
-	stop(data);
-
-	const char *source_name = data->gstreamer_source ? obs_source_get_name(data->gstreamer_source) : "gstreamer-source";
-	blog(LOG_INFO, "[obs-gstreamer-source] %s: Starting pipeline", source_name ? source_name : "gstreamer-source");
-
-	// Cache settings flags
-	data->use_timestamps_video = obs_data_get_bool(settings, "use_timestamps_video");
-	data->use_timestamps_audio = obs_data_get_bool(settings, "use_timestamps_audio");
-	data->clear_on_end = obs_data_get_bool(settings, "clear_on_end");
-	data->obs_media_state = OBS_MEDIA_STATE_OPENING;
-
-	create_pipeline(data, settings);
-	if (data->pipe) gst_element_set_state(data->pipe, GST_STATE_PLAYING);
-}
-
 static void stop(struct gstreamer_source_data *data)
 {
 	if (!data || !data->pipe) return;
@@ -614,6 +573,25 @@ static void stop(struct gstreamer_source_data *data)
 	}
 
 	obs_source_output_video(data->gstreamer_source, NULL);
+}
+
+static void start(struct gstreamer_source_data *data, obs_data_t *settings)
+{
+	if (!data) return;
+
+	stop(data);
+
+	const char *source_name = data->gstreamer_source ? obs_source_get_name(data->gstreamer_source) : "gstreamer-source";
+	blog(LOG_INFO, "[obs-gstreamer-source] %s: Starting pipeline", source_name ? source_name : "gstreamer-source");
+
+	// Cache settings flags
+	data->use_timestamps_video = obs_data_get_bool(settings, "use_timestamps_video");
+	data->use_timestamps_audio = obs_data_get_bool(settings, "use_timestamps_audio");
+	data->clear_on_end = obs_data_get_bool(settings, "clear_on_end");
+	data->obs_media_state = OBS_MEDIA_STATE_OPENING;
+
+	create_pipeline(data, settings);
+	if (data->pipe) gst_element_set_state(data->pipe, GST_STATE_PLAYING);
 }
 
 /* --------------------------------------------------------------------------

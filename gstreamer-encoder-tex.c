@@ -12,6 +12,7 @@
 #include <gst/app/app.h>
 
 #include "gstreamer-encoder-tex.h"
+#include "gstreamer-helper.h"
 
 #ifndef OBS_ENCODER_CAP_PASS_TEXTURE
 #define OBS_ENCODER_CAP_PASS_TEXTURE (1 << 0)
@@ -51,21 +52,8 @@ static const char *gstreamer_tex_encoder_get_name_h264(void *type_data)
 
 static const char *encoder_tex_video_format_to_gst_format(enum video_format format)
 {
-	switch (format) {
-	case VIDEO_FORMAT_I420: return "I420";
-	case VIDEO_FORMAT_NV12: return "NV12";
-	case VIDEO_FORMAT_YVYU: return "YVYU";
-	case VIDEO_FORMAT_YUY2: return "YUY2";
-	case VIDEO_FORMAT_UYVY: return "UYVY";
-	case VIDEO_FORMAT_RGBA: return "RGBA";
-	case VIDEO_FORMAT_BGRA: return "BGRA";
-	case VIDEO_FORMAT_BGRX: return "BGRx";
-	case VIDEO_FORMAT_I444: return "Y444";
-#if defined(VIDEO_FORMAT_P010)
-	case VIDEO_FORMAT_P010: return "P010_10LE";
-#endif
-	default: return "NV12";
-	}
+	const char *str = obs_to_gst_video_format_str(format);
+	return str ? str : "NV12";
 }
 
 static void gstreamer_tex_encoder_get_video_info(void *data, struct video_scale_info *info)

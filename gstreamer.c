@@ -45,6 +45,7 @@ extern struct obs_source_info gstreamer_source_video_info;
 
 // gstreamer-filter.c
 extern struct obs_source_info gstreamer_filter_video_info;
+extern struct obs_source_info gstreamer_filter_video_gpu_info;
 extern struct obs_source_info gstreamer_filter_audio_info;
 
 #ifndef ENABLE_DOCK
@@ -114,7 +115,10 @@ bool obs_module_load(void)
 	blog(LOG_INFO, "[obs-gstreamer] Registered source module: gstreamer-source-video");
 
 	obs_register_source(&gstreamer_filter_video_info);
-	blog(LOG_INFO, "[obs-gstreamer] Registered filter module: gstreamer-filter-video");
+	blog(LOG_INFO, "[obs-gstreamer] Registered filter module: gstreamer-filter-video (CPU)");
+
+	obs_register_source(&gstreamer_filter_video_gpu_info);
+	blog(LOG_INFO, "[obs-gstreamer] Registered filter module: gstreamer-filter-video-gpu (GPU)");
 
 	obs_register_source(&gstreamer_filter_audio_info);
 	blog(LOG_INFO, "[obs-gstreamer] Registered filter module: gstreamer-filter-audio");

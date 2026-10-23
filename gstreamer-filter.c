@@ -24,6 +24,7 @@
 #include <gst/video/video.h>
 #include <gst/audio/audio.h>
 #include <gst/app/app.h>
+#include "gstreamer-helper.h"
 
 struct gstreamer_filter_data
 {
@@ -44,12 +45,9 @@ struct gstreamer_filter_data
 	bool in_error; // Pipeline error flag to prevent spamming logs
 };
 
-static void stop_pipeline(struct gstreamer_filter_data *data);
-
-static inline const char *get_filter_name(obs_source_t *source)
+static inline const char *get_filter_source_name(obs_source_t *source)
 {
-	const char *name = source ? obs_source_get_name(source) : NULL;
-	return (name && *name) ? name : "filter";
+	return obs_source_get_name_safe(source, "gstreamer-filter");
 }
 
 /* --------------------------------------------------------------------------
@@ -63,7 +61,7 @@ static GstBusSyncReply bus_sync_handler(GstBus *bus, GstMessage *message, gpoint
 	if (!data || !data->filter_source) return GST_BUS_PASS;
 
 	const char *src_name = GST_MESSAGE_SRC_NAME(message);
-	const char *source_name = get_filter_name(data->filter_source);
+	if (!src_name) src_name = "pipeline";
 
 	switch (GST_MESSAGE_TYPE(message))
 	{
@@ -74,8 +72,7 @@ static GstBusSyncReply bus_sync_handler(GstBus *bus, GstMessage *message, gpoint
 			gst_message_parse_error(message, &err, &debug);
 
 			blog(LOG_ERROR, "[obs-gstreamer-filter] %s [%s] ERROR: %s (debug: %s)",
-			     source_name,
-			     src_name ? src_name : "pipeline",
+			     get_filter_source_name(data->filter_source), src_name,
 			     err ? err->message : "unknown",
 			     debug ? debug : "none");
 
@@ -93,8 +90,7 @@ static GstBusSyncReply bus_sync_handler(GstBus *bus, GstMessage *message, gpoint
 			gst_message_parse_warning(message, &err, &debug);
 
 			blog(LOG_WARNING, "[obs-gstreamer-filter] %s [%s] WARNING: %s (debug: %s)",
-			     source_name,
-			     src_name ? src_name : "pipeline",
+			     get_filter_source_name(data->filter_source), src_name,
 			     err ? err->message : "unknown",
 			     debug ? debug : "none");
 
@@ -111,8 +107,8 @@ static GstBusSyncReply bus_sync_handler(GstBus *bus, GstMessage *message, gpoint
 				GstState old_s, new_s, pending_s;
 				gst_message_parse_state_changed(message, &old_s, &new_s, &pending_s);
 
-				blog(LOG_INFO, "[obs-gstreamer-filter] %s: Pipeline state changed from %s to %s (pending: %s)",
-				     source_name,
+				blog(LOG_INFO, "[obs-gstreamer-filter] %s [%s]: Pipeline state changed from %s to %s (pending: %s)",
+				     get_filter_source_name(data->filter_source), src_name,
 				     gst_element_state_get_name(old_s),
 				     gst_element_state_get_name(new_s),
 				     gst_element_state_get_name(pending_s));
@@ -122,11 +118,11 @@ static GstBusSyncReply bus_sync_handler(GstBus *bus, GstMessage *message, gpoint
 
 		case GST_MESSAGE_EOS:
 		{
-			blog(LOG_INFO, "[obs-gstreamer-filter] %s: End-of-stream reached", source_name);
+			blog(LOG_INFO, "[obs-gstreamer-filter] %s [%s]: End-of-stream reached", get_filter_source_name(data->filter_source), src_name);
 			break;
 		}
 
-		default: break;
+		default: blog(LOG_INFO, "[obs-gstreamer-source] %s [%s]: Unknown message of type %s received.", get_filter_source_name(data->filter_source), src_name, gst_message_type_get_name(GST_MESSAGE_TYPE(message))); break;
 	}
 
 	return GST_BUS_PASS;
@@ -136,8 +132,7 @@ static void stop_pipeline(struct gstreamer_filter_data *data)
 {
 	if (!data || !data->pipe) return;
 
-	const char *source_name = get_filter_name(data->filter_source);
-	blog(LOG_INFO, "[obs-gstreamer-filter] %s: Stopping filter pipeline", source_name);
+	blog(LOG_INFO, "[obs-gstreamer-filter] %s: Stopping filter pipeline", get_filter_source_name(data->filter_source));
 
 	GstBus *bus = gst_element_get_bus(data->pipe);
 	if (bus)
@@ -160,42 +155,19 @@ static void stop_pipeline(struct gstreamer_filter_data *data)
 	}
 	gst_object_unref(data->pipe);
 	data->pipe = NULL;
-}
 
-static GstVideoFormat obs_to_gst_video_format(enum video_format format)
-{
-	switch (format)
-	{
-		case VIDEO_FORMAT_I420: return GST_VIDEO_FORMAT_I420; break;
-		case VIDEO_FORMAT_NV12: return GST_VIDEO_FORMAT_NV12; break;
-		case VIDEO_FORMAT_I422: return GST_VIDEO_FORMAT_Y42B; break;
-		case VIDEO_FORMAT_YVYU: return GST_VIDEO_FORMAT_YVYU; break;
-		case VIDEO_FORMAT_YUY2: return GST_VIDEO_FORMAT_YUY2; break;
-		case VIDEO_FORMAT_UYVY: return GST_VIDEO_FORMAT_UYVY; break;
-		case VIDEO_FORMAT_RGBA: return GST_VIDEO_FORMAT_RGBA; break;
-		case VIDEO_FORMAT_BGRA: return GST_VIDEO_FORMAT_BGRA; break;
-		case VIDEO_FORMAT_BGRX: return GST_VIDEO_FORMAT_BGRx; break;
-		default: return GST_VIDEO_FORMAT_UNKNOWN; break;
-	}
-}
-
-static inline guint get_plane_height(const GstVideoInfo *info, guint plane)
-{
-	if (plane == 0 || GST_VIDEO_INFO_N_PLANES(info) == 1) return GST_VIDEO_INFO_HEIGHT(info);
-
-	switch (GST_VIDEO_INFO_FORMAT(info))
-	{
-		case GST_VIDEO_FORMAT_I420: return (GST_VIDEO_INFO_HEIGHT(info) + 1) / 2; break;
-		case GST_VIDEO_FORMAT_NV12: return (GST_VIDEO_INFO_HEIGHT(info) + 1) / 2; break;
-		case GST_VIDEO_FORMAT_Y42B: return GST_VIDEO_INFO_HEIGHT(info); break;
-		default: return GST_VIDEO_INFO_HEIGHT(info); break;
-	}
+	// Invalidate cached video & audio states
+	data->width = 0;
+	data->height = 0;
+	data->format = VIDEO_FORMAT_NONE;
+	data->sample_rate = 0;
+	data->channels = 0;
 }
 
 const char *gstreamer_filter_get_name_video(void *type_data)
 {
 	UNUSED_PARAMETER(type_data);
-	return "GStreamer Video Filter";
+	return "GStreamer Video Filter (CPU)";
 }
 
 const char *gstreamer_filter_get_name_audio(void *type_data)
@@ -210,7 +182,7 @@ void *gstreamer_filter_create(obs_data_t *settings, obs_source_t *source)
 	struct gstreamer_filter_data *data = bzalloc(sizeof(struct gstreamer_filter_data));
 	data->filter_source = source;
 
-	const char *source_name = get_filter_name(source);
+	const char *source_name = get_filter_source_name(source);
 	blog(LOG_INFO, "[obs-gstreamer-filter] %s: Filter instance created", source_name);
 
 	return data;
@@ -221,7 +193,7 @@ void gstreamer_filter_destroy(void *p)
 	struct gstreamer_filter_data *data = (struct gstreamer_filter_data *)p;
 	if (!data) return;
 
-	const char *source_name = get_filter_name(data->filter_source);
+	const char *source_name = get_filter_source_name(data->filter_source);
 	blog(LOG_INFO, "[obs-gstreamer-filter] %s: Filter instance destroyed", source_name);
 
 	stop_pipeline(data);
@@ -244,16 +216,11 @@ void gstreamer_filter_update(void *p, obs_data_t *settings)
 	struct gstreamer_filter_data *data = (struct gstreamer_filter_data *)p;
 	if (!data) return;
 
-	const char *source_name = get_filter_name(data->filter_source);
+	const char *source_name = get_filter_source_name(data->filter_source);
 	blog(LOG_INFO, "[obs-gstreamer-filter] %s: Filter settings updated, resetting pipeline", source_name);
 
 	stop_pipeline(data);
 	data->in_error = false;
-	data->width = 0;
-	data->height = 0;
-	data->format = VIDEO_FORMAT_NONE;
-	data->sample_rate = 0;
-	data->channels = 0;
 }
 
 static bool on_apply_clicked(obs_properties_t *props, obs_property_t *property, void *data)
@@ -286,7 +253,7 @@ gstreamer_filter_filter_video(void *p, struct obs_source_frame *frame)
 
 	if (data->pipe == NULL || data->width != frame->width || data->height != frame->height || data->format != frame->format)
 	{
-		const char *source_name = get_filter_name(data->filter_source);
+		const char *source_name = get_filter_source_name(data->filter_source);
 
 		if (data->pipe != NULL)
 		{
@@ -385,35 +352,44 @@ gstreamer_filter_filter_video(void *p, struct obs_source_frame *frame)
 
 	if (data->in_error || !data->appsrc || !data->appsink) return frame;
 
-	GstBuffer *in_buffer = gst_buffer_new_allocate(NULL, data->video_info.size, NULL);
+	GstBuffer *in_buffer = gst_buffer_new();
 	if (!in_buffer) return frame;
 
-	GstVideoFrame in_vframe;
-	if (gst_video_frame_map(&in_vframe, &data->video_info, in_buffer, GST_MAP_WRITE))
-	{
-		for (guint p = 0; p < GST_VIDEO_FRAME_N_PLANES(&in_vframe); p++)
-		{
-			const guint8 *src = frame->data[p];
-			guint8 *dst = GST_VIDEO_FRAME_PLANE_DATA(&in_vframe, p);
-			guint src_stride = frame->linesize[p];
-			guint dst_stride = GST_VIDEO_FRAME_PLANE_STRIDE(&in_vframe, p);
-			guint plane_height = get_plane_height(&data->video_info, p);
+	gsize offsets[GST_VIDEO_MAX_PLANES] = {0};
+	gint strides[GST_VIDEO_MAX_PLANES] = {0};
+	gsize current_offset = 0;
 
-			if (src_stride == dst_stride)
-			{
-				memcpy(dst, src, dst_stride * plane_height);
-			}
-			else
-			{
-				guint copy_stride = (src_stride < dst_stride) ? src_stride : dst_stride;
-				for (guint h = 0; h < plane_height; h++)
-				{
-					memcpy(dst + h * dst_stride, src + h * src_stride, copy_stride);
-				}
-			}
-		}
-		gst_video_frame_unmap(&in_vframe);
+	for (guint p = 0; p < GST_VIDEO_INFO_N_PLANES(&data->video_info); p++)
+	{
+		guint plane_height = get_plane_height(&data->video_info, p);
+		gsize plane_size = (gsize)frame->linesize[p] * plane_height;
+
+		GstMemory *mem = gst_memory_new_wrapped(
+			GST_MEMORY_FLAG_READONLY,
+			frame->data[p],
+			plane_size,
+			0,
+			plane_size,
+			NULL,
+			NULL
+		);
+		gst_buffer_append_memory(in_buffer, mem);
+
+		offsets[p] = current_offset;
+		strides[p] = (gint)frame->linesize[p];
+		current_offset += plane_size;
 	}
+
+	gst_buffer_add_video_meta_full(
+		in_buffer,
+		GST_VIDEO_FRAME_FLAG_NONE,
+		data->video_info.finfo->format,
+		data->video_info.width,
+		data->video_info.height,
+		GST_VIDEO_INFO_N_PLANES(&data->video_info),
+		offsets,
+		strides
+	);
 
 	GST_BUFFER_PTS(in_buffer) = frame->timestamp;
 	gst_app_src_push_buffer(GST_APP_SRC(data->appsrc), in_buffer);
@@ -469,7 +445,7 @@ gstreamer_filter_filter_audio(void *p, struct obs_audio_data *audio_data)
 
 	if (data->pipe == NULL || data->sample_rate != audio_info.samples_per_sec || data->channels != channels)
 	{
-		const char *source_name = get_filter_name(data->filter_source);
+		const char *source_name = get_filter_source_name(data->filter_source);
 
 		if (data->pipe != NULL)
 		{
@@ -562,20 +538,21 @@ gstreamer_filter_filter_audio(void *p, struct obs_audio_data *audio_data)
 	gint channel_size = (gint)(sizeof(float) * audio_data->frames);
 	gint total_bytes = channel_size * (gint)data->channels;
 
-	GstBuffer *buffer = gst_buffer_new_allocate(NULL, total_bytes, NULL);
+	GstBuffer *buffer = gst_buffer_new();
 	if (!buffer) return audio_data;
 
-	GstMapInfo info;
-	if (gst_buffer_map(buffer, &info, GST_MAP_WRITE))
+	for (size_t i = 0; i < data->channels; i++)
 	{
-		for (size_t i = 0; i < data->channels; i++)
-		{
-			if (audio_data->data[i])
-			{
-				memcpy(info.data + i * channel_size, audio_data->data[i], channel_size);
-			}
-		}
-		gst_buffer_unmap(buffer, &info);
+		GstMemory *mem = gst_memory_new_wrapped(
+			GST_MEMORY_FLAG_READONLY,
+			audio_data->data[i],
+			channel_size,
+			0,
+			channel_size,
+			NULL,
+			NULL
+		);
+		gst_buffer_append_memory(buffer, mem);
 	}
 
 	gst_buffer_add_audio_meta(buffer, &data->audio_info, audio_data->frames, NULL);
@@ -609,6 +586,27 @@ gstreamer_filter_filter_audio(void *p, struct obs_audio_data *audio_data)
 /* --------------------------------------------------------------------------
  * OBS Filter Source Registration Info
  * -------------------------------------------------------------------------- */
+const char *gstreamer_filter_get_name_video_gpu(void *type_data)
+{
+	UNUSED_PARAMETER(type_data);
+	return "GStreamer Video Filter (GPU)";
+}
+
+void gstreamer_filter_gpu_get_defaults(obs_data_t *settings)
+{
+	obs_data_set_default_string(settings, "pipeline", "glupload ! gltransformation ! gldownload");
+}
+
+static void gstreamer_filter_gpu_video_render(void *p, gs_effect_t *effect)
+{
+	struct gstreamer_filter_data *data = (struct gstreamer_filter_data *)p;
+	if (!data) return;
+
+	if (!obs_source_process_filter_begin(data->filter_source, GS_RGBA, OBS_ALLOW_DIRECT_RENDERING)) return;
+
+	obs_source_process_filter_end(data->filter_source, effect, 0, 0);
+}
+
 struct obs_source_info gstreamer_filter_video_info =
 {
 	.id = "gstreamer-filter-video",
@@ -621,6 +619,20 @@ struct obs_source_info gstreamer_filter_video_info =
 	.get_defaults = gstreamer_filter_get_defaults_video,
 	.get_properties = gstreamer_filter_get_properties,
 	.filter_video = gstreamer_filter_filter_video,
+};
+
+struct obs_source_info gstreamer_filter_video_gpu_info =
+{
+	.id = "gstreamer-filter-video-gpu",
+	.type = OBS_SOURCE_TYPE_FILTER,
+	.output_flags = OBS_SOURCE_VIDEO,
+	.get_name = gstreamer_filter_get_name_video_gpu,
+	.create = gstreamer_filter_create,
+	.destroy = gstreamer_filter_destroy,
+	.update = gstreamer_filter_update,
+	.get_defaults = gstreamer_filter_gpu_get_defaults,
+	.get_properties = gstreamer_filter_get_properties,
+	.video_render = gstreamer_filter_gpu_video_render,
 };
 
 struct obs_source_info gstreamer_filter_audio_info =
