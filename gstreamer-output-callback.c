@@ -79,7 +79,7 @@ static void output_cb_raw_video(void *p, struct video_data *frame)
 }
 
 static struct obs_output_info gstreamer_output_cb_info = {
-	.id = "hjm-gstreamer-output-callback",
+	.id = "gstreamer-output-callback",
 	.flags = OBS_OUTPUT_VIDEO,
 	.get_name = output_cb_get_name,
 	.create = output_cb_create,
@@ -104,14 +104,8 @@ static void pipeline_state_change(bool active, void *user_data)
 	gst_output_callback_t *cb = (gst_output_callback_t *)user_data;
 	if (!cb || !cb->output) return;
 
-	if (active && !obs_output_active(cb->output))
-	{
-		obs_output_start(cb->output);
-	}
-	else if (!active && obs_output_active(cb->output))
-	{
-		obs_output_stop(cb->output);
-	}
+	if (active && !obs_output_active(cb->output)) obs_output_start(cb->output);
+	else if (!active && obs_output_active(cb->output)) obs_output_stop(cb->output);
 }
 
 gst_output_callback_t *gst_output_callback_create(gst_source_type_t type, const char *scene_name, const char *item_name, const char *custom_master_pipe, const char *encoder_type, int bitrate_kbps, int keyint_sec, uint32_t fps_num, uint32_t fps_den)
@@ -123,17 +117,15 @@ gst_output_callback_t *gst_output_callback_create(gst_source_type_t type, const 
 	cb->source_type = type;
 
 	struct obs_video_info ovi = {};
-	if (!obs_get_video_info(&ovi)) {
-		ovi.base_width = 1920;
-		ovi.base_height = 1080;
+	if (!obs_get_video_info(&ovi))
+	{
+		ovi.base_width = 1280;
+		ovi.base_height = 720;
 	}
-	uint32_t width = ovi.base_width ? ovi.base_width : 1920;
-	uint32_t height = ovi.base_height ? ovi.base_height : 1080;
+	uint32_t width = ovi.base_width ? ovi.base_width : 1280;
+	uint32_t height = ovi.base_height ? ovi.base_height : 720;
 
-	cb->pipeline = gst_master_pipeline_create(custom_master_pipe, encoder_type, bitrate_kbps, keyint_sec,
-	                                          width, height,
-	                                          fps_num, fps_den,
-	                                          pipeline_state_change, cb);
+	cb->pipeline = gst_master_pipeline_create(custom_master_pipe, encoder_type, bitrate_kbps, keyint_sec, width, height, fps_num, fps_den, pipeline_state_change, cb);
 	if (!cb->pipeline)
 	{
 		obs_output_release(obs_out);
