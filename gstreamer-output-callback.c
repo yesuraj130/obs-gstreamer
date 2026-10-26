@@ -37,6 +37,13 @@ static void output_cb_destroy(void *p)
 
 	if (data->view)
 	{
+#if defined(LIBOBS_API_MAJOR_VER) && (LIBOBS_API_MAJOR_VER >= 28)
+		if (data->custom_video)
+		{
+			obs_view_remove(data->view);
+			data->custom_video = NULL;
+		}
+#endif
 		obs_view_destroy(data->view);
 		data->view = NULL;
 	}
@@ -110,7 +117,7 @@ static void pipeline_state_change(bool active, void *user_data)
 
 gst_output_callback_t *gst_output_callback_create(gst_source_type_t type, const char *scene_name, const char *item_name, const char *custom_master_pipe, const char *encoder_type, int bitrate_kbps, int keyint_sec, uint32_t fps_num, uint32_t fps_den)
 {
-	obs_output_t *obs_out = obs_output_create("hjm-gstreamer-output-callback", "master_output_cb", NULL, NULL);
+	obs_output_t *obs_out = obs_output_create("gstreamer-output-callback", "master_output_cb", NULL, NULL);
 	if (!obs_out) return NULL;
 
 	gst_output_callback_t *cb = (gst_output_callback_t *)obs_output_get_type_data(obs_out);
@@ -119,18 +126,11 @@ gst_output_callback_t *gst_output_callback_create(gst_source_type_t type, const 
 	struct obs_video_info ovi = {};
 	if (!obs_get_video_info(&ovi))
 	{
-		ovi.base_width = 1280;
-		ovi.base_height = 720;
+		ovi.base_width = 1920;
+		ovi.base_height = 1080;
 	}
-	uint32_t width = ovi.base_width ? ovi.base_width : 1280;
-	uint32_t height = ovi.base_height ? ovi.base_height : 720;
-
-	cb->pipeline = gst_master_pipeline_create(custom_master_pipe, encoder_type, bitrate_kbps, keyint_sec, width, height, fps_num, fps_den, pipeline_state_change, cb);
-	if (!cb->pipeline)
-	{
-		obs_output_release(obs_out);
-		return NULL;
-	}
+	uint32_t width = ovi.base_width ? ovi.base_width : 1920;
+	uint32_t height = ovi.base_height ? ovi.base_height : 1080;
 
 	if (type == GST_SOURCE_MAIN_OUTPUT)
 	{
@@ -139,17 +139,39 @@ gst_output_callback_t *gst_output_callback_create(gst_source_type_t type, const 
 	else
 	{
 		cb->source = gst_resolve_target_source(type, scene_name, item_name);
-		if (cb->source)
+		if (!cb->source)
 		{
-			cb->view = obs_view_create();
-			obs_view_set_source(cb->view, 0, cb->source);
-#if defined(LIBOBS_API_MAJOR_VER) && (LIBOBS_API_MAJOR_VER >= 28)
-			cb->custom_video = obs_view_add(cb->view);
-			obs_output_set_media(obs_out, cb->custom_video, obs_get_audio());
-#else
-			obs_output_set_media(obs_out, obs_get_video(), obs_get_audio());
-#endif
+			blog(LOG_ERROR, "[obs-gstreamer-output-callback] Failed to resolve target OBS source");
+			obs_output_release(obs_out);
+			return NULL;
 		}
+
+		if (type == GST_SOURCE_SOURCE && cb->source)
+		{
+			uint32_t sw = obs_source_get_width(cb->source);
+			uint32_t sh = obs_source_get_height(cb->source);
+			if (sw > 0 && sh > 0)
+			{
+				width = sw;
+				height = sh;
+			}
+		}
+
+		cb->view = obs_view_create();
+		obs_view_set_source(cb->view, 0, cb->source);
+#if defined(LIBOBS_API_MAJOR_VER) && (LIBOBS_API_MAJOR_VER >= 28)
+		cb->custom_video = obs_view_add(cb->view);
+		obs_output_set_media(obs_out, cb->custom_video, obs_get_audio());
+#else
+		obs_output_set_media(obs_out, obs_get_video(), obs_get_audio());
+#endif
+	}
+
+	cb->pipeline = gst_master_pipeline_create(custom_master_pipe, encoder_type, bitrate_kbps, keyint_sec, width, height, fps_num, fps_den, pipeline_state_change, cb);
+	if (!cb->pipeline)
+	{
+		obs_output_release(obs_out);
+		return NULL;
 	}
 
 	return cb;
@@ -164,6 +186,13 @@ void gst_output_callback_destroy(gst_output_callback_t *cb)
 {
 	if (!cb) return;
 
+	cb->running = false;
+
+	if (cb->output && obs_output_active(cb->output))
+	{
+		obs_output_stop(cb->output);
+	}
+
 	if (cb->pipeline)
 	{
 		gst_master_pipeline_destroy(cb->pipeline);
@@ -172,7 +201,6 @@ void gst_output_callback_destroy(gst_output_callback_t *cb)
 
 	if (cb->output)
 	{
-		if (obs_output_active(cb->output)) obs_output_stop(cb->output);
 		obs_output_release(cb->output);
 	}
 }

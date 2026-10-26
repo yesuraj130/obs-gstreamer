@@ -5,19 +5,30 @@
 #ifndef GSTREAMER_ENCODER_CALLBACK_H
 #define GSTREAMER_ENCODER_CALLBACK_H
 
-#include <obs.h>
-#include <obs-encoder.h>
+#include "gstreamer-helper.h"
 #include "gstreamer-master-pipeline.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
+typedef struct gst_encoder_callback gst_encoder_callback_t;
+
 void gstreamer_encoder_callback_register(void);
 void gstreamer_encoder_callback_unregister(void);
 
-gst_master_pipeline_t *gstreamer_encoder_callback_get_pipeline(obs_encoder_t *encoder);
-void gstreamer_encoder_callback_set_master_pipeline(obs_encoder_t *encoder, gst_master_pipeline_t *pipe);
+gst_encoder_callback_t *gst_encoder_callback_create(gst_source_type_t type,
+                                                    const char *scene_name,
+                                                    const char *item_name,
+                                                    const char *custom_master_pipe,
+                                                    const char *encoder_type,
+                                                    int bitrate_kbps,
+                                                    int keyint_sec,
+                                                    uint32_t fps_num,
+                                                    uint32_t fps_den);
+
+gst_master_pipeline_t *gst_encoder_callback_get_pipeline(gst_encoder_callback_t *cb);
+void gst_encoder_callback_destroy(gst_encoder_callback_t *cb);
 
 #ifdef __cplusplus
 }
