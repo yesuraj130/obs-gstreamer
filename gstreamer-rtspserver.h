@@ -27,6 +27,7 @@ typedef struct {
 	int keyint_sec;
 	const char *master_pipeline;
 	const char *rtsp_pipeline;
+	const char *render_mode;
 } gst_hub_output_params_t;
 
 gst_hub_branch_t *gst_render_hub_start_branch_data(obs_data_t *settings);

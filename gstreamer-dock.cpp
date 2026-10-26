@@ -50,6 +50,7 @@
 #endif
 
 static const char *RENDER_MODE_CALLBACK = "Render Callback (GPU Texture)";
+static const char *RENDER_MODE_FILTER   = "Filter Callback (Private Filter)";
 static const char *RENDER_MODE_GPU_TEX  = "OBS Encoder (GPU Texture)";
 static const char *RENDER_MODE_CPU_RAM  = "OBS Output (CPU RAM)";
 
@@ -349,7 +350,7 @@ static void load_configurations(gstreamer_dock_state *state)
 			else
 				config.render_mode = RENDER_MODE_CPU_RAM;
 		} else {
-			config.use_render_hub = (config.render_mode == RENDER_MODE_CALLBACK);
+			config.use_render_hub = (config.render_mode == RENDER_MODE_CALLBACK || config.render_mode == RENDER_MODE_FILTER);
 			config.use_gpu_encoder = (config.render_mode == RENDER_MODE_GPU_TEX);
 		}
 		config.gpu_encoder_type = settings.value("gpu_encoder_type", "auto").toString();
@@ -397,7 +398,7 @@ static bool edit_configuration(QWidget *parent, gstreamer_output_config *config)
 	scene->setCurrentText(config->scene_name);
 
 	QComboBox *render_mode = new QComboBox();
-	render_mode->addItems({RENDER_MODE_CALLBACK, RENDER_MODE_GPU_TEX, RENDER_MODE_CPU_RAM});
+	render_mode->addItems({RENDER_MODE_CALLBACK, RENDER_MODE_FILTER, RENDER_MODE_GPU_TEX, RENDER_MODE_CPU_RAM});
 	if (config->render_mode.isEmpty()) {
 		if (config->use_render_hub)
 			render_mode->setCurrentText(RENDER_MODE_CALLBACK);
@@ -526,7 +527,7 @@ static bool edit_configuration(QWidget *parent, gstreamer_output_config *config)
 	QObject::connect(source_type, &QComboBox::currentTextChanged, update_visibility);
 	QObject::connect(render_mode, &QComboBox::currentTextChanged, update_visibility);
 	QObject::connect(render_mode, &QComboBox::currentTextChanged, [rtsp_pipeline](const QString &cur_rm) {
-		if (cur_rm == RENDER_MODE_CALLBACK &&
+		if ((cur_rm == RENDER_MODE_CALLBACK || cur_rm == RENDER_MODE_FILTER) &&
 		    (rtsp_pipeline->toPlainText().trimmed().isEmpty() || rtsp_pipeline->toPlainText().contains("x264enc"))) {
 			rtsp_pipeline->setPlainText(DEFAULT_HUB_RTSP_PIPELINE);
 		}
@@ -545,7 +546,7 @@ static bool edit_configuration(QWidget *parent, gstreamer_output_config *config)
 	config->source_name = source->currentText();
 	config->scene_name = scene->currentText();
 	config->render_mode = render_mode->currentText();
-	config->use_render_hub = (config->render_mode == RENDER_MODE_CALLBACK);
+	config->use_render_hub = (config->render_mode == RENDER_MODE_CALLBACK || config->render_mode == RENDER_MODE_FILTER);
 	config->use_gpu_encoder = (config->render_mode == RENDER_MODE_GPU_TEX);
 	config->mode = mode->currentText();
 	QString m = mount->text().trimmed();
@@ -582,7 +583,9 @@ static void refresh_rows(gstreamer_dock_state *state)
 		row_layout->setContentsMargins(8, 2, 8, 2);
 		row_layout->setSpacing(6);
 		QString label_text;
-		if (config.render_mode == RENDER_MODE_CALLBACK || config.use_render_hub) {
+		if (config.render_mode == RENDER_MODE_FILTER) {
+			label_text = QString("%1 [Filter Callback: %2]  [%3]").arg(config.name, config.mode, status);
+		} else if (config.render_mode == RENDER_MODE_CALLBACK || config.use_render_hub) {
 			label_text = QString("%1 [Render Callback: %2]  [%3]").arg(config.name, config.mode, status);
 		} else if (config.render_mode == RENDER_MODE_GPU_TEX || config.use_gpu_encoder) {
 			label_text = QString("%1 [GPU Texture: %2]  [%3]").arg(config.name, config.mode, status);
@@ -639,7 +642,9 @@ static void update_row_states(gstreamer_dock_state *state)
 		auto buttons = row_widget->findChildren<QPushButton *>();
 
 		QString label_text;
-		if (config.render_mode == RENDER_MODE_CALLBACK || config.use_render_hub) {
+		if (config.render_mode == RENDER_MODE_FILTER) {
+			label_text = QString("%1 [Filter Callback: %2]  [%3]").arg(config.name, config.mode, status);
+		} else if (config.render_mode == RENDER_MODE_CALLBACK || config.use_render_hub) {
 			label_text = QString("%1 [Render Callback: %2]  [%3]").arg(config.name, config.mode, status);
 		} else if (config.render_mode == RENDER_MODE_GPU_TEX || config.use_gpu_encoder) {
 			label_text = QString("%1 [GPU Texture: %2]  [%3]").arg(config.name, config.mode, status);
@@ -709,6 +714,7 @@ static void start_selected(gstreamer_dock_state *state, int row)
 		obs_data_set_string(settings, "source_type", config.source_type.toUtf8().constData());
 		const QString src_name = (config.source_type == "Scene") ? config.scene_name : config.source_name;
 		obs_data_set_string(settings, "source_name", src_name.toUtf8().constData());
+		obs_data_set_string(settings, "render_mode", config.render_mode.toUtf8().constData());
 
 		int port = config.rtsp_service.toInt();
 		if (port <= 0) port = 8554;
