@@ -1,8 +1,5 @@
-/*
- * obs-gstreamer: RTSP Server and Branch Management (Pub-Sub Subscriber Integration)
- */
-
 #include "gstreamer-rtspserver.h"
+#include "gstreamer-render-callback.h"
 #include <obs-module.h>
 #include <gst/gst.h>
 #include <gst/app/gstappsrc.h>
@@ -36,6 +33,10 @@ struct rtsp_branch_extra {
 };
 
 static gst_master_pipeline_t *g_master_pipe = NULL;
+static gst_render_callback_t *g_source_callback = NULL;
+static GMainContext *g_rtsp_context = NULL;
+static GMainLoop *g_rtsp_loop = NULL;
+static GThread *g_rtsp_thread = NULL;
 static GMutex g_hub_mutex;
 
 static void media_configure_cb(GstRTSPMediaFactory *factory, GstRTSPMedia *media, gpointer user_data);
@@ -66,8 +67,8 @@ static void unregister_rtsp_extra(gst_hub_branch_t *branch)
 	for (int i = 0; i < g_rtsp_server_count; i++) {
 		if (g_rtsp_servers[i].branch == branch) {
 			if (g_rtsp_servers[i].source_id > 0) {
-				if (g_master_pipe && g_master_pipe->rtsp_context) {
-					GSource *source = g_main_context_find_source_by_id(g_master_pipe->rtsp_context, g_rtsp_servers[i].source_id);
+				if (g_rtsp_context) {
+					GSource *source = g_main_context_find_source_by_id(g_rtsp_context, g_rtsp_servers[i].source_id);
 					if (source) g_source_destroy(source);
 				} else {
 					g_source_remove(g_rtsp_servers[i].source_id);
@@ -140,10 +141,17 @@ gst_hub_branch_t *gst_render_hub_start_pipeline_branch(const char *name, const c
 		uint32_t fps_num = ovi.fps_num ? ovi.fps_num : 60;
 		uint32_t fps_den = ovi.fps_den ? ovi.fps_den : 1;
 
-		g_master_pipe = gst_master_pipeline_get_or_create(source_type, source_name, NULL, "x264enc", 4000, 1, width, height, fps_num, fps_den);
+		g_master_pipe = gst_master_pipeline_create(NULL, "x264enc", 4000, 1, width, height, fps_num, fps_den);
 		if (!g_master_pipe) {
 			g_mutex_unlock(&g_hub_mutex);
 			return NULL;
+		}
+
+		gst_source_type_t stype = GST_SOURCE_MAIN_OUTPUT;
+		if (source_type && strcmp(source_type, "Scene") == 0) stype = GST_SOURCE_SCENE;
+		else if (source_type && strcmp(source_type, "SceneItem") == 0) stype = GST_SOURCE_SCENE_ITEM;
+		if (!g_source_callback) {
+			g_source_callback = gst_render_callback_create(g_master_pipe, stype, source_name, NULL, width, height);
 		}
 	}
 
@@ -245,6 +253,12 @@ gst_hub_branch_t *gst_render_hub_start_branch(const gst_hub_output_params_t *par
 
 	g_mutex_lock(&g_hub_mutex);
 
+	if (!g_rtsp_context) {
+		g_rtsp_context = g_main_context_new();
+		g_rtsp_loop = g_main_loop_new(g_rtsp_context, FALSE);
+		g_rtsp_thread = g_thread_new("gst_hub_rtsp_loop", (GThreadFunc)g_main_loop_run, g_rtsp_loop);
+	}
+
 	if (!g_master_pipe) {
 		struct obs_video_info ovi = {};
 		if (!obs_get_video_info(&ovi)) {
@@ -258,13 +272,19 @@ gst_hub_branch_t *gst_render_hub_start_branch(const gst_hub_output_params_t *par
 		uint32_t fps_num = ovi.fps_num ? ovi.fps_num : 60;
 		uint32_t fps_den = ovi.fps_den ? ovi.fps_den : 1;
 
-		g_master_pipe = gst_master_pipeline_get_or_create(params->source_type, params->source_name,
-		                                                  params->master_pipeline, params->encoder_type,
-		                                                  params->bitrate_kbps, params->keyint_sec,
-		                                                  width, height, fps_num, fps_den);
+		g_master_pipe = gst_master_pipeline_create(params->master_pipeline, params->encoder_type,
+		                                          params->bitrate_kbps, params->keyint_sec,
+		                                          width, height, fps_num, fps_den);
 		if (!g_master_pipe) {
 			g_mutex_unlock(&g_hub_mutex);
 			return NULL;
+		}
+
+		gst_source_type_t stype = GST_SOURCE_MAIN_OUTPUT;
+		if (params->source_type && strcmp(params->source_type, "Scene") == 0) stype = GST_SOURCE_SCENE;
+		else if (params->source_type && strcmp(params->source_type, "SceneItem") == 0) stype = GST_SOURCE_SCENE_ITEM;
+		if (!g_source_callback) {
+			g_source_callback = gst_render_callback_create(g_master_pipe, stype, params->source_name, NULL, width, height);
 		}
 	}
 
@@ -310,7 +330,7 @@ gst_hub_branch_t *gst_render_hub_start_branch(const gst_hub_output_params_t *par
 	g_signal_connect(factory, "media-configure", G_CALLBACK(media_configure_cb), branch);
 	gst_rtsp_mount_points_add_factory(mounts, branch->mount_point, factory);
 
-	guint source_id = gst_rtsp_server_attach(server, g_master_pipe->rtsp_context);
+	guint source_id = gst_rtsp_server_attach(server, g_rtsp_context);
 	if (source_id == 0) {
 		blog(LOG_ERROR, "[obs-gstreamer-rtspserver] Failed to attach RTSP server on port %s", branch->service);
 		gst_object_unref(server);
@@ -448,9 +468,28 @@ bool gst_render_hub_is_branch_active(const gst_hub_branch_t *branch)
 void gst_render_hub_shutdown(void)
 {
 	g_mutex_lock(&g_hub_mutex);
+	if (g_source_callback) {
+		gst_render_callback_destroy(g_source_callback);
+		g_source_callback = NULL;
+	}
 	if (g_master_pipe) {
 		gst_master_pipeline_destroy(g_master_pipe);
 		g_master_pipe = NULL;
+	}
+	if (g_rtsp_loop) {
+		g_main_loop_quit(g_rtsp_loop);
+	}
+	if (g_rtsp_thread) {
+		g_thread_join(g_rtsp_thread);
+		g_rtsp_thread = NULL;
+	}
+	if (g_rtsp_loop) {
+		g_main_loop_unref(g_rtsp_loop);
+		g_rtsp_loop = NULL;
+	}
+	if (g_rtsp_context) {
+		g_main_context_unref(g_rtsp_context);
+		g_rtsp_context = NULL;
 	}
 	g_mutex_unlock(&g_hub_mutex);
 }

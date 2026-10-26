@@ -22,8 +22,11 @@
 #include <plugin-support.h>
 #include <gst/gst.h>
 
-#include "gstreamer-encoder-tex.h"
-#include "gstreamer-render-hub.h"
+#include "gstreamer-encoder-callback.h"
+#include "gstreamer-output-callback.h"
+#include "gstreamer-filter-callback.h"
+#include "gstreamer-render-callback.h"
+#include "gstreamer-rtspserver.h"
 
 OBS_DECLARE_MODULE()
 
@@ -123,7 +126,9 @@ bool obs_module_load(void)
 	obs_register_source(&gstreamer_filter_audio_info);
 	blog(LOG_INFO, "[obs-gstreamer] Registered filter module: gstreamer-filter-audio");
 
-	gstreamer_encoder_tex_register();
+	gstreamer_encoder_callback_register();
+	gstreamer_output_callback_register();
+	gstreamer_filter_callback_register();
 	gstreamer_dock_register();
 	blog(LOG_INFO, "[obs-gstreamer] Plugin loaded successfully");
 
@@ -135,6 +140,8 @@ void obs_module_unload(void)
 	blog(LOG_INFO, "[obs-gstreamer] Unloading plugin...");
 	gst_render_hub_shutdown();
 	gstreamer_dock_unregister();
-	gstreamer_encoder_tex_unregister();
+	gstreamer_encoder_callback_unregister();
+	gstreamer_output_callback_unregister();
+	gstreamer_filter_callback_unregister();
 	blog(LOG_INFO, "[obs-gstreamer] Plugin unloaded successfully");
 }

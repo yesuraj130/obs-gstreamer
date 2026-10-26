@@ -14,7 +14,7 @@
 extern "C" {
 #endif
 
-typedef gst_subscriber_branch_t gst_hub_branch_t;
+typedef struct gst_hub_branch gst_hub_branch_t;
 
 typedef struct {
 	const char *name;

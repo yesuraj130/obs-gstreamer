@@ -1,6 +1,6 @@
 #include <obs.h>
 #include <obs-frontend-api.h>
-#include "gstreamer-render-hub.h"
+#include "gstreamer-rtspserver.h"
 
 #include <QApplication>
 #include <QPalette>
