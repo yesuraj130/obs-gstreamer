@@ -93,12 +93,20 @@ static void pipeline_state_change(bool active, void *user_data)
 	cb->active = active;
 }
 
-gst_filter_callback_t *gst_filter_callback_create(gst_source_type_t type, const char *scene_name, const char *item_name, const char *custom_master_pipe, const char *encoder_type, int bitrate_kbps, int keyint_sec, uint32_t width, uint32_t height, uint32_t fps_num, uint32_t fps_den)
+gst_filter_callback_t *gst_filter_callback_create(gst_source_type_t type, const char *scene_name, const char *item_name, const char *custom_master_pipe, const char *encoder_type, int bitrate_kbps, int keyint_sec, uint32_t fps_num, uint32_t fps_den)
 {
 	gst_filter_callback_t *cb = bzalloc(sizeof(gst_filter_callback_t));
 
+	struct obs_video_info ovi = {};
+	if (!obs_get_video_info(&ovi)) {
+		ovi.base_width = 1920;
+		ovi.base_height = 1080;
+	}
+	uint32_t width = ovi.base_width ? ovi.base_width : 1920;
+	uint32_t height = ovi.base_height ? ovi.base_height : 1080;
+
 	cb->pipeline = gst_master_pipeline_create(custom_master_pipe, encoder_type, bitrate_kbps, keyint_sec,
-	                                          width ? width : 1920, height ? height : 1080,
+	                                          width, height,
 	                                          fps_num, fps_den,
 	                                          pipeline_state_change, cb);
 	if (!cb->pipeline)

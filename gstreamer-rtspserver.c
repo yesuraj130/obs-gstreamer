@@ -145,7 +145,7 @@ gst_hub_branch_t *gst_render_hub_start_pipeline_branch(const char *name, const c
 		if (source_type && strcmp(source_type, "Scene") == 0) stype = GST_SOURCE_SCENE;
 		else if (source_type && strcmp(source_type, "SceneItem") == 0) stype = GST_SOURCE_SCENE_ITEM;
 
-		g_source_callback = gst_render_callback_create(stype, source_name, NULL, NULL, "x264enc", 4000, 1, width, height, fps_num, fps_den);
+		g_source_callback = gst_render_callback_create(stype, source_name, NULL, NULL, "x264enc", 4000, 1, fps_num, fps_den);
 		if (!g_source_callback) {
 			g_mutex_unlock(&g_hub_mutex);
 			return NULL;
@@ -276,7 +276,7 @@ gst_hub_branch_t *gst_render_hub_start_branch(const gst_hub_output_params_t *par
 		g_source_callback = gst_render_callback_create(stype, params->source_name, NULL,
 		                                               params->master_pipeline, params->encoder_type,
 		                                               params->bitrate_kbps, params->keyint_sec,
-		                                               width, height, fps_num, fps_den);
+		                                               fps_num, fps_den);
 		if (!g_source_callback) {
 			g_mutex_unlock(&g_hub_mutex);
 			return NULL;

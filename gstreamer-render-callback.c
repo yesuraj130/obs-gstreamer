@@ -30,6 +30,17 @@ static void render_callback_handler(void *param, uint32_t cx, uint32_t cy)
 	gst_render_callback_t *cb = (gst_render_callback_t *)param;
 	if (!cb || !cb->running || !cb->pipeline) return;
 
+	if (cb->source_type == GST_SOURCE_MAIN_OUTPUT)
+	{
+		gs_texture_t *tex = obs_get_main_texture();
+		if (tex)
+		{
+			void *handle = gs_texture_get_obj(tex);
+			if (handle) gst_master_pipeline_push_texture(cb->pipeline, handle, os_gettime_ns());
+		}
+		return;
+	}
+
 	uint32_t cur = cb->pingpong_idx;
 	if (!cb->texrender[cur]) return;
 
@@ -78,12 +89,18 @@ static void pipeline_state_change(bool active, void *user_data)
 	}
 }
 
-gst_render_callback_t *gst_render_callback_create(gst_source_type_t type, const char *scene_name, const char *item_name, const char *custom_master_pipe, const char *encoder_type, int bitrate_kbps, int keyint_sec, uint32_t width, uint32_t height, uint32_t fps_num, uint32_t fps_den)
+gst_render_callback_t *gst_render_callback_create(gst_source_type_t type, const char *scene_name, const char *item_name, const char *custom_master_pipe, const char *encoder_type, int bitrate_kbps, int keyint_sec, uint32_t fps_num, uint32_t fps_den)
 {
 	gst_render_callback_t *cb = bzalloc(sizeof(gst_render_callback_t));
 	cb->source_type = type;
-	cb->width = width ? width : 1280;
-	cb->height = height ? height : 720;
+
+	struct obs_video_info ovi = {};
+	if (!obs_get_video_info(&ovi)) {
+		ovi.base_width = 1920;
+		ovi.base_height = 1080;
+	}
+	cb->width = ovi.base_width ? ovi.base_width : 1920;
+	cb->height = ovi.base_height ? ovi.base_height : 1080;
 
 	cb->pipeline = gst_master_pipeline_create(custom_master_pipe, encoder_type, bitrate_kbps, keyint_sec, cb->width, cb->height, fps_num, fps_den, pipeline_state_change, cb);
 	if (!cb->pipeline)

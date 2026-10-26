@@ -25,8 +25,6 @@ gst_filter_callback_t *gst_filter_callback_create(gst_source_type_t type,
                                                   const char *encoder_type,
                                                   int bitrate_kbps,
                                                   int keyint_sec,
-                                                  uint32_t width,
-                                                  uint32_t height,
                                                   uint32_t fps_num,
                                                   uint32_t fps_den);
 
