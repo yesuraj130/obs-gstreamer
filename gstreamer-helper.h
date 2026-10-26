@@ -126,21 +126,8 @@ static inline guint gst_get_plane_height(const GstVideoInfo *info, guint plane)
 typedef enum {
 	GST_SOURCE_MAIN_OUTPUT = 0,
 	GST_SOURCE_SCENE,
-	GST_SOURCE_SCENE_ITEM,
 	GST_SOURCE_SOURCE,
 } gst_source_type_t;
-
-static inline obs_sceneitem_t *gst_resolve_target_scene_item(const char *scene_name, const char *item_name)
-{
-	if (!scene_name || !*scene_name || !item_name || !*item_name) return NULL;
-
-	obs_scene_t *sc = obs_get_scene_by_name(scene_name);
-	if (!sc) return NULL;
-
-	obs_sceneitem_t *item = obs_scene_find_source(sc, item_name);
-	obs_scene_release(sc);
-	return item;
-}
 
 static inline obs_source_t *gst_resolve_target_source(gst_source_type_t type, const char *scene_name, const char *item_name)
 {
@@ -150,23 +137,16 @@ static inline obs_source_t *gst_resolve_target_source(gst_source_type_t type, co
 
 		case GST_SOURCE_SCENE:
 		{
-			if (!scene_name || !*scene_name) return NULL;
+			const char *name = (scene_name && *scene_name) ? scene_name : item_name;
+			if (!name || !*name) return NULL;
 
-			obs_scene_t *sc = obs_get_scene_by_name(scene_name);
+			obs_scene_t *sc = obs_get_scene_by_name(name);
 			if (!sc) return NULL;
 
 			obs_source_t *src = obs_scene_get_source(sc);
 			if (src) obs_source_get_ref(src);
 
 			obs_scene_release(sc);
-			return src;
-		}
-
-		case GST_SOURCE_SCENE_ITEM:
-		{
-			obs_sceneitem_t *item = gst_resolve_target_scene_item(scene_name, item_name);
-			obs_source_t *src = item ? obs_sceneitem_get_source(item) : NULL;
-			if (src) obs_source_get_ref(src);
 			return src;
 		}
 

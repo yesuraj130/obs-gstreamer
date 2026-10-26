@@ -10,7 +10,6 @@ struct gst_filter_callback
 	obs_source_t *filter;
 	obs_source_t *target;
 	gst_master_pipeline_t *pipeline;
-	bool active;
 };
 
 typedef struct
@@ -90,12 +89,19 @@ static void pipeline_state_change(bool active, void *user_data)
 
 	filter_private_data_t *priv = (filter_private_data_t *)obs_obj_get_data(cb->filter);
 	if (priv) priv->active = active;
-	cb->active = active;
 }
 
 gst_filter_callback_t *gst_filter_callback_create(gst_source_type_t type, const char *scene_name, const char *item_name, const char *custom_master_pipe, const char *encoder_type, int bitrate_kbps, int keyint_sec, uint32_t fps_num, uint32_t fps_den)
 {
 	gst_filter_callback_t *cb = bzalloc(sizeof(gst_filter_callback_t));
+
+	obs_source_t *target = gst_resolve_target_source(type, scene_name, item_name);
+	if (!target)
+	{
+		blog(LOG_ERROR, "[obs-gstreamer-filter-callback] Failed to resolve target OBS source");
+		bfree(cb);
+		return NULL;
+	}
 
 	struct obs_video_info ovi = {};
 	if (!obs_get_video_info(&ovi)) {
@@ -105,21 +111,24 @@ gst_filter_callback_t *gst_filter_callback_create(gst_source_type_t type, const 
 	uint32_t width = ovi.base_width ? ovi.base_width : 1920;
 	uint32_t height = ovi.base_height ? ovi.base_height : 1080;
 
+	if (type == GST_SOURCE_SOURCE)
+	{
+		uint32_t sw = obs_source_get_width(target);
+		uint32_t sh = obs_source_get_height(target);
+		if (sw > 0 && sh > 0)
+		{
+			width = sw;
+			height = sh;
+		}
+	}
+
 	cb->pipeline = gst_master_pipeline_create(custom_master_pipe, encoder_type, bitrate_kbps, keyint_sec,
 	                                          width, height,
 	                                          fps_num, fps_den,
 	                                          pipeline_state_change, cb);
 	if (!cb->pipeline)
 	{
-		bfree(cb);
-		return NULL;
-	}
-
-	obs_source_t *target = gst_resolve_target_source(type, scene_name, item_name);
-	if (!target)
-	{
-		blog(LOG_ERROR, "[obs-gstreamer-filter-callback] Failed to resolve target OBS source");
-		gst_master_pipeline_destroy(cb->pipeline);
+		obs_source_release(target);
 		bfree(cb);
 		return NULL;
 	}
@@ -144,7 +153,6 @@ gst_filter_callback_t *gst_filter_callback_create(gst_source_type_t type, const 
 
 	cb->filter = filter;
 	cb->target = target;
-	cb->active = false;
 
 	return cb;
 }
@@ -157,6 +165,16 @@ gst_master_pipeline_t *gst_filter_callback_get_pipeline(gst_filter_callback_t *c
 void gst_filter_callback_destroy(gst_filter_callback_t *cb)
 {
 	if (!cb) return;
+
+	if (cb->filter)
+	{
+		filter_private_data_t *priv = (filter_private_data_t *)obs_obj_get_data(cb->filter);
+		if (priv)
+		{
+			priv->active = false;
+			priv->pipeline = NULL;
+		}
+	}
 
 	if (cb->target && cb->filter)
 	{

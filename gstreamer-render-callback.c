@@ -10,7 +10,6 @@ struct gst_render_callback
 	gst_master_pipeline_t *pipeline;
 	gst_source_type_t source_type;
 	obs_source_t *source;
-	obs_sceneitem_t *scene_item;
 	obs_view_t *view;
 
 	uint32_t width;
@@ -44,11 +43,7 @@ static void render_callback_handler(void *param, uint32_t cx, uint32_t cy)
 	gs_texrender_begin(cb->texrender, cb->width, cb->height);
 	gs_enable_blending(false);
 
-	if (cb->source_type == GST_SOURCE_SCENE_ITEM && cb->scene_item)
-	{
-		obs_sceneitem_render(cb->scene_item);
-	}
-	else if (cb->source_type == GST_SOURCE_SOURCE && cb->source)
+	if (cb->source_type == GST_SOURCE_SOURCE && cb->source)
 	{
 		obs_source_video_render(cb->source);
 	}
@@ -99,16 +94,7 @@ gst_render_callback_t *gst_render_callback_create(gst_source_type_t type, const 
 	cb->width = ovi.base_width ? ovi.base_width : 1920;
 	cb->height = ovi.base_height ? ovi.base_height : 1080;
 
-	if (type == GST_SOURCE_SCENE_ITEM)
-	{
-		cb->scene_item = gst_resolve_target_scene_item(scene_name, item_name);
-		cb->source = cb->scene_item ? obs_sceneitem_get_source(cb->scene_item) : NULL;
-		if (cb->source) obs_source_get_ref(cb->source);
-	}
-	else
-	{
-		cb->source = gst_resolve_target_source(type, scene_name, item_name);
-	}
+	cb->source = gst_resolve_target_source(type, scene_name, item_name);
 
 	if (!cb->source && type != GST_SOURCE_MAIN_OUTPUT)
 	{
