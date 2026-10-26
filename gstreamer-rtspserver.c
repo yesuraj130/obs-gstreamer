@@ -141,7 +141,7 @@ gst_hub_branch_t *gst_render_hub_start_pipeline_branch(const char *name, const c
 		uint32_t fps_num = ovi.fps_num ? ovi.fps_num : 60;
 		uint32_t fps_den = ovi.fps_den ? ovi.fps_den : 1;
 
-		g_master_pipe = gst_master_pipeline_create(NULL, "x264enc", 4000, 1, width, height, fps_num, fps_den);
+		g_master_pipe = gst_master_pipeline_create(NULL, "x264enc", 4000, 1, width, height, fps_num, fps_den, NULL, NULL);
 		if (!g_master_pipe) {
 			g_mutex_unlock(&g_hub_mutex);
 			return NULL;
@@ -199,9 +199,8 @@ gst_hub_branch_t *gst_render_hub_start_pipeline_branch(const char *name, const c
 
 	gst_element_set_state(branch->pipe, GST_STATE_PLAYING);
 
-	// Subscribe to master pipeline
+	// Subscribe to master pipeline (automatically increments active destination count)
 	branch->sub = gst_master_pipeline_subscribe(g_master_pipe, rtsp_frame_cb, branch, branch->name);
-	gst_master_pipeline_update_client_count(g_master_pipe, 1); // Pipeline branches always consume/push
 
 	blog(LOG_INFO, "[obs-gstreamer-rtspserver] Direct GPU pipeline '%s' started", branch->name);
 
@@ -274,7 +273,8 @@ gst_hub_branch_t *gst_render_hub_start_branch(const gst_hub_output_params_t *par
 
 		g_master_pipe = gst_master_pipeline_create(params->master_pipeline, params->encoder_type,
 		                                          params->bitrate_kbps, params->keyint_sec,
-		                                          width, height, fps_num, fps_den);
+		                                          width, height, fps_num, fps_den,
+		                                          NULL, NULL);
 		if (!g_master_pipe) {
 			g_mutex_unlock(&g_hub_mutex);
 			return NULL;
@@ -385,11 +385,6 @@ static void media_configure_cb(GstRTSPMediaFactory *factory, GstRTSPMedia *media
 
 	g_signal_connect(media, "unprepared", G_CALLBACK(media_unprepared_cb), branch);
 
-	// Notify master pipeline of client connection (+1 client)
-	if (branch->pipeline) {
-		gst_master_pipeline_update_client_count(branch->pipeline, 1);
-	}
-
 	gst_object_unref(element);
 	blog(LOG_INFO, "[obs-gstreamer-rtspserver] RTSP client connected on %s%s", branch->service, branch->mount_point);
 }
@@ -407,11 +402,6 @@ static void media_unprepared_cb(GstRTSPMedia *media, gpointer user_data)
 		}
 	}
 	g_mutex_unlock(&branch->lock);
-
-	// Notify master pipeline of client disconnection (-1 client)
-	if (branch->pipeline) {
-		gst_master_pipeline_update_client_count(branch->pipeline, -1);
-	}
 }
 
 static void stop_branch_internal(gst_hub_branch_t *branch)
@@ -429,7 +419,6 @@ static void stop_branch_internal(gst_hub_branch_t *branch)
 	}
 
 	if (branch->is_pipeline) {
-		gst_master_pipeline_update_client_count(hub, -1);
 		if (branch->pipe) {
 			gst_element_set_state(branch->pipe, GST_STATE_NULL);
 			gst_object_unref(branch->pipe);

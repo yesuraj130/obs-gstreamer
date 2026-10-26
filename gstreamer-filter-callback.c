@@ -50,12 +50,6 @@ static void filter_cb_video_render(void *p, gs_effect_t *effect)
 		return;
 	}
 
-	if (gst_master_pipeline_get_active_destinations(data->pipeline) <= 0)
-	{
-		obs_source_skip_video_filter(data->source);
-		return;
-	}
-
 	if (obs_source_process_filter_begin(data->source, GS_RGBA, OBS_ALLOW_DIRECT_RENDERING))
 	{
 		obs_source_process_filter_end(data->source, effect, 0, 0);
@@ -132,7 +126,11 @@ gst_filter_callback_t *gst_filter_callback_create(gst_master_pipeline_t *pipe, g
 	cb->pipeline = pipe;
 	cb->active = (gst_master_pipeline_get_active_destinations(pipe) > 0);
 
-	gst_master_pipeline_set_state_listener(pipe, pipeline_state_change, cb);
+	if (pipe)
+	{
+		pipe->state_cb = pipeline_state_change;
+		pipe->state_user_data = cb;
+	}
 	return cb;
 }
 
@@ -142,7 +140,8 @@ void gst_filter_callback_destroy(gst_filter_callback_t *cb)
 
 	if (cb->pipeline)
 	{
-		gst_master_pipeline_set_state_listener(cb->pipeline, NULL, NULL);
+		cb->pipeline->state_cb = NULL;
+		cb->pipeline->state_user_data = NULL;
 	}
 
 	if (cb->target && cb->filter)

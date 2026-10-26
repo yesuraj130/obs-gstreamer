@@ -54,8 +54,6 @@ static bool encoder_callback_encode(void *p, uint32_t handle, int64_t pts, uint6
 	encoder_callback_data_t *enc = (encoder_callback_data_t *)p;
 	if (!enc || !enc->pipeline) return true;
 
-	if (gst_master_pipeline_get_active_destinations(enc->pipeline) <= 0) return true;
-
 	gst_master_pipeline_push_texture(enc->pipeline, (void *)(uintptr_t)handle, (uint64_t)pts);
 	return true;
 }

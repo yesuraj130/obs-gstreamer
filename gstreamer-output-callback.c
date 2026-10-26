@@ -75,8 +75,6 @@ static void output_cb_raw_video(void *p, struct video_data *frame)
 	gst_output_callback_t *data = (gst_output_callback_t *)p;
 	if (!data || !data->running || !data->pipeline || !frame) return;
 
-	if (gst_master_pipeline_get_active_destinations(data->pipeline) <= 0) return;
-
 	gst_master_pipeline_push_raw_video(data->pipeline, frame);
 }
 
@@ -147,7 +145,11 @@ gst_output_callback_t *gst_output_callback_create(gst_master_pipeline_t *pipe, g
 		}
 	}
 
-	gst_master_pipeline_set_state_listener(pipe, pipeline_state_change, cb);
+	if (pipe)
+	{
+		pipe->state_cb = pipeline_state_change;
+		pipe->state_user_data = cb;
+	}
 	return cb;
 }
 
@@ -157,7 +159,8 @@ void gst_output_callback_destroy(gst_output_callback_t *cb)
 
 	if (cb->pipeline)
 	{
-		gst_master_pipeline_set_state_listener(cb->pipeline, NULL, NULL);
+		cb->pipeline->state_cb = NULL;
+		cb->pipeline->state_user_data = NULL;
 	}
 
 	if (cb->output)

@@ -6,6 +6,7 @@
 #define GSTREAMER_RENDER_CALLBACK_H
 
 #include <obs.h>
+#include "gstreamer-helper.h"
 #include "gstreamer-master-pipeline.h"
 
 #ifdef __cplusplus

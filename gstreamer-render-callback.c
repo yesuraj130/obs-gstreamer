@@ -30,8 +30,6 @@ static void render_callback_handler(void *param, uint32_t cx, uint32_t cy)
 	gst_render_callback_t *cb = (gst_render_callback_t *)param;
 	if (!cb || !cb->running || !cb->pipeline) return;
 
-	if (gst_master_pipeline_get_active_destinations(cb->pipeline) <= 0) return;
-
 	uint32_t cur = cb->pingpong_idx;
 	if (!cb->texrender[cur]) return;
 
@@ -123,7 +121,11 @@ gst_render_callback_t *gst_render_callback_create(gst_master_pipeline_t *pipe, g
 
 	cb->pingpong_idx = 0;
 
-	gst_master_pipeline_set_state_listener(pipe, pipeline_state_change, cb);
+	if (pipe)
+	{
+		pipe->state_cb = pipeline_state_change;
+		pipe->state_user_data = cb;
+	}
 
 	return cb;
 }
@@ -134,7 +136,8 @@ void gst_render_callback_destroy(gst_render_callback_t *cb)
 
 	if (cb->pipeline)
 	{
-		gst_master_pipeline_set_state_listener(cb->pipeline, NULL, NULL);
+		cb->pipeline->state_cb = NULL;
+		cb->pipeline->state_user_data = NULL;
 	}
 
 	if (cb->hook_active)

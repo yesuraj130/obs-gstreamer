@@ -11,39 +11,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-obs_source_t *gst_resolve_target_source(gst_source_type_t type, const char *scene_name, const char *item_name)
-{
-	switch (type)
-	{
-		case GST_SOURCE_MAIN_OUTPUT:
-			return obs_get_output_source(0);
-
-		case GST_SOURCE_SCENE:
-		{
-			if (!scene_name || !*scene_name) return NULL;
-			obs_scene_t *sc = obs_get_scene_by_name(scene_name);
-			if (!sc) return NULL;
-			obs_source_t *src = obs_scene_get_source(sc);
-			if (src) obs_source_get_ref(src);
-			obs_scene_release(sc);
-			return src;
-		}
-
-		case GST_SOURCE_SCENE_ITEM:
-		{
-			if (!scene_name || !*scene_name || !item_name || !*item_name) return NULL;
-			obs_scene_t *sc = obs_get_scene_by_name(scene_name);
-			if (!sc) return NULL;
-			obs_sceneitem_t *item = obs_scene_find_source(sc, item_name);
-			obs_source_t *src = item ? obs_sceneitem_get_source(item) : NULL;
-			if (src) obs_source_get_ref(src);
-			obs_scene_release(sc);
-			return src;
-		}
-	}
-	return NULL;
-}
-
 static GstElement *create_master_encoder_pipeline(gst_master_pipeline_t *hub, const char *custom_master_pipe, const char *encoder_type, int bitrate_kbps, int keyint_sec)
 {
 	gchar *pipe_desc = NULL;
@@ -193,24 +160,9 @@ void gst_master_pipeline_push_raw_video(gst_master_pipeline_t *hub, struct video
 {
 	if (!hub || !frame || g_atomic_int_get(&hub->active_destinations) <= 0 || !hub->appsrc) return;
 
-	size_t size = hub->width * hub->height * 4;
-	GstBuffer *buf = gst_buffer_new_allocate(NULL, size, NULL);
+	size_t size = (size_t)frame->linesize[0] * hub->height;
+	GstBuffer *buf = gst_buffer_new_wrapped_full(GST_MEMORY_FLAG_READONLY, frame->data[0], size, 0, size, NULL, NULL);
 	if (!buf) return;
-
-	GstMapInfo map;
-	if (gst_buffer_map(buf, &map, GST_MAP_WRITE))
-	{
-		uint8_t *src = frame->data[0];
-		uint32_t src_linesize = frame->linesize[0];
-		uint32_t dst_linesize = hub->width * 4;
-		uint8_t *dst = map.data;
-
-		for (uint32_t y = 0; y < hub->height; y++)
-		{
-			memcpy(dst + y * dst_linesize, src + y * src_linesize, dst_linesize);
-		}
-		gst_buffer_unmap(buf, &map);
-	}
 
 	uint64_t duration = gst_util_uint64_scale_int(GST_SECOND, hub->fps_den, hub->fps_num);
 	GST_BUFFER_PTS(buf) = frame->timestamp;
@@ -221,92 +173,7 @@ void gst_master_pipeline_push_raw_video(gst_master_pipeline_t *hub, struct video
 	gst_app_src_push_buffer(GST_APP_SRC(hub->appsrc), buf);
 }
 
-void gst_master_pipeline_push_raw_frame(gst_master_pipeline_t *hub, const uint8_t *data, uint32_t linesize)
-{
-	UNUSED_PARAMETER(data);
-	UNUSED_PARAMETER(linesize);
-}
-
-gst_pipeline_subscriber_t *gst_master_pipeline_subscribe(gst_master_pipeline_t *hub, gst_master_frame_cb cb, gpointer user_data, const char *name)
-{
-	if (!hub) return NULL;
-
-	gst_pipeline_subscriber_t *sub = bzalloc(sizeof(gst_pipeline_subscriber_t));
-	sub->cb = cb;
-	sub->user_data = user_data;
-	sub->name = bstrdup(name ? name : "Subscriber");
-	sub->waiting_for_keyframe = true;
-
-	g_mutex_lock(&hub->subscriber_mutex);
-
-	GPtrArray *old_subs = (GPtrArray *)hub->subscribers_atomic;
-	GPtrArray *new_subs = g_ptr_array_new_full(old_subs ? old_subs->len + 1 : 1, g_free);
-
-	if (old_subs)
-	{
-		for (guint i = 0; i < old_subs->len; i++)
-		{
-			g_ptr_array_add(new_subs, g_ptr_array_index(old_subs, i));
-		}
-	}
-	g_ptr_array_add(new_subs, sub);
-	g_atomic_pointer_set(&hub->subscribers_atomic, new_subs);
-
-	g_mutex_unlock(&hub->subscriber_mutex);
-
-	if (old_subs) g_ptr_array_free(old_subs, TRUE);
-
-	blog(LOG_INFO, "[obs-gstreamer-master] Subscriber '%s' connected", sub->name);
-	return sub;
-}
-
-void gst_master_pipeline_unsubscribe(gst_master_pipeline_t *hub, gst_pipeline_subscriber_t *sub)
-{
-	if (!hub || !sub) return;
-
-	g_mutex_lock(&hub->subscriber_mutex);
-
-	GPtrArray *old_subs = (GPtrArray *)hub->subscribers_atomic;
-	GPtrArray *new_subs = g_ptr_array_new_full(old_subs ? old_subs->len : 1, g_free);
-
-	if (old_subs)
-	{
-		for (guint i = 0; i < old_subs->len; i++)
-		{
-			gst_pipeline_subscriber_t *existing = g_ptr_array_index(old_subs, i);
-			if (existing != sub) g_ptr_array_add(new_subs, existing);
-		}
-	}
-	g_atomic_pointer_set(&hub->subscribers_atomic, new_subs);
-
-	g_mutex_unlock(&hub->subscriber_mutex);
-
-	if (old_subs) g_ptr_array_free(old_subs, TRUE);
-
-	blog(LOG_INFO, "[obs-gstreamer-master] Subscriber '%s' disconnected", sub->name ? sub->name : "Subscriber");
-	bfree(sub->name);
-	bfree(sub);
-}
-
-void gst_master_pipeline_set_state_listener(gst_master_pipeline_t *hub, gst_master_state_cb cb, gpointer user_data)
-{
-	if (!hub) return;
-	g_mutex_lock(&hub->state_mutex);
-	hub->state_cb = cb;
-	hub->state_user_data = user_data;
-	bool is_active = g_atomic_int_get(&hub->active_destinations) > 0;
-	g_mutex_unlock(&hub->state_mutex);
-
-	if (cb) cb(is_active, user_data);
-}
-
-int gst_master_pipeline_get_active_destinations(gst_master_pipeline_t *hub)
-{
-	if (!hub) return 0;
-	return g_atomic_int_get(&hub->active_destinations);
-}
-
-void gst_master_pipeline_update_active_destinations(gst_master_pipeline_t *hub, int delta)
+static void update_active_destinations(gst_master_pipeline_t *hub, int delta)
 {
 	if (!hub) return;
 
@@ -348,12 +215,70 @@ void gst_master_pipeline_update_active_destinations(gst_master_pipeline_t *hub, 
 	}
 }
 
-void gst_master_pipeline_update_client_count(gst_master_pipeline_t *hub, int delta)
+gst_pipeline_subscriber_t *gst_master_pipeline_subscribe(gst_master_pipeline_t *hub, gst_master_frame_cb cb, gpointer user_data, const char *name)
 {
-	gst_master_pipeline_update_active_destinations(hub, delta);
+	if (!hub) return NULL;
+
+	gst_pipeline_subscriber_t *sub = bzalloc(sizeof(gst_pipeline_subscriber_t));
+	sub->cb = cb;
+	sub->user_data = user_data;
+	sub->name = bstrdup(name ? name : "Subscriber");
+	sub->waiting_for_keyframe = true;
+
+	g_mutex_lock(&hub->subscriber_mutex);
+
+	GPtrArray *old_subs = (GPtrArray *)hub->subscribers_atomic;
+	GPtrArray *new_subs = g_ptr_array_new_full(old_subs ? old_subs->len + 1 : 1, g_free);
+
+	if (old_subs)
+	{
+		for (guint i = 0; i < old_subs->len; i++)
+		{
+			g_ptr_array_add(new_subs, g_ptr_array_index(old_subs, i));
+		}
+	}
+	g_ptr_array_add(new_subs, sub);
+	g_atomic_pointer_set(&hub->subscribers_atomic, new_subs);
+
+	g_mutex_unlock(&hub->subscriber_mutex);
+
+	if (old_subs) g_ptr_array_free(old_subs, TRUE);
+
+	blog(LOG_INFO, "[obs-gstreamer-master] Subscriber '%s' connected", sub->name);
+	update_active_destinations(hub, 1);
+	return sub;
 }
 
-gst_master_pipeline_t *gst_master_pipeline_create(const char *custom_master_pipe, const char *encoder_type, int bitrate_kbps, int keyint_sec, uint32_t width, uint32_t height, uint32_t fps_num, uint32_t fps_den)
+void gst_master_pipeline_unsubscribe(gst_master_pipeline_t *hub, gst_pipeline_subscriber_t *sub)
+{
+	if (!hub || !sub) return;
+
+	g_mutex_lock(&hub->subscriber_mutex);
+
+	GPtrArray *old_subs = (GPtrArray *)hub->subscribers_atomic;
+	GPtrArray *new_subs = g_ptr_array_new_full(old_subs ? old_subs->len : 1, g_free);
+
+	if (old_subs)
+	{
+		for (guint i = 0; i < old_subs->len; i++)
+		{
+			gst_pipeline_subscriber_t *existing = g_ptr_array_index(old_subs, i);
+			if (existing != sub) g_ptr_array_add(new_subs, existing);
+		}
+	}
+	g_atomic_pointer_set(&hub->subscribers_atomic, new_subs);
+
+	g_mutex_unlock(&hub->subscriber_mutex);
+
+	if (old_subs) g_ptr_array_free(old_subs, TRUE);
+
+	blog(LOG_INFO, "[obs-gstreamer-master] Subscriber '%s' disconnected", sub->name ? sub->name : "Subscriber");
+	bfree(sub->name);
+	bfree(sub);
+	update_active_destinations(hub, -1);
+}
+
+gst_master_pipeline_t *gst_master_pipeline_create(const char *custom_master_pipe, const char *encoder_type, int bitrate_kbps, int keyint_sec, uint32_t width, uint32_t height, uint32_t fps_num, uint32_t fps_den, gst_master_state_cb state_cb, gpointer user_data)
 {
 	gst_master_pipeline_t *hub = bzalloc(sizeof(gst_master_pipeline_t));
 	g_mutex_init(&hub->subscriber_mutex);
@@ -363,6 +288,8 @@ gst_master_pipeline_t *gst_master_pipeline_create(const char *custom_master_pipe
 	hub->height = height;
 	hub->fps_num = fps_num;
 	hub->fps_den = fps_den;
+	hub->state_cb = state_cb;
+	hub->state_user_data = user_data;
 
 #ifdef _WIN32
 	GError *err = NULL;
@@ -405,14 +332,9 @@ gst_master_pipeline_t *gst_master_pipeline_create(const char *custom_master_pipe
 	GstAppSinkCallbacks sink_cbs = {NULL, NULL, video_new_sample_cb};
 	gst_app_sink_set_callbacks(GST_APP_SINK(hub->appsink), &sink_cbs, hub, NULL);
 
-	return hub;
-}
+	if (state_cb) state_cb(false, user_data);
 
-gst_master_pipeline_t *gst_master_pipeline_get_or_create(const char *source_type, const char *source_name, const char *custom_master_pipe, const char *encoder_type, int bitrate_kbps, int keyint_sec, uint32_t width, uint32_t height, uint32_t fps_num, uint32_t fps_den)
-{
-	UNUSED_PARAMETER(source_type);
-	UNUSED_PARAMETER(source_name);
-	return gst_master_pipeline_create(custom_master_pipe, encoder_type, bitrate_kbps, keyint_sec, width, height, fps_num, fps_den);
+	return hub;
 }
 
 void gst_master_pipeline_destroy(gst_master_pipeline_t *hub)
