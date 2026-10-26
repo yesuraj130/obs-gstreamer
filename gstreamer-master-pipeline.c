@@ -129,13 +129,7 @@ void gst_master_pipeline_push_raw_frame(gst_master_pipeline_t *hub, const uint8_
 #ifdef _WIN32
 	if (hub->d3d11_allocator && hub->d3d11_device)
 	{
-		mem = gst_d3d11_allocator_alloc_wrapped(
-			GST_D3D11_ALLOCATOR(hub->d3d11_allocator),
-			hub->d3d11_device,
-			(ID3D11Texture2D *)gpu_handle,
-			sizeof(void *),
-			NULL,
-			NULL);
+		mem = gst_d3d11_allocator_alloc_wrapped(GST_D3D11_ALLOCATOR(hub->d3d11_allocator), hub->d3d11_device, (ID3D11Texture2D *)gpu_handle, sizeof(void *), NULL, NULL);
 	}
 #else
 	if (hub->gl_context && hub->gl_allocator)
@@ -144,17 +138,7 @@ void gst_master_pipeline_push_raw_frame(gst_master_pipeline_t *hub, const uint8_
 		GstVideoInfo vinfo;
 		gst_video_info_set_format(&vinfo, GST_VIDEO_FORMAT_RGBA, hub->width, hub->height);
 
-		GstGLVideoAllocationParams *params = gst_gl_video_allocation_params_new_wrapped_texture(
-			hub->gl_context,
-			NULL,
-			&vinfo,
-			0,
-			NULL,
-			GST_GL_TEXTURE_TARGET_2D,
-			GST_GL_RGBA,
-			tex_id,
-			NULL,
-			NULL);
+		GstGLVideoAllocationParams *params = gst_gl_video_allocation_params_new_wrapped_texture(hub->gl_context, NULL, &vinfo, 0, NULL, GST_GL_TEXTURE_TARGET_2D, GST_GL_RGBA, tex_id, NULL, NULL);
 
 		if (params)
 		{
@@ -273,10 +257,8 @@ void gst_master_pipeline_update_client_count(gst_master_pipeline_t *hub, int del
 	if (prev == 0 && updated > 0)
 	{
 		blog(LOG_INFO, "[obs-gstreamer-master] First client connected! Activating master encoder pipeline.");
-		if (hub->pipe)
-		{
-			gst_element_set_state(hub->pipe, GST_STATE_PLAYING);
-		}
+		if (hub->pipe) gst_element_set_state(hub->pipe, GST_STATE_PLAYING);
+		
 		if (hub->appsink)
 		{
 			GstEvent *event = gst_video_event_new_upstream_force_key_unit(GST_CLOCK_TIME_NONE, TRUE, 0);
@@ -287,16 +269,11 @@ void gst_master_pipeline_update_client_count(gst_master_pipeline_t *hub, int del
 	{
 		blog(LOG_INFO, "[obs-gstreamer-master] Last client disconnected. Pausing encoder pipeline (0%% CPU/GPU usage).");
 		hub->first_frame_primed = false;
-		if (hub->pipe)
-		{
-			gst_element_set_state(hub->pipe, GST_STATE_PAUSED);
-		}
+		if (hub->pipe) gst_element_set_state(hub->pipe, GST_STATE_PAUSED);
 	}
 }
 
-gst_master_pipeline_t *gst_master_pipeline_get_or_create(const char *source_type, const char *source_name,
-                                                         const char *custom_master_pipe, const char *encoder_type,
-                                                         int bitrate_kbps, int keyint_sec, uint32_t width, uint32_t height, uint32_t fps_num, uint32_t fps_den)
+gst_master_pipeline_t *gst_master_pipeline_get_or_create(const char *source_type, const char *source_name, const char *custom_master_pipe, const char *encoder_type, int bitrate_kbps, int keyint_sec, uint32_t width, uint32_t height, uint32_t fps_num, uint32_t fps_den)
 {
 	gst_master_pipeline_t *hub = bzalloc(sizeof(gst_master_pipeline_t));
 	g_mutex_init(&hub->subscriber_mutex);
@@ -308,20 +285,25 @@ gst_master_pipeline_t *gst_master_pipeline_get_or_create(const char *source_type
 	hub->fps_num = fps_num;
 	hub->fps_den = fps_den;
 
-	if (strcmp(hub->source_type, "Scene") == 0) {
+	if (strcmp(hub->source_type, "Scene") == 0)
+	{
 		obs_scene_t *sc = obs_get_scene_by_name(hub->source_name);
 		hub->source = sc ? obs_scene_get_source(sc) : NULL;
 		if (hub->source) obs_source_get_ref(hub->source);
 		if (sc) obs_scene_release(sc);
-	} else if (strcmp(hub->source_type, "Source") == 0) {
+	}
+	else if (strcmp(hub->source_type, "Source") == 0)
+	{
 		hub->source = obs_get_source_by_name(hub->source_name);
-	} else {
+	}
+	else
+	{
 		hub->source = obs_get_output_source(0);
 	}
 
-	if (!hub->source) {
-		blog(LOG_ERROR, "[obs-gstreamer-master] Failed to resolve source '%s' of type '%s'",
-			hub->source_name, hub->source_type);
+	if (!hub->source)
+	{
+		blog(LOG_ERROR, "[obs-gstreamer-master] Failed to resolve source '%s' of type '%s'", hub->source_name, hub->source_type);
 		g_mutex_clear(&hub->subscriber_mutex);
 		bfree(hub->source_type);
 		bfree(hub->source_name);
@@ -337,7 +319,8 @@ gst_master_pipeline_t *gst_master_pipeline_get_or_create(const char *source_type
 	hub->texrender[1] = gs_texrender_create(GS_RGBA, GS_ZS_NONE);
 	obs_leave_graphics();
 
-	if (!hub->texrender[0] || !hub->texrender[1]) {
+	if (!hub->texrender[0] || !hub->texrender[1])
+	{
 		blog(LOG_ERROR, "[obs-gstreamer-master] Failed to allocate GPU texrender");
 		gst_master_pipeline_destroy(hub);
 		return NULL;
@@ -367,14 +350,16 @@ gst_master_pipeline_t *gst_master_pipeline_get_or_create(const char *source_type
 #endif
 
 	hub->pipe = create_master_encoder_pipeline(hub, custom_master_pipe, encoder_type, bitrate_kbps, keyint_sec);
-	if (!hub->pipe) {
+	if (!hub->pipe)
+	{
 		gst_master_pipeline_destroy(hub);
 		return NULL;
 	}
 
 	hub->appsrc = gst_bin_get_by_name(GST_BIN(hub->pipe), "hub_appsrc");
 	hub->appsink = gst_bin_get_by_name(GST_BIN(hub->pipe), "hub_appsink");
-	if (!hub->appsrc || !hub->appsink) {
+	if (!hub->appsrc || !hub->appsink)
+	{
 		blog(LOG_ERROR, "[obs-gstreamer-master] Master pipeline missing hub_appsrc or hub_appsink");
 		gst_master_pipeline_destroy(hub);
 		return NULL;
@@ -400,52 +385,63 @@ void gst_master_pipeline_destroy(gst_master_pipeline_t *hub)
 {
 	if (!hub) return;
 
-	if (hub->render_hook_active) {
+	if (hub->render_hook_active)
+	{
 		obs_remove_main_render_callback(hub_render_callback, hub);
 		hub->render_hook_active = false;
 	}
 
-	if (hub->rtsp_loop) {
+	if (hub->rtsp_loop)
+	{
 		g_main_loop_quit(hub->rtsp_loop);
 	}
-	if (hub->rtsp_thread) {
+	if (hub->rtsp_thread)
+	{
 		g_thread_join(hub->rtsp_thread);
 		hub->rtsp_thread = NULL;
 	}
-	if (hub->rtsp_loop) {
+	if (hub->rtsp_loop)
+	{
 		g_main_loop_unref(hub->rtsp_loop);
 		hub->rtsp_loop = NULL;
 	}
-	if (hub->rtsp_context) {
+	if (hub->rtsp_context)
+	{
 		g_main_context_unref(hub->rtsp_context);
 		hub->rtsp_context = NULL;
 	}
 
 #ifdef _WIN32
-	if (hub->d3d11_allocator) {
+	if (hub->d3d11_allocator)
+	{
 		gst_object_unref(hub->d3d11_allocator);
 		hub->d3d11_allocator = NULL;
 	}
-	if (hub->d3d11_device) {
+	if (hub->d3d11_device)
+	{
 		gst_object_unref(hub->d3d11_device);
 		hub->d3d11_device = NULL;
 	}
 #else
-	if (hub->gl_allocator) {
+	if (hub->gl_allocator)
+	{
 		gst_object_unref(hub->gl_allocator);
 		hub->gl_allocator = NULL;
 	}
-	if (hub->gl_context) {
+	if (hub->gl_context)
+	{
 		gst_object_unref(hub->gl_context);
 		hub->gl_context = NULL;
 	}
-	if (hub->gl_display) {
+	if (hub->gl_display)
+	{
 		gst_object_unref(hub->gl_display);
 		hub->gl_display = NULL;
 	}
 #endif
 
-	if (hub->pipe) {
+	if (hub->pipe)
+	{
 		gst_element_set_state(hub->pipe, GST_STATE_NULL);
 		if (hub->appsrc) gst_object_unref(hub->appsrc);
 		if (hub->appsink) gst_object_unref(hub->appsink);
@@ -454,19 +450,23 @@ void gst_master_pipeline_destroy(gst_master_pipeline_t *hub)
 	}
 
 	obs_enter_graphics();
-	for (int i = 0; i < 2; i++) {
-		if (hub->texrender[i]) {
+	for (int i = 0; i < 2; i++)
+	{
+		if (hub->texrender[i])
+		{
 			gs_texrender_destroy(hub->texrender[i]);
 			hub->texrender[i] = NULL;
 		}
 	}
 	obs_leave_graphics();
 
-	if (hub->view) {
+	if (hub->view)
+	{
 		obs_view_destroy(hub->view);
 		hub->view = NULL;
 	}
-	if (hub->source) {
+	if (hub->source)
+	{
 		obs_source_release(hub->source);
 		hub->source = NULL;
 	}
