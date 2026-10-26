@@ -144,6 +144,7 @@ gst_hub_branch_t *gst_render_hub_start_pipeline_branch(const char *name, const c
 		gst_source_type_t stype = GST_SOURCE_MAIN_OUTPUT;
 		if (source_type && strcmp(source_type, "Scene") == 0) stype = GST_SOURCE_SCENE;
 		else if (source_type && strcmp(source_type, "SceneItem") == 0) stype = GST_SOURCE_SCENE_ITEM;
+		else if (source_type && strcmp(source_type, "Source") == 0) stype = GST_SOURCE_SOURCE;
 
 		g_source_callback = gst_render_callback_create(stype, source_name, NULL, NULL, "x264enc", 4000, 1, fps_num, fps_den);
 		if (!g_source_callback) {
@@ -272,6 +273,7 @@ gst_hub_branch_t *gst_render_hub_start_branch(const gst_hub_output_params_t *par
 		gst_source_type_t stype = GST_SOURCE_MAIN_OUTPUT;
 		if (params->source_type && strcmp(params->source_type, "Scene") == 0) stype = GST_SOURCE_SCENE;
 		else if (params->source_type && strcmp(params->source_type, "SceneItem") == 0) stype = GST_SOURCE_SCENE_ITEM;
+		else if (params->source_type && strcmp(params->source_type, "Source") == 0) stype = GST_SOURCE_SOURCE;
 
 		g_source_callback = gst_render_callback_create(stype, params->source_name, NULL,
 		                                               params->master_pipeline, params->encoder_type,
