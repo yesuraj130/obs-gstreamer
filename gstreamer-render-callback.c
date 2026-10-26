@@ -78,15 +78,19 @@ static void pipeline_state_change(bool active, void *user_data)
 	}
 }
 
-gst_render_callback_t *gst_render_callback_create(gst_master_pipeline_t *pipe, gst_source_type_t type, const char *scene_name, const char *item_name, uint32_t width, uint32_t height)
+gst_render_callback_t *gst_render_callback_create(gst_source_type_t type, const char *scene_name, const char *item_name, const char *custom_master_pipe, const char *encoder_type, int bitrate_kbps, int keyint_sec, uint32_t width, uint32_t height, uint32_t fps_num, uint32_t fps_den)
 {
-	if (!pipe) return NULL;
-
 	gst_render_callback_t *cb = bzalloc(sizeof(gst_render_callback_t));
-	cb->pipeline = pipe;
 	cb->source_type = type;
-	cb->width = width ? width : pipe->width;
-	cb->height = height ? height : pipe->height;
+	cb->width = width ? width : 1280;
+	cb->height = height ? height : 720;
+
+	cb->pipeline = gst_master_pipeline_create(custom_master_pipe, encoder_type, bitrate_kbps, keyint_sec, cb->width, cb->height, fps_num, fps_den, pipeline_state_change, cb);
+	if (!cb->pipeline)
+	{
+		bfree(cb);
+		return NULL;
+	}
 
 	if (type == GST_SOURCE_SCENE_ITEM && scene_name && item_name)
 	{
@@ -107,6 +111,7 @@ gst_render_callback_t *gst_render_callback_create(gst_master_pipeline_t *pipe, g
 	if (!cb->source)
 	{
 		blog(LOG_ERROR, "[obs-gstreamer-render-callback] Failed to resolve target OBS source");
+		gst_master_pipeline_destroy(cb->pipeline);
 		bfree(cb);
 		return NULL;
 	}
@@ -121,29 +126,28 @@ gst_render_callback_t *gst_render_callback_create(gst_master_pipeline_t *pipe, g
 
 	cb->pingpong_idx = 0;
 
-	if (pipe)
-	{
-		pipe->state_cb = pipeline_state_change;
-		pipe->state_user_data = cb;
-	}
-
 	return cb;
+}
+
+gst_master_pipeline_t *gst_render_callback_get_pipeline(gst_render_callback_t *cb)
+{
+	return cb ? cb->pipeline : NULL;
 }
 
 void gst_render_callback_destroy(gst_render_callback_t *cb)
 {
 	if (!cb) return;
 
-	if (cb->pipeline)
-	{
-		cb->pipeline->state_cb = NULL;
-		cb->pipeline->state_user_data = NULL;
-	}
-
 	if (cb->hook_active)
 	{
 		obs_remove_main_render_callback(render_callback_handler, cb);
 		cb->hook_active = false;
+	}
+
+	if (cb->pipeline)
+	{
+		gst_master_pipeline_destroy(cb->pipeline);
+		cb->pipeline = NULL;
 	}
 
 	obs_enter_graphics();
@@ -168,6 +172,5 @@ void gst_render_callback_destroy(gst_render_callback_t *cb)
 		obs_source_release(cb->source);
 		cb->source = NULL;
 	}
-
 	bfree(cb);
 }

@@ -128,7 +128,7 @@ gst_hub_branch_t *gst_render_hub_start_pipeline_branch(const char *name, const c
 {
 	g_mutex_lock(&g_hub_mutex);
 
-	if (!g_master_pipe) {
+	if (!g_source_callback) {
 		struct obs_video_info ovi = {};
 		if (!obs_get_video_info(&ovi)) {
 			ovi.base_width = 1920;
@@ -141,18 +141,16 @@ gst_hub_branch_t *gst_render_hub_start_pipeline_branch(const char *name, const c
 		uint32_t fps_num = ovi.fps_num ? ovi.fps_num : 60;
 		uint32_t fps_den = ovi.fps_den ? ovi.fps_den : 1;
 
-		g_master_pipe = gst_master_pipeline_create(NULL, "x264enc", 4000, 1, width, height, fps_num, fps_den, NULL, NULL);
-		if (!g_master_pipe) {
-			g_mutex_unlock(&g_hub_mutex);
-			return NULL;
-		}
-
 		gst_source_type_t stype = GST_SOURCE_MAIN_OUTPUT;
 		if (source_type && strcmp(source_type, "Scene") == 0) stype = GST_SOURCE_SCENE;
 		else if (source_type && strcmp(source_type, "SceneItem") == 0) stype = GST_SOURCE_SCENE_ITEM;
+
+		g_source_callback = gst_render_callback_create(stype, source_name, NULL, NULL, "x264enc", 4000, 1, width, height, fps_num, fps_den);
 		if (!g_source_callback) {
-			g_source_callback = gst_render_callback_create(g_master_pipe, stype, source_name, NULL, width, height);
+			g_mutex_unlock(&g_hub_mutex);
+			return NULL;
 		}
+		g_master_pipe = gst_render_callback_get_pipeline(g_source_callback);
 	}
 
 	gchar *pipe_desc = NULL;
@@ -258,7 +256,7 @@ gst_hub_branch_t *gst_render_hub_start_branch(const gst_hub_output_params_t *par
 		g_rtsp_thread = g_thread_new("gst_hub_rtsp_loop", (GThreadFunc)g_main_loop_run, g_rtsp_loop);
 	}
 
-	if (!g_master_pipe) {
+	if (!g_source_callback) {
 		struct obs_video_info ovi = {};
 		if (!obs_get_video_info(&ovi)) {
 			ovi.base_width = 1920;
@@ -271,21 +269,19 @@ gst_hub_branch_t *gst_render_hub_start_branch(const gst_hub_output_params_t *par
 		uint32_t fps_num = ovi.fps_num ? ovi.fps_num : 60;
 		uint32_t fps_den = ovi.fps_den ? ovi.fps_den : 1;
 
-		g_master_pipe = gst_master_pipeline_create(params->master_pipeline, params->encoder_type,
-		                                          params->bitrate_kbps, params->keyint_sec,
-		                                          width, height, fps_num, fps_den,
-		                                          NULL, NULL);
-		if (!g_master_pipe) {
-			g_mutex_unlock(&g_hub_mutex);
-			return NULL;
-		}
-
 		gst_source_type_t stype = GST_SOURCE_MAIN_OUTPUT;
 		if (params->source_type && strcmp(params->source_type, "Scene") == 0) stype = GST_SOURCE_SCENE;
 		else if (params->source_type && strcmp(params->source_type, "SceneItem") == 0) stype = GST_SOURCE_SCENE_ITEM;
+
+		g_source_callback = gst_render_callback_create(stype, params->source_name, NULL,
+		                                               params->master_pipeline, params->encoder_type,
+		                                               params->bitrate_kbps, params->keyint_sec,
+		                                               width, height, fps_num, fps_den);
 		if (!g_source_callback) {
-			g_source_callback = gst_render_callback_create(g_master_pipe, stype, params->source_name, NULL, width, height);
+			g_mutex_unlock(&g_hub_mutex);
+			return NULL;
 		}
+		g_master_pipe = gst_render_callback_get_pipeline(g_source_callback);
 	}
 
 	const char *requested_service = "8554";

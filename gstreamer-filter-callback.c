@@ -93,14 +93,26 @@ static void pipeline_state_change(bool active, void *user_data)
 	cb->active = active;
 }
 
-gst_filter_callback_t *gst_filter_callback_create(gst_master_pipeline_t *pipe, gst_source_type_t type, const char *scene_name, const char *item_name)
+gst_filter_callback_t *gst_filter_callback_create(gst_source_type_t type, const char *scene_name, const char *item_name, const char *custom_master_pipe, const char *encoder_type, int bitrate_kbps, int keyint_sec, uint32_t width, uint32_t height, uint32_t fps_num, uint32_t fps_den)
 {
-	if (!pipe) return NULL;
+	gst_filter_callback_t *cb = bzalloc(sizeof(gst_filter_callback_t));
+
+	cb->pipeline = gst_master_pipeline_create(custom_master_pipe, encoder_type, bitrate_kbps, keyint_sec,
+	                                          width ? width : 1920, height ? height : 1080,
+	                                          fps_num, fps_den,
+	                                          pipeline_state_change, cb);
+	if (!cb->pipeline)
+	{
+		bfree(cb);
+		return NULL;
+	}
 
 	obs_source_t *target = gst_resolve_target_source(type, scene_name, item_name);
 	if (!target)
 	{
 		blog(LOG_ERROR, "[obs-gstreamer-filter-callback] Failed to resolve target OBS source");
+		gst_master_pipeline_destroy(cb->pipeline);
+		bfree(cb);
 		return NULL;
 	}
 
@@ -108,45 +120,45 @@ gst_filter_callback_t *gst_filter_callback_create(gst_master_pipeline_t *pipe, g
 	if (!filter)
 	{
 		obs_source_release(target);
+		gst_master_pipeline_destroy(cb->pipeline);
+		bfree(cb);
 		return NULL;
 	}
 
 	filter_private_data_t *priv = (filter_private_data_t *)obs_obj_get_data(filter);
 	if (priv)
 	{
-		priv->pipeline = pipe;
-		priv->active = (gst_master_pipeline_get_active_destinations(pipe) > 0);
+		priv->pipeline = cb->pipeline;
+		priv->active = false;
 	}
 
 	obs_source_filter_add(target, filter);
 
-	gst_filter_callback_t *cb = bzalloc(sizeof(gst_filter_callback_t));
 	cb->filter = filter;
 	cb->target = target;
-	cb->pipeline = pipe;
-	cb->active = (gst_master_pipeline_get_active_destinations(pipe) > 0);
+	cb->active = false;
 
-	if (pipe)
-	{
-		pipe->state_cb = pipeline_state_change;
-		pipe->state_user_data = cb;
-	}
 	return cb;
+}
+
+gst_master_pipeline_t *gst_filter_callback_get_pipeline(gst_filter_callback_t *cb)
+{
+	return cb ? cb->pipeline : NULL;
 }
 
 void gst_filter_callback_destroy(gst_filter_callback_t *cb)
 {
 	if (!cb) return;
 
-	if (cb->pipeline)
-	{
-		cb->pipeline->state_cb = NULL;
-		cb->pipeline->state_user_data = NULL;
-	}
-
 	if (cb->target && cb->filter)
 	{
 		obs_source_filter_remove(cb->target, cb->filter);
+	}
+
+	if (cb->pipeline)
+	{
+		gst_master_pipeline_destroy(cb->pipeline);
+		cb->pipeline = NULL;
 	}
 
 	if (cb->filter) obs_source_release(cb->filter);

@@ -114,16 +114,23 @@ static void pipeline_state_change(bool active, void *user_data)
 	}
 }
 
-gst_output_callback_t *gst_output_callback_create(gst_master_pipeline_t *pipe, gst_source_type_t type, const char *scene_name, const char *item_name)
+gst_output_callback_t *gst_output_callback_create(gst_source_type_t type, const char *scene_name, const char *item_name, const char *custom_master_pipe, const char *encoder_type, int bitrate_kbps, int keyint_sec, uint32_t width, uint32_t height, uint32_t fps_num, uint32_t fps_den)
 {
-	if (!pipe) return NULL;
-
 	obs_output_t *obs_out = obs_output_create("hjm-gstreamer-output-callback", "master_output_cb", NULL, NULL);
 	if (!obs_out) return NULL;
 
 	gst_output_callback_t *cb = (gst_output_callback_t *)obs_output_get_type_data(obs_out);
-	cb->pipeline = pipe;
 	cb->source_type = type;
+
+	cb->pipeline = gst_master_pipeline_create(custom_master_pipe, encoder_type, bitrate_kbps, keyint_sec,
+	                                          width ? width : 1920, height ? height : 1080,
+	                                          fps_num, fps_den,
+	                                          pipeline_state_change, cb);
+	if (!cb->pipeline)
+	{
+		obs_output_release(obs_out);
+		return NULL;
+	}
 
 	if (type == GST_SOURCE_MAIN_OUTPUT)
 	{
@@ -145,12 +152,12 @@ gst_output_callback_t *gst_output_callback_create(gst_master_pipeline_t *pipe, g
 		}
 	}
 
-	if (pipe)
-	{
-		pipe->state_cb = pipeline_state_change;
-		pipe->state_user_data = cb;
-	}
 	return cb;
+}
+
+gst_master_pipeline_t *gst_output_callback_get_pipeline(gst_output_callback_t *cb)
+{
+	return cb ? cb->pipeline : NULL;
 }
 
 void gst_output_callback_destroy(gst_output_callback_t *cb)
@@ -159,8 +166,8 @@ void gst_output_callback_destroy(gst_output_callback_t *cb)
 
 	if (cb->pipeline)
 	{
-		cb->pipeline->state_cb = NULL;
-		cb->pipeline->state_user_data = NULL;
+		gst_master_pipeline_destroy(cb->pipeline);
+		cb->pipeline = NULL;
 	}
 
 	if (cb->output)
