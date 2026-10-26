@@ -18,9 +18,11 @@ static GstElement *create_master_encoder_pipeline(gst_master_pipeline_t *hub, co
 #ifdef _WIN32
 	const char *gpu_mem_caps = "video/x-raw(memory:D3D11Memory)";
 	const char *convert_elem = "d3d11convert";
+	const char *download_elem = "d3d11convert ! d3d11download ! videoconvert";
 #else
 	const char *gpu_mem_caps = "video/x-raw(memory:GLMemory)";
 	const char *convert_elem = "glcolorconvert";
+	const char *download_elem = "glcolorconvert ! gldownload ! videoconvert";
 #endif
 
 	if (custom_master_pipe && custom_master_pipe[0])
@@ -42,7 +44,7 @@ static GstElement *create_master_encoder_pipeline(gst_master_pipeline_t *hub, co
 		else if (encoder_type && g_strcmp0(encoder_type, "vaapih264enc") == 0)
 			encoder_elem = g_strdup_printf("%s ! vaapih264enc keyframe-period=%d bitrate=%d", convert_elem, gop_size, bitrate);
 		else
-			encoder_elem = g_strdup_printf("%s ! x264enc tune=zerolatency speed-preset=ultrafast bframes=0 key-int-max=%d bitrate=%d", convert_elem, gop_size, bitrate);
+			encoder_elem = g_strdup_printf("%s ! x264enc tune=zerolatency speed-preset=ultrafast bframes=0 key-int-max=%d bitrate=%d", download_elem, gop_size, bitrate);
 
 		pipe_desc = g_strdup_printf(
 			"appsrc name=hub_appsrc is-live=true format=GST_FORMAT_TIME do-timestamp=true "
@@ -160,9 +162,35 @@ void gst_master_pipeline_push_raw_video(gst_master_pipeline_t *hub, struct video
 {
 	if (!hub || !frame || g_atomic_int_get(&hub->active_destinations) <= 0 || !hub->appsrc) return;
 
-	size_t size = (size_t)frame->linesize[0] * hub->height;
-	GstBuffer *buf = gst_buffer_new_wrapped_full(GST_MEMORY_FLAG_READONLY, frame->data[0], size, 0, size, NULL, NULL);
+	size_t plane0_size = (size_t)frame->linesize[0] * hub->height;
+	size_t plane1_size = frame->linesize[1] > 0 ? (size_t)frame->linesize[1] * (hub->height / 2) : 0;
+	size_t plane2_size = frame->linesize[2] > 0 ? (size_t)frame->linesize[2] * (hub->height / 2) : 0;
+	size_t total_size = plane0_size + plane1_size + plane2_size;
+	if (total_size == 0) return;
+
+	GstBuffer *buf = gst_buffer_new_allocate(NULL, total_size, NULL);
 	if (!buf) return;
+
+	GstMapInfo map;
+	if (gst_buffer_map(buf, &map, GST_MAP_WRITE))
+	{
+		uint8_t *dst = map.data;
+		if (frame->data[0] && plane0_size > 0)
+		{
+			memcpy(dst, frame->data[0], plane0_size);
+			dst += plane0_size;
+		}
+		if (frame->data[1] && plane1_size > 0)
+		{
+			memcpy(dst, frame->data[1], plane1_size);
+			dst += plane1_size;
+		}
+		if (frame->data[2] && plane2_size > 0)
+		{
+			memcpy(dst, frame->data[2], plane2_size);
+		}
+		gst_buffer_unmap(buf, &map);
+	}
 
 	uint64_t duration = gst_util_uint64_scale_int(GST_SECOND, hub->fps_den, hub->fps_num);
 	GST_BUFFER_PTS(buf) = frame->timestamp;
@@ -228,7 +256,7 @@ gst_pipeline_subscriber_t *gst_master_pipeline_subscribe(gst_master_pipeline_t *
 	g_mutex_lock(&hub->subscriber_mutex);
 
 	GPtrArray *old_subs = (GPtrArray *)hub->subscribers_atomic;
-	GPtrArray *new_subs = g_ptr_array_new_full(old_subs ? old_subs->len + 1 : 1, g_free);
+	GPtrArray *new_subs = g_ptr_array_new();
 
 	if (old_subs)
 	{
@@ -246,6 +274,14 @@ gst_pipeline_subscriber_t *gst_master_pipeline_subscribe(gst_master_pipeline_t *
 
 	blog(LOG_INFO, "[obs-gstreamer-master] Subscriber '%s' connected", sub->name);
 	update_active_destinations(hub, 1);
+
+	/* Request immediate IDR keyframe so the new subscriber receives video immediately */
+	if (hub->appsink)
+	{
+		GstEvent *event = gst_video_event_new_upstream_force_key_unit(GST_CLOCK_TIME_NONE, TRUE, 0);
+		gst_element_send_event(hub->appsink, event);
+	}
+
 	return sub;
 }
 
@@ -256,7 +292,7 @@ void gst_master_pipeline_unsubscribe(gst_master_pipeline_t *hub, gst_pipeline_su
 	g_mutex_lock(&hub->subscriber_mutex);
 
 	GPtrArray *old_subs = (GPtrArray *)hub->subscribers_atomic;
-	GPtrArray *new_subs = g_ptr_array_new_full(old_subs ? old_subs->len : 1, g_free);
+	GPtrArray *new_subs = g_ptr_array_new();
 
 	if (old_subs)
 	{
