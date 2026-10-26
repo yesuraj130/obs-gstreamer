@@ -487,21 +487,27 @@ gst_hub_branch_t *gst_render_hub_start_branch(const gst_hub_output_params_t *par
 		g_rtsp_thread = g_thread_new("gst_hub_rtsp_loop", (GThreadFunc)g_main_loop_run, g_rtsp_loop);
 	}
 
-	gst_source_type_t stype = parse_source_type(params->source_type);
-	gst_hub_cb_type_t cb_type = parse_cb_type(params->render_mode, stype);
+	gst_hub_source_pipe_t *sp = NULL;
+	gst_master_pipeline_t *pipeline = params->master_pipe;
 
-	gst_hub_source_pipe_t *sp = get_or_create_source_pipe(
-		cb_type,
-		stype,
-		params->source_name,
-		params->encoder_type,
-		params->master_pipeline,
-		params->bitrate_kbps,
-		params->keyint_sec);
+	if (!pipeline) {
+		gst_source_type_t stype = parse_source_type(params->source_type);
+		gst_hub_cb_type_t cb_type = parse_cb_type(params->render_mode, stype);
 
-	if (!sp) {
-		g_mutex_unlock(&g_hub_mutex);
-		return NULL;
+		sp = get_or_create_source_pipe(
+			cb_type,
+			stype,
+			params->source_name,
+			params->encoder_type,
+			params->master_pipeline,
+			params->bitrate_kbps,
+			params->keyint_sec);
+
+		if (!sp) {
+			g_mutex_unlock(&g_hub_mutex);
+			return NULL;
+		}
+		pipeline = sp->pipe;
 	}
 
 	const char *requested_service = "8554";
@@ -520,7 +526,7 @@ gst_hub_branch_t *gst_render_hub_start_branch(const gst_hub_output_params_t *par
 
 	gst_hub_server_entry_t *server_entry = get_or_create_rtsp_server(requested_service);
 	if (!server_entry) {
-		release_source_pipe(sp);
+		if (sp) release_source_pipe(sp);
 		g_mutex_unlock(&g_hub_mutex);
 		return NULL;
 	}
@@ -530,7 +536,7 @@ gst_hub_branch_t *gst_render_hub_start_branch(const gst_hub_output_params_t *par
 	branch->service = bstrdup(requested_service);
 	branch->mount_point = bstrdup(requested_mount);
 	branch->source_pipe = sp;
-	branch->pipeline = sp->pipe;
+	branch->pipeline = pipeline;
 	branch->server_entry = server_entry;
 	g_mutex_init(&branch->lock);
 
