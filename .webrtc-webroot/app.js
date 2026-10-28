@@ -180,10 +180,10 @@
     });
   }
 
-  // Restart VNC & OBS Studio
+  // Restart OBS Studio only
   btnRestartVnc.addEventListener('click', function () {
     vncStatusText.textContent = 'Restarting OBS...';
-    log('Triggering restart of OBS Studio and VNC session...', 'info');
+    log('Triggering restart of OBS Studio...', 'info');
 
     fetch('/api/vnc/start', { method: 'POST' })
       .then(function (res) { return res.json(); })
@@ -191,13 +191,34 @@
         log('OBS restart command completed', 'info');
         setTimeout(function () {
           checkVncStatus();
-          btnReloadIframe.click();
         }, 1500);
       })
       .catch(function (err) {
         log('Restart request error: ' + err.message, 'error');
       });
   });
+
+  // Restart Full PC (VNC, XFCE Desktop, Websockify, OBS)
+  var btnRestartPc = document.getElementById('btn-restart-pc');
+  if (btnRestartPc) {
+    btnRestartPc.addEventListener('click', function () {
+      vncStatusText.textContent = 'Restarting PC...';
+      log('Triggering full PC restart (VNC, Desktop, OBS)...', 'info');
+
+      fetch('/api/vnc/restart-pc', { method: 'POST' })
+        .then(function (res) { return res.json(); })
+        .then(function (data) {
+          log('Full PC restart completed', 'info');
+          setTimeout(function () {
+            checkVncStatus();
+            if (btnReloadIframe) btnReloadIframe.click();
+          }, 2000);
+        })
+        .catch(function (err) {
+          log('Full PC restart error: ' + err.message, 'error');
+        });
+    });
+  }
 
   var externalVncBadge = document.getElementById('external-vnc-badge');
   var externalVncAddr = document.getElementById('external-vnc-addr');

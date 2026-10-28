@@ -117,15 +117,22 @@ function checkPort(port, host, callback) {
   socket.connect(port, host);
 }
 
+let isRestarting = false;
+
 function ensureVNC(callback) {
-  checkPort(VNC_PORT, '127.0.0.1', (err, vncOnline) => {
+  if (isRestarting) {
+    if (callback) callback();
+    return;
+  }
+  exec('pgrep -x Xtigervnc >/dev/null && echo "1" || echo "0"', (err, stdout) => {
+    const vncOnline = stdout && stdout.trim() === '1';
     if (vncOnline) {
       ensureWebsockify(callback);
       return;
     }
     addLog('TigerVNC offline. Starting TigerVNC on :1...');
     const startVncScript = `
-      mkdir -p /root/.vnc
+      mkdir -p /root/.vnc /root/.config/tigervnc
       echo '#!/bin/sh
 unset SESSION_MANAGER
 unset DBUS_SESSION_BUS_ADDRESS
@@ -134,12 +141,14 @@ exec startxfce4' > /root/.vnc/xstartup
 
       echo "vncpassword" | vncpasswd -f > /root/.vnc/passwd 2>/dev/null || true
       chmod 600 /root/.vnc/passwd 2>/dev/null || true
+      cp /root/.vnc/passwd /root/.config/tigervnc/passwd 2>/dev/null || true
+      chmod 600 /root/.config/tigervnc/passwd 2>/dev/null || true
 
       vncserver -kill :1 >/dev/null 2>&1 || true
       rm -rf /tmp/.X1-lock /tmp/.X11-unix/X1 2>/dev/null || true
 
-      vncserver :1 -geometry 1280x800 -depth 24 -localhost no -SecurityTypes None >/tmp/vnc.log 2>&1 || \
-      vncserver :1 -geometry 1280x800 -depth 24 -localhost no >/tmp/vnc.log 2>&1 || true
+      vncserver :1 -geometry 1280x800 -depth 24 -localhost no -PasswordFile /root/.vnc/passwd -SecurityTypes VncAuth -UseBlacklist=0 -AlwaysShared=1 >/tmp/vnc.log 2>&1 || \
+      vncserver :1 -geometry 1280x800 -depth 24 -localhost no -UseBlacklist=0 -AlwaysShared=1 >/tmp/vnc.log 2>&1 || true
     `;
     exec(startVncScript, (startErr) => {
       if (startErr) addLog('VNC startup error: ' + startErr.message);
@@ -150,7 +159,8 @@ exec startxfce4' > /root/.vnc/xstartup
 }
 
 function ensureWebsockify(callback) {
-  checkPort(NOVNC_PORT, '127.0.0.1', (err, novncOnline) => {
+  exec('pgrep -x websockify >/dev/null && echo "1" || echo "0"', (err, stdout) => {
+    const novncOnline = stdout && stdout.trim() === '1';
     if (novncOnline) {
       if (callback) callback();
       return;
@@ -168,18 +178,68 @@ function ensureWebsockify(callback) {
 
 function restartOBSOnly(callback) {
   addLog('Restarting OBS Studio (preserving desktop & VNC connection)...');
-  ensureVNC(() => {
-    const restartCmd = `
-      pkill -9 -x obs 2>/dev/null || true
-      sleep 0.5
-      DISPLAY=:1 setsid obs >/tmp/obs.log 2>&1 < /dev/null &
-      sleep 1
-      DISPLAY=:1 wmctrl -r "OBS" -b add,maximized_vert,maximized_horz 2>/dev/null || true
-    `;
-    exec(restartCmd, (err) => {
-      if (err) addLog('OBS restart error: ' + err.message);
-      else addLog('OBS Studio restarted and active on desktop');
-      if (callback) callback(err);
+  isRestarting = true;
+  const restartCmd = `
+    pkill -9 -x obs 2>/dev/null || true
+    rm -rf /root/.config/obs-studio/.sentinel 2>/dev/null || true
+    sleep 0.5
+    DISPLAY=:1 setsid obs >/tmp/obs.log 2>&1 < /dev/null &
+    sleep 2.5
+    DISPLAY=:1 wmctrl -r "OBS" -b add,maximized_vert,maximized_horz 2>/dev/null || true
+  `;
+  exec(restartCmd, (err) => {
+    isRestarting = false;
+    if (err) addLog('OBS restart error: ' + err.message);
+    else addLog('OBS Studio restarted and active on desktop');
+    if (callback) callback(err);
+  });
+}
+
+function restartFullPC(callback) {
+  addLog('Restarting full PC environment (VNC, XFCE Desktop, Websockify, OBS)...');
+  isRestarting = true;
+  const fullRestartCmd = `
+    pkill -9 -x obs 2>/dev/null || true
+    pkill -9 -x thunar 2>/dev/null || true
+    pkill -9 -x xarchiver 2>/dev/null || true
+    pkill -9 -x firefox-esr 2>/dev/null || true
+    pkill -9 -x websockify 2>/dev/null || true
+    pkill -9 -x xfce4-session 2>/dev/null || true
+    pkill -9 -x xfwm4 2>/dev/null || true
+    pkill -9 -x xfce4-panel 2>/dev/null || true
+    pkill -9 -x xfdesktop 2>/dev/null || true
+    pkill -9 -x Xtigervnc 2>/dev/null || true
+    vncserver -kill :1 >/dev/null 2>&1 || true
+    rm -rf /tmp/.X1-lock /tmp/.X11-unix/X1 /root/.config/obs-studio/.sentinel 2>/dev/null || true
+    sleep 1
+
+    mkdir -p /root/.vnc /root/.config/tigervnc
+    echo "vncpassword" | vncpasswd -f > /root/.vnc/passwd 2>/dev/null || true
+    chmod 600 /root/.vnc/passwd 2>/dev/null || true
+    cp /root/.vnc/passwd /root/.config/tigervnc/passwd 2>/dev/null || true
+    chmod 600 /root/.config/tigervnc/passwd 2>/dev/null || true
+
+    vncserver :1 -geometry 1280x800 -depth 24 -localhost no -PasswordFile /root/.vnc/passwd -SecurityTypes VncAuth -UseBlacklist=0 -AlwaysShared=1 >/tmp/vnc.log 2>&1 || \
+    vncserver :1 -geometry 1280x800 -depth 24 -localhost no -UseBlacklist=0 -AlwaysShared=1 >/tmp/vnc.log 2>&1 || true
+
+    setsid websockify --web=/usr/share/novnc/ 6080 localhost:5901 >/tmp/websockify.log 2>&1 < /dev/null &
+    sleep 1.5
+    DISPLAY=:1 setsid obs >/tmp/obs.log 2>&1 < /dev/null &
+    sleep 2.5
+    DISPLAY=:1 wmctrl -r "OBS" -b add,maximized_vert,maximized_horz 2>/dev/null || true
+  `;
+  exec(fullRestartCmd, (err) => {
+    isRestarting = false;
+    if (err) addLog('Full PC restart error: ' + err.message);
+    else addLog('Full PC Desktop & OBS restarted');
+    ensureCustomModes(() => {
+      if (currentResolutionMode && currentResolutionMode !== 'auto') {
+        setVNCResolution(currentResolutionMode, () => {
+          if (callback) callback(err);
+        });
+      } else {
+        if (callback) callback(err);
+      }
     });
   });
 }
@@ -189,9 +249,10 @@ function startVNCAndOBS(callback) {
 }
 
 function ensureOBS() {
+  if (isRestarting) return;
   exec('pgrep -x obs >/dev/null && echo "1" || echo "0"', (err, stdout) => {
     if (stdout && stdout.trim() !== '1') {
-      exec('DISPLAY=:1 setsid obs >/tmp/obs.log 2>&1 < /dev/null &', () => {});
+      exec('rm -rf /root/.config/obs-studio/.sentinel 2>/dev/null || true; DISPLAY=:1 setsid obs >/tmp/obs.log 2>&1 < /dev/null &', () => {});
     }
   });
 }
@@ -243,6 +304,7 @@ ensureCustomModes();
 
 // Background supervisor to auto-heal desktop services & keep OBS open
 setInterval(() => {
+  if (isRestarting) return;
   ensureVNC(() => {
     ensureOBS();
   });
@@ -344,12 +406,14 @@ const server = http.createServer((req, res) => {
 
   // API VNC Status & Health Check
   if (req.url === '/api/vnc/status') {
-    checkPort(VNC_PORT, '127.0.0.1', (err, vncOnline) => {
-      checkPort(NOVNC_PORT, '127.0.0.1', (err2, novncOnline) => {
+    exec('pgrep -x Xtigervnc >/dev/null && echo "1" || echo "0"', (err, vncOut) => {
+      const vncOnline = vncOut && vncOut.trim() === '1';
+      exec('pgrep -x websockify >/dev/null && echo "1" || echo "0"', (err2, wsOut) => {
+        const novncOnline = wsOut && wsOut.trim() === '1';
         exec('pgrep -x obs >/dev/null && echo "1" || echo "0"', (err3, stdout) => {
-          const obsRunning = stdout.trim() === '1';
+          const obsRunning = stdout && stdout.trim() === '1';
           exec('which vncserver websockify obs >/dev/null && echo "1" || echo "0"', (err4, outInstalled) => {
-            const isInstalled = outInstalled.trim() === '1';
+            const isInstalled = outInstalled && outInstalled.trim() === '1';
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({
               vncOnline,
@@ -392,13 +456,25 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  // API VNC Start/Restart trigger
+  // API VNC Start/Restart trigger (Restart OBS Only)
   if (req.url === '/api/vnc/start' && req.method === 'POST') {
     startVNCAndOBS((err) => {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
         success: !err,
-        message: err ? err.message : 'VNC and OBS startup initiated'
+        message: err ? err.message : 'OBS startup initiated'
+      }));
+    });
+    return;
+  }
+
+  // API Full PC Restart trigger (VNC + Desktop + OBS)
+  if (req.url === '/api/vnc/restart-pc' && req.method === 'POST') {
+    restartFullPC((err) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        success: !err,
+        message: err ? err.message : 'Full PC restart completed'
       }));
     });
     return;

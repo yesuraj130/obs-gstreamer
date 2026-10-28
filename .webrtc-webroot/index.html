@@ -50,17 +50,24 @@
     </div>
 
     <!-- Quick Status Badges & Controls -->
-    <div class="flex items-center gap-2.5">
-      <div id="vnc-header-status" class="flex items-center gap-1.5 px-2.5 py-1 rounded bg-slate-800/80 border border-slate-700 text-xs text-slate-300">
+    <div class="flex flex-wrap items-center gap-2">
+      <div id="vnc-header-status" class="flex items-center gap-1.5 px-2 py-1 rounded bg-slate-800/80 border border-slate-700 text-xs text-slate-300">
         <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
         <span id="vnc-status-text">VNC :5901 Ready</span>
       </div>
 
-      <button id="btn-restart-vnc" class="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white px-2.5 py-1 rounded border border-slate-700 flex items-center gap-1.5 transition" title="Restart OBS Studio & VNC Desktop">
+      <button id="btn-restart-vnc" class="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white px-2.5 py-1 rounded border border-slate-700 flex items-center gap-1.5 transition" title="Restart OBS Studio only">
         <svg class="w-3.5 h-3.5 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
         </svg>
         Restart OBS
+      </button>
+
+      <button id="btn-restart-pc" class="text-xs bg-slate-800 hover:bg-rose-900/60 text-slate-300 hover:text-rose-200 px-2.5 py-1 rounded border border-slate-700 hover:border-rose-700/70 flex items-center gap-1.5 transition" title="Restart entire VNC Desktop, XFCE & OBS Studio">
+        <svg class="w-3.5 h-3.5 text-rose-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+        </svg>
+        Restart PC
       </button>
 
       <button id="btn-open-guide" class="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white px-2.5 py-1 rounded border border-slate-700 flex items-center gap-1 transition">
@@ -74,38 +81,38 @@
 
   <!-- VIEW 1: Remote Desktop (noVNC + OBS Studio GUI) -->
   <div id="view-vnc" class="flex-1 flex flex-col bg-slate-950 overflow-hidden relative">
-    <!-- Sub-header bar with desktop controls -->
-    <div class="bg-slate-900 border-b border-slate-800 px-4 py-1.5 flex items-center justify-between text-xs text-slate-400 shrink-0">
-      <div class="flex items-center gap-3">
-        <span class="flex items-center gap-1.5 text-slate-300 font-medium">
+    <!-- Sub-header bar with desktop controls (responsive wrap for mobile portrait) -->
+    <div class="bg-slate-900 border-b border-slate-800 px-2.5 sm:px-4 py-1.5 flex flex-wrap items-center justify-between gap-y-1.5 gap-x-2 text-xs text-slate-400 shrink-0">
+      <div class="flex flex-wrap items-center gap-y-1.5 gap-x-2 sm:gap-x-3 max-w-full">
+        <span class="hidden md:flex items-center gap-1.5 text-slate-300 font-medium">
           <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
-          Remote Desktop: OBS Studio (Linux X11)
+          Remote Desktop: OBS Studio
         </span>
-        <span class="text-slate-600">|</span>
+        <span class="hidden md:inline text-slate-600">|</span>
         <div class="flex items-center gap-1.5">
-          <span class="text-slate-400">Resolution:</span>
-          <select id="select-resolution" class="bg-slate-950 text-indigo-300 text-xs px-2 py-0.5 rounded border border-slate-700 hover:border-slate-500 focus:outline-none focus:border-indigo-500 font-mono transition cursor-pointer">
-            <option value="auto">Auto (Dynamic Browser)</option>
-            <option value="1280x720">1280x720 (720p Landscape)</option>
-            <option value="720x1280">720x1280 (720p Portrait)</option>
-            <option value="1920x1080">1920x1080 (1080p Landscape)</option>
-            <option value="1080x1920">1080x1920 (1080p Portrait)</option>
-            <option value="1280x800">1280x800 (16:10 Desktop)</option>
+          <span class="text-slate-400">Res:</span>
+          <select id="select-resolution" class="bg-slate-950 text-indigo-300 text-xs px-1.5 py-0.5 rounded border border-slate-700 hover:border-slate-500 focus:outline-none focus:border-indigo-500 font-mono transition cursor-pointer max-w-[165px] sm:max-w-none">
+            <option value="auto">Auto (Dynamic)</option>
+            <option value="1280x720">1280x720 (Landscape)</option>
+            <option value="720x1280">720x1280 (Portrait)</option>
+            <option value="1920x1080">1920x1080 (Landscape)</option>
+            <option value="1080x1920">1080x1920 (Portrait)</option>
+            <option value="1280x800">1280x800 (Desktop)</option>
           </select>
         </div>
-        <span class="text-slate-600">|</span>
-        <span>Password: <code class="bg-slate-950 text-indigo-300 px-1 py-0.5 rounded border border-slate-800 font-mono">vncpassword</code></span>
-        <span class="text-slate-600">|</span>
-        <span class="flex items-center gap-1.5">
-          <span class="text-slate-400">External VNC IP:Port:</span>
-          <span id="external-vnc-badge" class="bg-slate-950 text-emerald-300 px-1.5 py-0.5 rounded border border-emerald-800/80 font-mono flex items-center gap-1 cursor-pointer hover:border-emerald-400 transition" title="Click to copy IP/Port">
-            <span id="external-vnc-dot" class="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
-            <span id="external-vnc-addr">Connecting tunnel...</span>
+        <span class="hidden sm:inline text-slate-600">|</span>
+        <span class="flex items-center gap-1">Pass: <code class="bg-slate-950 text-indigo-300 px-1 py-0.5 rounded border border-slate-800 font-mono">vncpassword</code></span>
+        <span class="hidden sm:inline text-slate-600">|</span>
+        <span class="flex items-center gap-1 min-w-0 max-w-full">
+          <span class="text-slate-400 shrink-0">VNC IP:</span>
+          <span id="external-vnc-badge" class="bg-slate-950 text-emerald-300 px-1.5 py-0.5 rounded border border-emerald-800/80 font-mono flex items-center gap-1 cursor-pointer hover:border-emerald-400 transition min-w-0 max-w-[190px] sm:max-w-none" title="Click to copy IP/Port">
+            <span id="external-vnc-dot" class="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0"></span>
+            <span id="external-vnc-addr" class="truncate">Connecting tunnel...</span>
           </span>
         </span>
       </div>
 
-      <div class="flex items-center gap-2">
+      <div class="flex items-center gap-1.5 shrink-0">
         <button id="btn-reload-iframe" class="hover:text-white px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 transition flex items-center gap-1">
           <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
@@ -116,7 +123,7 @@
           <svg class="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
           </svg>
-          Open in New Tab
+          <span>New Tab</span>
         </a>
       </div>
     </div>
