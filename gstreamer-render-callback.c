@@ -4,6 +4,7 @@
 
 #include "gstreamer-render-callback.h"
 #include <obs-module.h>
+#include <util/platform.h>
 
 struct gst_render_callback
 {

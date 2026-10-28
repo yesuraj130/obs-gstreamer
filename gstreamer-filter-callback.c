@@ -4,6 +4,7 @@
 
 #include "gstreamer-filter-callback.h"
 #include <obs-module.h>
+#include <util/platform.h>
 
 struct gst_filter_callback
 {
