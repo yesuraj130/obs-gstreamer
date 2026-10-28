@@ -14,7 +14,7 @@ jobs:
   # Native MSVC Build (Pure C, Zero Qt)
   # =========================================================================
   build-win64-obs30:
-    name: "Windows 10/11 / OBS 30+ (64-bit MSVC Pure C)"
+    name: "Windows 10/11 / OBS 30+ (64-bit MSVC with Qt 6 Dock)"
     runs-on: windows-latest
     steps:
       - name: Checkout repository
@@ -234,7 +234,23 @@ jobs:
           )
           $frontendLines | Out-File -FilePath "obs-sdk\lib\pkgconfig\obs-frontend-api.pc" -Encoding ascii
 
-      - name: Configure and Compile with Meson and Ninja (MSVC Pure C)
+          if ($env:QTDIR) {
+            $qtPathFwd = $env:QTDIR.Replace("\", "/")
+            $qt6Lines = @(
+              "prefix=" + $qtPathFwd,
+              "libdir=`${prefix}/lib",
+              "includedir=`${prefix}/include",
+              "",
+              "Name: qt6",
+              "Description: Qt 6 suite for Windows",
+              "Version: 6.6.3",
+              "Libs: -L`${libdir} -lQt6Core -lQt6Gui -lQt6Widgets",
+              "Cflags: -I`${includedir} -I`${includedir}/QtCore -I`${includedir}/QtGui -I`${includedir}/QtWidgets"
+            )
+            $qt6Lines | Out-File -FilePath "obs-sdk\lib\pkgconfig\qt6.pc" -Encoding ascii
+          }
+
+      - name: Configure and Compile with Meson and Ninja (MSVC with Qt 6 Dock)
         shell: pwsh
         run: |
           # 1. Resolve GStreamer root and pkgconfig directory
@@ -290,12 +306,15 @@ jobs:
           # Add directories to PATH, PKG_CONFIG_PATH, INCLUDE, and LIB
           $env:PATH = "$gstRoot\bin;$($env:QTDIR)\bin;C:\ProgramData\chocolatey\bin;$env:PATH"
           $env:PKG_CONFIG_PATH = "$sdkPkgPath;$gstPkgPath;$sdkPkgFwd;$gstPkgFwd"
-          $env:INCLUDE = "$sdkFullPath\include\obs;$sdkFullPath\include;$gstRoot\include\gstreamer-1.0;$gstRoot\lib\gstreamer-1.0\include;$env:INCLUDE"
-          $env:LIB = "$sdkFullPath\lib;$gstRoot\lib;$env:LIB"
+          $env:INCLUDE = "$sdkFullPath\include\obs;$sdkFullPath\include;$($env:QTDIR)\include;$($env:QTDIR)\include\QtCore;$($env:QTDIR)\include\QtGui;$($env:QTDIR)\include\QtWidgets;$gstRoot\include\gstreamer-1.0;$gstRoot\lib\gstreamer-1.0\include;$env:INCLUDE"
+          $env:LIB = "$sdkFullPath\lib;$($env:QTDIR)\lib;$gstRoot\lib;$env:LIB"
 
           Write-Host "Verifying pkg-config resolution..."
           & $env:PKG_CONFIG --version
           & $env:PKG_CONFIG --modversion gstreamer-1.0
+          if ($env:QTDIR) {
+            & $env:PKG_CONFIG --modversion qt6
+          }
 
           $sdkIncludeFwd = $sdkFullPath.Replace('\', '/')
           $qtFwd = if ($env:QTDIR) { $env:QTDIR.Replace('\', '/') } else { "" }
@@ -304,6 +323,7 @@ jobs:
           meson setup build-win64 `
             --buildtype release `
             -Dcpp_std=c++17 `
+            -Ddock=enabled `
             -Dwebrtc=disabled `
             -Dpkg_config_path="$sdkPkgFwd,$gstPkgFwd" `
             -Dc_args="-I$sdkIncludeFwd/include/obs -I$sdkIncludeFwd/include" `
@@ -329,8 +349,8 @@ jobs:
   # Target 2: Linux (x86_64) Native (Latest OBS Studio 30+)
   # =========================================================================
   build-linux:
-    name: "Linux (64-bit x86_64, OBS 32+ Qt 6)"
-    runs-on: ubuntu-latest
+    name: "Linux (Ubuntu 24.04 x86_64, OBS 32+ Qt 6)"
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4

@@ -52,7 +52,19 @@ dock_opt = get_option('dock')
 qt_dep = dependency('', required : false)
 if not dock_opt.disabled()
   qt6 = import('qt6', required : false)
-  qt_dep = dependency('qt6', version : '>= 6.4.0', modules : ['Core', 'Gui', 'Widgets'], required : dock_opt.enabled())
+  qt_dep = dependency('qt6', version : '>= 6.4.0', modules : ['Core', 'Gui', 'Widgets'], required : false)
+  if not qt_dep.found()
+    cpp = meson.get_compiler('cpp')
+    qt_core = cpp.find_library('Qt6Core', required : false)
+    qt_gui = cpp.find_library('Qt6Gui', required : false)
+    qt_widgets = cpp.find_library('Qt6Widgets', required : false)
+    if qt_core.found() and qt_gui.found() and qt_widgets.found()
+      qt_dep = declare_dependency(dependencies : [qt_core, qt_gui, qt_widgets])
+    endif
+  endif
+  if dock_opt.enabled() and not qt_dep.found()
+    error('Qt6 (Core, Gui, Widgets) >= 6.4.0 was requested (-Ddock=enabled) but not found.')
+  endif
 endif
 
 webrtc_opt = get_option('webrtc')
