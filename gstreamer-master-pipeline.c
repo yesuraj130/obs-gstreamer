@@ -15,14 +15,18 @@ static GstElement *create_master_encoder_pipeline(gst_master_pipeline_t *hub, co
 {
 	gchar *pipe_desc = NULL;
 
-#ifdef _WIN32
+#if defined(_WIN32) && defined(HAVE_GST_D3D11) && HAVE_GST_D3D11
 	const char *gpu_mem_caps = "video/x-raw(memory:D3D11Memory)";
 	const char *convert_elem = "d3d11convert";
 	const char *download_elem = "d3d11convert ! d3d11download ! videoconvert";
-#else
+#elif defined(HAVE_GST_GL) && HAVE_GST_GL
 	const char *gpu_mem_caps = "video/x-raw(memory:GLMemory)";
 	const char *convert_elem = "glcolorconvert";
 	const char *download_elem = "glcolorconvert ! gldownload ! videoconvert";
+#else
+	const char *gpu_mem_caps = "video/x-raw";
+	const char *convert_elem = "videoconvert";
+	const char *download_elem = "videoconvert";
 #endif
 
 	if (custom_master_pipe && custom_master_pipe[0])
@@ -112,12 +116,12 @@ void gst_master_pipeline_push_texture(gst_master_pipeline_t *hub, void *gpu_hand
 
 	GstMemory *mem = NULL;
 
-#ifdef _WIN32
+#if defined(_WIN32) && defined(HAVE_GST_D3D11) && HAVE_GST_D3D11
 	if (hub->d3d11_allocator && hub->d3d11_device)
 	{
 		mem = gst_d3d11_allocator_alloc_wrapped(GST_D3D11_ALLOCATOR(hub->d3d11_allocator), hub->d3d11_device, (ID3D11Texture2D *)gpu_handle, sizeof(void *), NULL, NULL);
 	}
-#else
+#elif defined(HAVE_GST_GL) && HAVE_GST_GL
 	if (hub->gl_context && hub->gl_allocator)
 	{
 		GLuint tex_id = (GLuint)(uintptr_t)gpu_handle;
@@ -132,6 +136,8 @@ void gst_master_pipeline_push_texture(gst_master_pipeline_t *hub, void *gpu_hand
 			gst_gl_allocation_params_free((GstGLAllocationParams *)params);
 		}
 	}
+#else
+	UNUSED_PARAMETER(gpu_handle);
 #endif
 
 	if (!mem)
@@ -327,14 +333,14 @@ gst_master_pipeline_t *gst_master_pipeline_create(const char *custom_master_pipe
 	hub->state_cb = state_cb;
 	hub->state_user_data = user_data;
 
-#ifdef _WIN32
+#if defined(_WIN32) && defined(HAVE_GST_D3D11) && HAVE_GST_D3D11
 	GError *err = NULL;
 	hub->d3d11_device = gst_d3d11_device_new(0, &err);
 	if (hub->d3d11_device)
 	{
 		hub->d3d11_allocator = GST_ALLOCATOR(gst_d3d11_allocator_new(hub->d3d11_device));
 	}
-#else
+#elif defined(HAVE_GST_GL) && HAVE_GST_GL
 	hub->gl_display = gst_gl_display_new();
 	if (hub->gl_display)
 	{
@@ -377,7 +383,7 @@ void gst_master_pipeline_destroy(gst_master_pipeline_t *hub)
 {
 	if (!hub) return;
 
-#ifdef _WIN32
+#if defined(_WIN32) && defined(HAVE_GST_D3D11) && HAVE_GST_D3D11
 	if (hub->d3d11_allocator)
 	{
 		gst_object_unref(hub->d3d11_allocator);
@@ -388,7 +394,7 @@ void gst_master_pipeline_destroy(gst_master_pipeline_t *hub)
 		gst_object_unref(hub->d3d11_device);
 		hub->d3d11_device = NULL;
 	}
-#else
+#elif defined(HAVE_GST_GL) && HAVE_GST_GL
 	if (hub->gl_allocator)
 	{
 		gst_object_unref(hub->gl_allocator);

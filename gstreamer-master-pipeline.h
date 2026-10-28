@@ -10,9 +10,9 @@
 #include <gst/gst.h>
 #include <obs.h>
 
-#ifdef _WIN32
+#if defined(_WIN32) && defined(HAVE_GST_D3D11) && HAVE_GST_D3D11
 #include <gst/d3d11/gstd3d11.h>
-#else
+#elif defined(HAVE_GST_GL) && HAVE_GST_GL
 #include <gst/gl/gstgl.h>
 #endif
 
@@ -47,10 +47,10 @@ struct gst_master_pipeline
 	GstElement *appsrc;
 	GstElement *appsink;
 
-#ifdef _WIN32
+#if defined(_WIN32) && defined(HAVE_GST_D3D11) && HAVE_GST_D3D11
 	GstD3D11Device *d3d11_device;
 	GstAllocator *d3d11_allocator;
-#else
+#elif defined(HAVE_GST_GL) && HAVE_GST_GL
 	GstGLDisplay *gl_display;
 	GstGLContext *gl_context;
 	GstAllocator *gl_allocator;
