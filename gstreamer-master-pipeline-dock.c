@@ -46,7 +46,7 @@
 /* --------------------------------------------------------------------------
  * State Management for Master Pipeline & Destinations
  * -------------------------------------------------------------------------- */
-typedef struct {
+struct gstreamer_master_dock {
 	/* Master Source & Encoder */
 	char *pipeline_name;
 	char *source_type;      /* "Program Output", "Scene", "Source" */
@@ -64,7 +64,7 @@ typedef struct {
 	char *rtsp_mount;
 	char *rtsp_pipeline;
 	bool rtsp_autostart;
-	gst_hub_branch_t *rtsp_branch;
+	struct gst_hub_branch *rtsp_branch;
 
 	/* Destination 2: WebRTC (WHEP) */
 	bool webrtc_enabled;
@@ -85,9 +85,9 @@ typedef struct {
 	obs_source_t *source_obj;
 	obs_view_t *view_obj;
 	video_t *custom_video;
-} gstreamer_master_dock_t;
+};
 
-static gstreamer_master_dock_t g_master_dock = {
+static struct gstreamer_master_dock g_master_dock = {
 	.bitrate_kbps = 4000,
 	.keyint_sec = 1,
 	.rtsp_enabled = true,
@@ -121,7 +121,7 @@ static bool enum_scenes_cb(void *param, obs_source_t *scene)
 /* --------------------------------------------------------------------------
  * Destination Control Helpers
  * -------------------------------------------------------------------------- */
-static void stop_rtsp_destination(gstreamer_master_dock_t *dock)
+static void stop_rtsp_destination(struct gstreamer_master_dock *dock)
 {
 	if (dock->rtsp_branch) {
 		blog(LOG_INFO, "[obs-gstreamer-dock] Stopping RTSP server branch (port: %s, mount: %s)",
@@ -132,7 +132,7 @@ static void stop_rtsp_destination(gstreamer_master_dock_t *dock)
 	}
 }
 
-static bool start_rtsp_destination(gstreamer_master_dock_t *dock)
+static bool start_rtsp_destination(struct gstreamer_master_dock *dock)
 {
 	stop_rtsp_destination(dock);
 
@@ -177,7 +177,7 @@ static bool start_rtsp_destination(gstreamer_master_dock_t *dock)
 	return true;
 }
 
-static void stop_webrtc_destination(gstreamer_master_dock_t *dock)
+static void stop_webrtc_destination(struct gstreamer_master_dock *dock)
 {
 	if (dock->webrtc_output) {
 		if (obs_output_active(dock->webrtc_output)) {
@@ -189,7 +189,7 @@ static void stop_webrtc_destination(gstreamer_master_dock_t *dock)
 	}
 }
 
-static bool start_webrtc_destination(gstreamer_master_dock_t *dock)
+static bool start_webrtc_destination(struct gstreamer_master_dock *dock)
 {
 	stop_webrtc_destination(dock);
 
@@ -221,7 +221,7 @@ static bool start_webrtc_destination(gstreamer_master_dock_t *dock)
 	return true;
 }
 
-static void stop_custom_destination(gstreamer_master_dock_t *dock)
+static void stop_custom_destination(struct gstreamer_master_dock *dock)
 {
 	if (dock->custom_output) {
 		if (obs_output_active(dock->custom_output)) {
@@ -233,7 +233,7 @@ static void stop_custom_destination(gstreamer_master_dock_t *dock)
 	}
 }
 
-static bool start_custom_destination(gstreamer_master_dock_t *dock)
+static bool start_custom_destination(struct gstreamer_master_dock *dock)
 {
 	stop_custom_destination(dock);
 
@@ -268,7 +268,7 @@ static bool on_start_all_clicked(obs_properties_t *props, obs_property_t *p, voi
 {
 	UNUSED_PARAMETER(props);
 	UNUSED_PARAMETER(p);
-	gstreamer_master_dock_t *dock = (gstreamer_master_dock_t *)data;
+	struct gstreamer_master_dock *dock = (struct gstreamer_master_dock *)data;
 	if (!dock) dock = &g_master_dock;
 
 	blog(LOG_INFO, "[obs-gstreamer-dock] Starting all active destination branches...");
@@ -282,7 +282,7 @@ static bool on_stop_all_clicked(obs_properties_t *props, obs_property_t *p, void
 {
 	UNUSED_PARAMETER(props);
 	UNUSED_PARAMETER(p);
-	gstreamer_master_dock_t *dock = (gstreamer_master_dock_t *)data;
+	struct gstreamer_master_dock *dock = (struct gstreamer_master_dock *)data;
 	if (!dock) dock = &g_master_dock;
 
 	blog(LOG_INFO, "[obs-gstreamer-dock] Stopping all active destination branches...");
@@ -296,7 +296,7 @@ static bool on_toggle_rtsp_clicked(obs_properties_t *props, obs_property_t *p, v
 {
 	UNUSED_PARAMETER(props);
 	UNUSED_PARAMETER(p);
-	gstreamer_master_dock_t *dock = (gstreamer_master_dock_t *)data;
+	struct gstreamer_master_dock *dock = (struct gstreamer_master_dock *)data;
 	if (!dock) dock = &g_master_dock;
 
 	if (dock->rtsp_branch && gst_render_hub_is_branch_active(dock->rtsp_branch)) {
@@ -311,7 +311,7 @@ static bool on_toggle_webrtc_clicked(obs_properties_t *props, obs_property_t *p,
 {
 	UNUSED_PARAMETER(props);
 	UNUSED_PARAMETER(p);
-	gstreamer_master_dock_t *dock = (gstreamer_master_dock_t *)data;
+	struct gstreamer_master_dock *dock = (struct gstreamer_master_dock *)data;
 	if (!dock) dock = &g_master_dock;
 
 	if (dock->webrtc_output && obs_output_active(dock->webrtc_output)) {
@@ -326,7 +326,7 @@ static bool on_toggle_custom_clicked(obs_properties_t *props, obs_property_t *p,
 {
 	UNUSED_PARAMETER(props);
 	UNUSED_PARAMETER(p);
-	gstreamer_master_dock_t *dock = (gstreamer_master_dock_t *)data;
+	struct gstreamer_master_dock *dock = (struct gstreamer_master_dock *)data;
 	if (!dock) dock = &g_master_dock;
 
 	if (dock->custom_output && obs_output_active(dock->custom_output)) {
@@ -360,7 +360,7 @@ static bool on_source_type_modified(obs_properties_t *props, obs_property_t *p, 
  * -------------------------------------------------------------------------- */
 obs_properties_t *gstreamer_master_pipeline_get_properties(void *data)
 {
-	gstreamer_master_dock_t *dock = (gstreamer_master_dock_t *)data;
+	struct gstreamer_master_dock *dock = (struct gstreamer_master_dock *)data;
 	if (!dock) dock = &g_master_dock;
 
 	obs_properties_t *props = obs_properties_create();
@@ -473,7 +473,7 @@ void gstreamer_master_pipeline_get_defaults(obs_data_t *settings)
 
 void gstreamer_master_pipeline_update(void *data, obs_data_t *settings)
 {
-	gstreamer_master_dock_t *dock = (gstreamer_master_dock_t *)data;
+	struct gstreamer_master_dock *dock = (struct gstreamer_master_dock *)data;
 	if (!dock) dock = &g_master_dock;
 
 	bfree(dock->pipeline_name);
@@ -532,7 +532,7 @@ static const char *gst_master_filter_get_name(void *type_data)
 
 static void *gst_master_filter_create(obs_data_t *settings, obs_source_t *source)
 {
-	gstreamer_master_dock_t *dock = bzalloc(sizeof(gstreamer_master_dock_t));
+	struct gstreamer_master_dock *dock = bzalloc(sizeof(struct gstreamer_master_dock));
 	dock->source_obj = source;
 	gstreamer_master_pipeline_update(dock, settings);
 	return dock;
@@ -540,7 +540,7 @@ static void *gst_master_filter_create(obs_data_t *settings, obs_source_t *source
 
 static void gst_master_filter_destroy(void *data)
 {
-	gstreamer_master_dock_t *dock = (gstreamer_master_dock_t *)data;
+	struct gstreamer_master_dock *dock = (struct gstreamer_master_dock *)data;
 	if (!dock) return;
 
 	stop_rtsp_destination(dock);

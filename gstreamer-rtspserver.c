@@ -18,14 +18,14 @@
 #include <stdio.h>
 #include <string.h>
 
-typedef struct gst_hub_server_entry {
+struct gst_hub_server_entry {
 	char *service;
 	GstRTSPServer *server;
 	GstRTSPMountPoints *mounts;
 	guint source_id;
 	int ref_count;
 	struct gst_hub_server_entry *next;
-} gst_hub_server_entry_t;
+};
 
 struct gst_hub_branch {
 	char *name;
@@ -42,15 +42,15 @@ struct gst_hub_branch {
 	gst_master_pipeline_t *pipeline;
 	gst_pipeline_subscriber_t *sub;
 
-	gst_hub_server_entry_t *server_entry;
+	struct gst_hub_server_entry *server_entry;
 	GstRTSPMediaFactory *factory;
 	GstRTSPMedia *media;
 
-	gst_hub_branch_t *next;
+	struct gst_hub_branch *next;
 };
 
-static gst_hub_server_entry_t *g_server_entries = NULL;
-static gst_hub_branch_t *g_branches = NULL;
+static struct gst_hub_server_entry *g_server_entries = NULL;
+static struct gst_hub_branch *g_branches = NULL;
 static GMainContext *g_rtsp_context = NULL;
 static GMainLoop *g_rtsp_loop = NULL;
 static GThread *g_rtsp_thread = NULL;
@@ -58,16 +58,17 @@ static GMutex g_hub_mutex;
 
 static void media_configure_cb(GstRTSPMediaFactory *factory, GstRTSPMedia *media, gpointer user_data);
 static void media_unprepared_cb(GstRTSPMedia *media, gpointer user_data);
-static void stop_branch_internal(gst_hub_branch_t *branch);
+static void stop_branch_internal(struct gst_hub_branch *branch);
 
-static gst_hub_server_entry_t *get_or_create_rtsp_server(const char *service)
+static struct gst_hub_server_entry *get_or_create_rtsp_server(const char *service)
 {
 	const char *srv = (service && *service) ? service : "8554";
-	for (gst_hub_server_entry_t *s = g_server_entries; s; s = s->next) {
-		if (g_strcmp0(s->service, srv) == 0) {
+	for (struct gst_hub_server_entry *s = g_server_entries; s; s = s->next)
+	{
+		if (g_strcmp0(s->service, srv) == 0)
+		{
 			s->ref_count++;
-			blog(LOG_INFO, "[obs-gstreamer-rtspserver] Reusing RTSP server on port %s (refcount=%d)",
-				srv, s->ref_count);
+			blog(LOG_INFO, "[obs-gstreamer-rtspserver] Reusing RTSP server on port %s (refcount=%d)", srv, s->ref_count);
 			return s;
 		}
 	}
@@ -87,7 +88,7 @@ static gst_hub_server_entry_t *get_or_create_rtsp_server(const char *service)
 		return NULL;
 	}
 
-	gst_hub_server_entry_t *entry = bzalloc(sizeof(gst_hub_server_entry_t));
+	struct gst_hub_server_entry *entry = bzalloc(sizeof(struct gst_hub_server_entry));
 	entry->service = bstrdup(srv);
 	entry->server = server;
 	entry->mounts = mounts;
@@ -100,7 +101,7 @@ static gst_hub_server_entry_t *get_or_create_rtsp_server(const char *service)
 	return entry;
 }
 
-static void release_rtsp_server(gst_hub_server_entry_t *entry)
+static void release_rtsp_server(struct gst_hub_server_entry *entry)
 {
 	if (!entry) return;
 	entry->ref_count--;
@@ -113,7 +114,7 @@ static void release_rtsp_server(gst_hub_server_entry_t *entry)
 	if (g_server_entries == entry) {
 		g_server_entries = entry->next;
 	} else {
-		gst_hub_server_entry_t *prev = g_server_entries;
+		struct gst_hub_server_entry *prev = g_server_entries;
 		while (prev && prev->next != entry) prev = prev->next;
 		if (prev) prev->next = entry->next;
 	}
@@ -145,7 +146,7 @@ static void release_rtsp_server(gst_hub_server_entry_t *entry)
 
 static void rtsp_frame_cb(GstBuffer *buf, bool is_keyframe, gpointer user_data)
 {
-	gst_hub_branch_t *branch = (gst_hub_branch_t *)user_data;
+	struct gst_hub_branch *branch = (struct gst_hub_branch *)user_data;
 	if (!branch || !buf) return;
 
 	g_mutex_lock(&branch->lock);
@@ -177,12 +178,12 @@ static void rtsp_frame_cb(GstBuffer *buf, bool is_keyframe, gpointer user_data)
 	gst_object_unref(appsrc);
 }
 
-gst_hub_branch_t *gst_rtsp_branch_start(gst_master_pipeline_t *pipeline,
-                                        const char *name,
-                                        const char *service,
-                                        const char *mount,
-                                        const char *encoder_type,
-                                        const char *rtsp_pipeline)
+struct gst_hub_branch *gst_rtsp_branch_start(gst_master_pipeline_t *pipeline,
+                                             const char *name,
+                                             const char *service,
+                                             const char *mount,
+                                             const char *encoder_type,
+                                             const char *rtsp_pipeline)
 {
 	if (!pipeline) {
 		blog(LOG_ERROR, "[obs-gstreamer-rtspserver] Cannot start RTSP branch '%s': master_pipe is NULL",
@@ -212,13 +213,13 @@ gst_hub_branch_t *gst_rtsp_branch_start(gst_master_pipeline_t *pipeline,
 		if (*m != '\0') requested_mount = m;
 	}
 
-	gst_hub_server_entry_t *server_entry = get_or_create_rtsp_server(requested_service);
+	struct gst_hub_server_entry *server_entry = get_or_create_rtsp_server(requested_service);
 	if (!server_entry) {
 		g_mutex_unlock(&g_hub_mutex);
 		return NULL;
 	}
 
-	gst_hub_branch_t *branch = bzalloc(sizeof(gst_hub_branch_t));
+	struct gst_hub_branch *branch = bzalloc(sizeof(struct gst_hub_branch));
 	branch->name = bstrdup(name ? name : "Output");
 	branch->service = bstrdup(requested_service);
 	branch->mount_point = bstrdup(requested_mount);
@@ -262,7 +263,7 @@ gst_hub_branch_t *gst_rtsp_branch_start(gst_master_pipeline_t *pipeline,
 	return branch;
 }
 
-gst_hub_branch_t *gst_render_hub_start_pipeline_branch(const char *name, const char *source_type, const char *source_name, const char *pipeline_str)
+struct gst_hub_branch *gst_render_hub_start_pipeline_branch(const char *name, const char *source_type, const char *source_name, const char *pipeline_str)
 {
 	UNUSED_PARAMETER(source_type);
 	UNUSED_PARAMETER(source_name);
@@ -284,7 +285,7 @@ gst_hub_branch_t *gst_render_hub_start_pipeline_branch(const char *name, const c
 		return NULL;
 	}
 
-	gst_hub_branch_t *branch = bzalloc(sizeof(gst_hub_branch_t));
+	struct gst_hub_branch *branch = bzalloc(sizeof(struct gst_hub_branch));
 	branch->name = bstrdup(name ? name : "Pipeline");
 	branch->is_pipeline = true;
 	branch->pipe = pipe;
@@ -301,11 +302,11 @@ gst_hub_branch_t *gst_render_hub_start_pipeline_branch(const char *name, const c
 	return branch;
 }
 
-gst_hub_branch_t *gst_render_hub_start_branch_data(obs_data_t *settings)
+struct gst_hub_branch *gst_render_hub_start_branch_data(obs_data_t *settings)
 {
 	if (!settings) return NULL;
 
-	gst_hub_output_params_t params = {0};
+	struct gst_hub_output_params params = {0};
 	params.name = obs_data_get_string(settings, "name");
 	params.source_type = obs_data_get_string(settings, "source_type");
 	params.source_name = obs_data_get_string(settings, "source_name");
@@ -331,7 +332,7 @@ gst_hub_branch_t *gst_render_hub_start_branch_data(obs_data_t *settings)
 	return gst_render_hub_start_branch(&params);
 }
 
-gst_hub_branch_t *gst_render_hub_start_branch(const gst_hub_output_params_t *params)
+struct gst_hub_branch *gst_render_hub_start_branch(const struct gst_hub_output_params *params)
 {
 	if (!params) return NULL;
 	return gst_rtsp_branch_start(params->master_pipe,
@@ -345,7 +346,7 @@ gst_hub_branch_t *gst_render_hub_start_branch(const gst_hub_output_params_t *par
 static void media_configure_cb(GstRTSPMediaFactory *factory, GstRTSPMedia *media, gpointer user_data)
 {
 	UNUSED_PARAMETER(factory);
-	gst_hub_branch_t *branch = (gst_hub_branch_t *)user_data;
+	struct gst_hub_branch *branch = (struct gst_hub_branch *)user_data;
 	if (!branch) return;
 
 	GstElement *element = gst_rtsp_media_get_element(media);
@@ -403,7 +404,7 @@ static void media_configure_cb(GstRTSPMediaFactory *factory, GstRTSPMedia *media
 static void media_unprepared_cb(GstRTSPMedia *media, gpointer user_data)
 {
 	UNUSED_PARAMETER(media);
-	gst_hub_branch_t *branch = (gst_hub_branch_t *)user_data;
+	struct gst_hub_branch *branch = (struct gst_hub_branch *)user_data;
 	if (!branch) return;
 
 	g_mutex_lock(&branch->lock);
@@ -431,14 +432,14 @@ static void media_unprepared_cb(GstRTSPMedia *media, gpointer user_data)
 	g_mutex_unlock(&branch->lock);
 }
 
-static void stop_branch_internal(gst_hub_branch_t *branch)
+static void stop_branch_internal(struct gst_hub_branch *branch)
 {
 	if (!branch) return;
 
 	if (g_branches == branch) {
 		g_branches = branch->next;
 	} else {
-		gst_hub_branch_t *prev = g_branches;
+		struct gst_hub_branch *prev = g_branches;
 		while (prev && prev->next != branch) prev = prev->next;
 		if (prev) prev->next = branch->next;
 	}
@@ -496,7 +497,7 @@ static void stop_branch_internal(gst_hub_branch_t *branch)
 	bfree(branch);
 }
 
-void gst_render_hub_stop_branch(gst_hub_branch_t *branch)
+void gst_render_hub_stop_branch(struct gst_hub_branch *branch)
 {
 	if (!branch) return;
 	g_mutex_lock(&g_hub_mutex);
@@ -504,7 +505,7 @@ void gst_render_hub_stop_branch(gst_hub_branch_t *branch)
 	g_mutex_unlock(&g_hub_mutex);
 }
 
-bool gst_render_hub_is_branch_active(const gst_hub_branch_t *branch)
+bool gst_render_hub_is_branch_active(const struct gst_hub_branch *branch)
 {
 	return branch != NULL && branch->active;
 }

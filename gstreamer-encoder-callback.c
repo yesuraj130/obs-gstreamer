@@ -11,12 +11,11 @@
  * -----------------------------------------------------------------------------
  */
 
-typedef struct
-{
+struct encoder_private_data {
 	obs_encoder_t *encoder;
 	gst_master_pipeline_t *pipeline;
 	bool active;
-} encoder_private_data_t;
+};
 
 static const char *encoder_cb_get_name(void *type_data)
 {
@@ -34,7 +33,7 @@ static void encoder_cb_get_video_info(void *data, struct video_scale_info *info)
 static void *encoder_cb_create(obs_data_t *settings, obs_encoder_t *encoder)
 {
 	UNUSED_PARAMETER(settings);
-	encoder_private_data_t *data = bzalloc(sizeof(encoder_private_data_t));
+	struct encoder_private_data *data = bzalloc(sizeof(struct encoder_private_data));
 	data->encoder = encoder;
 	data->active = false;
 	return data;
@@ -42,7 +41,7 @@ static void *encoder_cb_create(obs_data_t *settings, obs_encoder_t *encoder)
 
 static void encoder_cb_destroy(void *p)
 {
-	encoder_private_data_t *data = (encoder_private_data_t *)p;
+	struct encoder_private_data *data = (struct encoder_private_data *)p;
 	if (data) bfree(data);
 }
 
@@ -52,7 +51,7 @@ static bool encoder_cb_encode(void *p, uint32_t handle, int64_t pts, uint64_t lo
 	UNUSED_PARAMETER(packet);
 	if (received_packet) *received_packet = false;
 
-	encoder_private_data_t *data = (encoder_private_data_t *)p;
+	struct encoder_private_data *data = (struct encoder_private_data *)p;
 	if (!data || !data->active || !data->pipeline) return true;
 
 	gst_master_pipeline_push_texture(data->pipeline, (void *)(uintptr_t)handle, (uint64_t)pts);
@@ -174,7 +173,7 @@ static void pipeline_state_change(bool active, void *user_data)
 	gst_encoder_callback_t *cb = (gst_encoder_callback_t *)user_data;
 	if (!cb || !cb->output || !cb->encoder) return;
 
-	encoder_private_data_t *priv = (encoder_private_data_t *)obs_encoder_get_type_data(cb->encoder);
+	struct encoder_private_data *priv = (struct encoder_private_data *)obs_encoder_get_type_data(cb->encoder);
 	if (priv) priv->active = active;
 	cb->active = active;
 
@@ -246,7 +245,7 @@ gst_encoder_callback_t *gst_encoder_callback_create(gst_source_type_t type, cons
 		return NULL;
 	}
 
-	encoder_private_data_t *priv = (encoder_private_data_t *)obs_encoder_get_type_data(cb->encoder);
+	struct encoder_private_data *priv = (struct encoder_private_data *)obs_encoder_get_type_data(cb->encoder);
 	if (priv)
 	{
 		priv->pipeline = cb->pipeline;
@@ -292,7 +291,7 @@ void gst_encoder_callback_destroy(gst_encoder_callback_t *cb)
 
 	if (cb->encoder)
 	{
-		encoder_private_data_t *priv = (encoder_private_data_t *)obs_encoder_get_type_data(cb->encoder);
+		struct encoder_private_data *priv = (struct encoder_private_data *)obs_encoder_get_type_data(cb->encoder);
 		if (priv)
 		{
 			priv->active = false;

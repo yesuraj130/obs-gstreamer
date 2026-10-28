@@ -14,9 +14,10 @@
 extern "C" {
 #endif
 
+struct gst_hub_branch;
 typedef struct gst_hub_branch gst_hub_branch_t;
 
-typedef struct {
+struct gst_hub_output_params {
 	const char *name;
 	const char *source_type;
 	const char *source_name;
@@ -29,7 +30,8 @@ typedef struct {
 	const char *rtsp_pipeline;
 	const char *render_mode;
 	gst_master_pipeline_t *master_pipe;
-} gst_hub_output_params_t;
+};
+typedef struct gst_hub_output_params gst_hub_output_params_t;
 
 gst_hub_branch_t *gst_rtsp_branch_start(gst_master_pipeline_t *pipeline,
                                         const char *name,

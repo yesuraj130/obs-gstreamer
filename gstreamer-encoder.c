@@ -29,7 +29,7 @@
 #include <gst/gst.h>
 #include <gst/app/app.h>
 
-typedef struct {
+struct gstreamer_encoder_data {
 	GstElement *pipe;
 	GstElement *appsrc;
 	GstElement *appsink;
@@ -41,7 +41,7 @@ typedef struct {
 	obs_encoder_t *encoder;
 	obs_data_t *settings;
 	struct obs_video_info ovi;
-} data_t;
+};
 
 const char *gstreamer_encoder_get_name_h264(void *type_data)
 {
@@ -53,7 +53,7 @@ const char *gstreamer_encoder_get_name_h265(void *type_data)
 	return "GStreamer Encoder H.265";
 }
 
-char *gstreamer_get_format(data_t *data)
+char *gstreamer_get_format(struct gstreamer_encoder_data *data)
 {
 	char *format;
 	switch (data->ovi.output_format) {
@@ -119,7 +119,7 @@ char *gstreamer_get_format(data_t *data)
 void *gstreamer_encoder_create_h264(obs_data_t *settings,
 				    obs_encoder_t *encoder)
 {
-	data_t *data = g_new0(data_t, 1);
+	struct gstreamer_encoder_data *data = g_new0(struct gstreamer_encoder_data, 1);
 
 	data->encoder = encoder;
 	data->settings = settings;
@@ -249,7 +249,7 @@ void *gstreamer_encoder_create_h264(obs_data_t *settings,
 void *gstreamer_encoder_create_h265(obs_data_t *settings,
 				    obs_encoder_t *encoder)
 {
-	data_t *data = g_new0(data_t, 1);
+	struct gstreamer_encoder_data *data = g_new0(struct gstreamer_encoder_data, 1);
 
 	data->encoder = encoder;
 	data->settings = settings;
@@ -351,7 +351,7 @@ void *gstreamer_encoder_create_h265(obs_data_t *settings,
 
 void gstreamer_encoder_destroy(void *p)
 {
-	data_t *data = (data_t *)p;
+	struct gstreamer_encoder_data *data = (struct gstreamer_encoder_data *)p;
 
 	gst_element_set_state(data->pipe, GST_STATE_NULL);
 
@@ -377,7 +377,7 @@ bool gstreamer_encoder_encode(void *p, struct encoder_frame *frame,
 			      struct encoder_packet *packet,
 			      bool *received_packet)
 {
-	data_t *data = (data_t *)p;
+	struct gstreamer_encoder_data *data = (struct gstreamer_encoder_data *)p;
 
 	// delayed release of previous sample
 	if (data->sample != NULL) {
@@ -678,7 +678,7 @@ obs_properties_t *gstreamer_encoder_get_properties_h265(void *data)
 bool gstreamer_encoder_get_extra_data(void *p, uint8_t **extra_data,
 				      size_t *size)
 {
-	data_t *data = (data_t *)p;
+	struct gstreamer_encoder_data *data = (struct gstreamer_encoder_data *)p;
 
 	if (data->codec_data == NULL)
 		return false;

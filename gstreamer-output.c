@@ -31,7 +31,7 @@
 
 #include "gstreamer-webrtc.h"
 
-typedef struct {
+struct gstreamer_output_data {
 	GstElement *pipe;
 	GstElement *video;
 	GstRTSPServer *server;
@@ -53,7 +53,7 @@ typedef struct {
 	obs_data_t *settings;
 	struct obs_video_info ovi;
 	GMutex lock;
-} data_t;
+};
 
 static const char *obs_video_format_to_gst_format(enum video_format format)
 {
@@ -120,7 +120,7 @@ static void client_connected_cb(GstRTSPServer *server, GstRTSPClient *client, gp
 static void media_unprepared_cb(GstRTSPMedia *media, gpointer user_data)
 {
 	(void)media;
-	data_t *data = user_data;
+	struct gstreamer_output_data *data = user_data;
 	blog(LOG_INFO, "[obs-gstreamer] RTSP media unprepared (all clients disconnected), resetting appsrc");
 
 	g_mutex_lock(&data->lock);
@@ -142,7 +142,7 @@ static void media_unprepared_cb(GstRTSPMedia *media, gpointer user_data)
 
 static void media_configure_cb(GstRTSPMediaFactory *factory, GstRTSPMedia *media, gpointer user_data)
 {
-	data_t *data = user_data;
+	struct gstreamer_output_data *data = user_data;
 	GstElement *element = gst_rtsp_media_get_element(media);
 	GstElement *appsrc = gst_bin_get_by_name(GST_BIN(element), "appsrc_video");
 	GstBus *bus = gst_element_get_bus(element);
@@ -195,7 +195,7 @@ static void media_configure_cb(GstRTSPMediaFactory *factory, GstRTSPMedia *media
 
 static gboolean bus_callback(GstBus *bus, GstMessage *message, gpointer user_data)
 {
-	data_t *data = user_data;
+	struct gstreamer_output_data *data = user_data;
 	const char *output_name = (data && data->output) ? obs_output_get_name(data->output) : "GStreamer Output";
 	const char *src_name = GST_MESSAGE_SRC_NAME(message);
 
@@ -250,7 +250,7 @@ const char *gstreamer_output_get_name(void *type_data)
 
 void *gstreamer_output_create(obs_data_t *settings, obs_output_t *output)
 {
-	data_t *data = g_new0(data_t, 1);
+	struct gstreamer_output_data *data = g_new0(struct gstreamer_output_data, 1);
 
 	g_mutex_init(&data->lock);
 	data->output = output;
@@ -262,7 +262,7 @@ void *gstreamer_output_create(obs_data_t *settings, obs_output_t *output)
 
 void gstreamer_output_destroy(void *p)
 {
-	data_t *data = (data_t *)p;
+	struct gstreamer_output_data *data = (struct gstreamer_output_data *)p;
 	if (!data) return;
 
 	blog(LOG_INFO, "[obs-gstreamer] Destroying output instance (total raw video frames: %llu)",
@@ -353,7 +353,7 @@ void gstreamer_output_destroy(void *p)
 
 bool gstreamer_output_start(void *p)
 {
-	data_t *data = (data_t *)p;
+	struct gstreamer_output_data *data = (struct gstreamer_output_data *)p;
 	if (!data) return false;
 
 	blog(LOG_INFO, "[obs-gstreamer] Attempting to start output '%s'",
@@ -530,7 +530,7 @@ bool gstreamer_output_start(void *p)
 
 void gstreamer_output_stop(void *p, uint64_t ts)
 {
-	data_t *data = (data_t *)p;
+	struct gstreamer_output_data *data = (struct gstreamer_output_data *)p;
 	if (!data) return;
 
 	blog(LOG_INFO, "[obs-gstreamer] Stopping output '%s'...",
@@ -635,7 +635,7 @@ void gstreamer_output_stop(void *p, uint64_t ts)
 
 void gstreamer_output_encoded_packet(void *p, struct encoder_packet *packet)
 {
-	data_t *data = (data_t *)p;
+	struct gstreamer_output_data *data = (struct gstreamer_output_data *)p;
 	if (!data)
 		return;
 
@@ -664,7 +664,7 @@ void gstreamer_output_encoded_packet(void *p, struct encoder_packet *packet)
 
 void gstreamer_output_raw_video(void *p, struct video_data *frame)
 {
-	data_t *data = (data_t *)p;
+	struct gstreamer_output_data *data = (struct gstreamer_output_data *)p;
 	if (!data)
 		return;
 
@@ -710,7 +710,7 @@ void gstreamer_output_raw_video(void *p, struct video_data *frame)
 
 void gstreamer_output_raw_audio(void *p, struct audio_data *frame)
 {
-	data_t *data = (data_t *)p;
+	struct gstreamer_output_data *data = (struct gstreamer_output_data *)p;
 	if (!data || !frame || frame->frames == 0)
 		return;
 

@@ -40,15 +40,15 @@
 #define MAX_SESSIONS 16
 #define ANSWER_TIMEOUT_SECONDS 5
 
-typedef struct {
+struct packet_counter {
 	const char *label;
 	uint64_t count;
-} packet_counter_t;
+};
 
 static GstPadProbeReturn rtp_packet_probe(GstPad *pad, GstPadProbeInfo *info,
 	gpointer user_data)
 {
-	packet_counter_t *counter = user_data;
+	struct packet_counter *counter = user_data;
 	if (!(GST_PAD_PROBE_INFO_TYPE(info) & GST_PAD_PROBE_TYPE_BUFFER))
 		return GST_PAD_PROBE_OK;
 	counter->count++;
@@ -60,18 +60,18 @@ static GstPadProbeReturn rtp_packet_probe(GstPad *pad, GstPadProbeInfo *info,
 
 struct gstreamer_webrtc;
 
-typedef struct {
+struct whep_session {
 	char *id;
 	struct gstreamer_webrtc *webrtc;
 	GstElement *queue;
 	GstElement *webrtcbin;
 	GstPad *tee_pad;
 	GstPad *sinkpad;
-	packet_counter_t rtp_counter;
+	struct packet_counter rtp_counter;
 	SoupServerMessage *pending_msg;
 	guint timeout_id;
 	bool replied;
-} whep_session_t;
+};
 
 struct gstreamer_webrtc {
 	obs_output_t *output;
@@ -90,7 +90,7 @@ struct gstreamer_webrtc {
 	GHashTable *sessions;
 	guint session_counter;
 	guint bus_watch_id;
-	packet_counter_t pay_counter;
+	struct packet_counter pay_counter;
 };
 
 #ifndef SOUP_CHECK_VERSION
@@ -270,7 +270,7 @@ static const char *default_app_js =
 
 static void session_free(gpointer data)
 {
-	whep_session_t *session = data;
+	struct whep_session *session = data;
 
 	if (session->timeout_id)
 		g_source_remove(session->timeout_id);
@@ -287,18 +287,18 @@ static void session_free(gpointer data)
 	g_free(session);
 }
 
-typedef struct {
+struct idle_teardown {
 	struct gstreamer_webrtc *webrtc;
 	char *id;
-} idle_teardown_t;
+};
 
-static void remove_session_locked(struct gstreamer_webrtc *webrtc, whep_session_t *session);
+static void remove_session_locked(struct gstreamer_webrtc *webrtc, struct whep_session *session);
 
 static gboolean idle_teardown(gpointer user_data)
 {
-	idle_teardown_t *ctx = user_data;
+	struct idle_teardown *ctx = user_data;
 	g_mutex_lock(&ctx->webrtc->sessions_lock);
-	whep_session_t *session = g_hash_table_lookup(ctx->webrtc->sessions, ctx->id);
+	struct whep_session *session = g_hash_table_lookup(ctx->webrtc->sessions, ctx->id);
 	if (session)
 		remove_session_locked(ctx->webrtc, session);
 	g_mutex_unlock(&ctx->webrtc->sessions_lock);
@@ -310,7 +310,7 @@ static gboolean idle_teardown(gpointer user_data)
 
 static void session_teardown_async(struct gstreamer_webrtc *webrtc, const char *id)
 {
-	idle_teardown_t *ctx = g_new0(idle_teardown_t, 1);
+	struct idle_teardown *ctx = g_new0(struct idle_teardown, 1);
 	ctx->webrtc = webrtc;
 	ctx->id = g_strdup(id);
 	g_idle_add(idle_teardown, ctx);
@@ -331,7 +331,7 @@ static void webrtcbin_connection_state_changed(GstElement *webrtcbin, GParamSpec
 	}
 }
 
-static void remove_session_locked(struct gstreamer_webrtc *webrtc, whep_session_t *session)
+static void remove_session_locked(struct gstreamer_webrtc *webrtc, struct whep_session *session)
 {
 	// Detach from pipeline while holding lock so concurrent lookups are safe.
 	if (session->webrtcbin) {
@@ -371,20 +371,20 @@ static void remove_session_locked(struct gstreamer_webrtc *webrtc, whep_session_
 	session_free(session);
 }
 
-typedef struct {
+struct reply_ctx {
 	struct gstreamer_webrtc *webrtc;
 	SoupServerMessage *msg;
 	char *id;
 	char *sdp;
 	int status;
-} reply_ctx_t;
+};
 
 static gboolean idle_reply(gpointer user_data)
 {
-	reply_ctx_t *ctx = user_data;
+	struct reply_ctx *ctx = user_data;
 
 	g_mutex_lock(&ctx->webrtc->sessions_lock);
-	whep_session_t *session = g_hash_table_lookup(ctx->webrtc->sessions, ctx->id);
+	struct whep_session *session = g_hash_table_lookup(ctx->webrtc->sessions, ctx->id);
 	if (session) {
 		session->replied = true;
 		session->pending_msg = NULL;
@@ -411,17 +411,17 @@ static gboolean idle_reply(gpointer user_data)
 	return G_SOURCE_REMOVE;
 }
 
-typedef struct {
+struct timeout_ctx {
 	struct gstreamer_webrtc *webrtc;
 	char *id;
-} timeout_ctx_t;
+};
 
 static gboolean answer_timeout(gpointer user_data)
 {
-	timeout_ctx_t *ctx = user_data;
+	struct timeout_ctx *ctx = user_data;
 
 	g_mutex_lock(&ctx->webrtc->sessions_lock);
-	whep_session_t *session = g_hash_table_lookup(ctx->webrtc->sessions, ctx->id);
+	struct whep_session *session = g_hash_table_lookup(ctx->webrtc->sessions, ctx->id);
 	if (session && !session->replied && session->pending_msg) {
 		blog(LOG_WARNING, "[obs-gstreamer] WHEP session %s: ICE gathering timed out -> 500",
 			ctx->id);
@@ -444,7 +444,7 @@ static void on_local_description_set(GstPromise *promise, gpointer user_data);
 
 struct answer_ctx {
 	struct gstreamer_webrtc *webrtc;
-	whep_session_t *session;
+	struct whep_session *session;
 };
 
 static void on_gathering_complete(GstElement *webrtcbin, GParamSpec *pspec, gpointer user_data)
@@ -465,7 +465,7 @@ static void on_gathering_complete(GstElement *webrtcbin, GParamSpec *pspec, gpoi
 		gst_webrtc_session_description_free(local);
 
 	g_mutex_lock(&ctx->webrtc->sessions_lock);
-	whep_session_t *session = ctx->session ? g_hash_table_lookup(ctx->webrtc->sessions, ctx->session->id) : NULL;
+	struct whep_session *session = ctx->session ? g_hash_table_lookup(ctx->webrtc->sessions, ctx->session->id) : NULL;
 	if (!session || session->replied || !session->pending_msg) {
 		g_mutex_unlock(&ctx->webrtc->sessions_lock);
 		blog(LOG_WARNING, "[obs-gstreamer] WHEP session %s: completed after timeout/cleanup",
@@ -478,7 +478,7 @@ static void on_gathering_complete(GstElement *webrtcbin, GParamSpec *pspec, gpoi
 	blog(LOG_INFO, "[obs-gstreamer] WHEP session %s: ICE gathering complete, sending 201 answer",
 		session->id);
 
-	reply_ctx_t *reply = g_new0(reply_ctx_t, 1);
+	struct reply_ctx *reply = g_new0(struct reply_ctx, 1);
 	reply->webrtc = ctx->webrtc;
 	reply->msg = g_object_ref(session->pending_msg);
 	reply->id = g_strdup(session->id);
@@ -513,7 +513,7 @@ static void on_remote_description_set(GstPromise *promise, gpointer user_data)
 	}
 	gst_promise_unref(promise);
 
-	whep_session_t *session = ctx->session;
+	struct whep_session *session = ctx->session;
 	gst_element_sync_state_with_parent(session->queue);
 	gst_element_sync_state_with_parent(session->webrtcbin);
 	blog(LOG_INFO, "[obs-gstreamer] WHEP session %s: branch synced to PLAYING",
@@ -552,9 +552,9 @@ static void on_answer_created(GstPromise *promise, gpointer user_data)
 		blog(LOG_ERROR, "[obs-gstreamer] WHEP session %s: create-answer failed",
 			ctx->session ? ctx->session->id : "unknown");
 		g_mutex_lock(&ctx->webrtc->sessions_lock);
-		whep_session_t *session = ctx->session ? g_hash_table_lookup(ctx->webrtc->sessions, ctx->session->id) : NULL;
+		struct whep_session *session = ctx->session ? g_hash_table_lookup(ctx->webrtc->sessions, ctx->session->id) : NULL;
 		if (session && !session->replied && session->pending_msg) {
-			reply_ctx_t *reply_ctx = g_new0(reply_ctx_t, 1);
+			struct reply_ctx *reply_ctx = g_new0(struct reply_ctx, 1);
 			reply_ctx->webrtc = ctx->webrtc;
 			reply_ctx->msg = g_object_ref(session->pending_msg);
 			reply_ctx->id = g_strdup(session->id);
@@ -597,7 +597,7 @@ static void whep_post(struct gstreamer_webrtc *webrtc, SoupServerMessage *msg)
 		return;
 	}
 
-	whep_session_t *session = g_new0(whep_session_t, 1);
+	struct whep_session *session = g_new0(struct whep_session, 1);
 	session->webrtc = webrtc;
 	session->id = g_strdup_printf("viewer%u", ++webrtc->session_counter);
 
@@ -698,7 +698,7 @@ static void whep_post(struct gstreamer_webrtc *webrtc, SoupServerMessage *msg)
 	ctx->session = session;
 
 	session->pending_msg = msg;
-	timeout_ctx_t *tctx = g_new0(timeout_ctx_t, 1);
+	struct timeout_ctx *tctx = g_new0(struct timeout_ctx, 1);
 	tctx->webrtc = webrtc;
 	tctx->id = g_strdup(session->id);
 	session->timeout_id = g_timeout_add_seconds(ANSWER_TIMEOUT_SECONDS, answer_timeout, tctx);
@@ -720,7 +720,7 @@ static void whep_delete(struct gstreamer_webrtc *webrtc, SoupServerMessage *msg,
 		id++;
 
 	g_mutex_lock(&webrtc->sessions_lock);
-	whep_session_t *session = g_hash_table_lookup(webrtc->sessions, id);
+	struct whep_session *session = g_hash_table_lookup(webrtc->sessions, id);
 	g_mutex_unlock(&webrtc->sessions_lock);
 
 	if (!session) {
