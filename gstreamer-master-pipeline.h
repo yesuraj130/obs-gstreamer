@@ -40,6 +40,7 @@ struct gst_master_pipeline
 	GstElement *pipe;
 	GstElement *appsrc;
 	GstElement *appsink;
+	gs_stagesurf_t *stagesurf;
 
 	gint active_destinations;
 

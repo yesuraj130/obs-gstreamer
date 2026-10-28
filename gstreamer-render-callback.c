@@ -33,8 +33,7 @@ static void render_callback_handler(void *param, uint32_t cx, uint32_t cy)
 		gs_texture_t *tex = obs_get_main_texture();
 		if (tex)
 		{
-			void *handle = gs_texture_get_obj(tex);
-			if (handle) gst_master_pipeline_push_texture(cb->pipeline, handle, os_gettime_ns());
+			gst_master_pipeline_push_texture(cb->pipeline, tex, os_gettime_ns());
 		}
 		return;
 	}
@@ -58,8 +57,7 @@ static void render_callback_handler(void *param, uint32_t cx, uint32_t cy)
 	gs_texture_t *tex = gs_texrender_get_texture(cb->texrender);
 	if (tex)
 	{
-		void *handle = gs_texture_get_obj(tex);
-		if (handle) gst_master_pipeline_push_texture(cb->pipeline, handle, os_gettime_ns());
+		gst_master_pipeline_push_texture(cb->pipeline, tex, os_gettime_ns());
 	}
 }
 

@@ -207,8 +207,10 @@ function restartFullPC(callback) {
   const fullProvisionAndRestartCmd = `
     export DEBIAN_FRONTEND=noninteractive
 
-    # 1. Check & install system packages (VNC, noVNC, XFCE, File Manager, Zip GUI, Browser, GStreamer, Qt6, Build tools)
-    if ! which Xtigervnc websockify startxfce4 wmctrl xdotool xrandr thunar xarchiver firefox-esr meson ninja gst-launch-1.0 >/dev/null 2>&1 || \
+    # 1. Check & install system packages (VNC, noVNC, XFCE, File Manager, Zip GUI, Browser, GStreamer, WebRTC ICE, OpenGL, Qt6, Build tools)
+    if ! which Xtigervnc websockify startxfce4 wmctrl xdotool xrandr thunar xarchiver firefox-esr meson ninja gst-launch-1.0 ssh dbus-launch git >/dev/null 2>&1 || \
+       ! gst-inspect-1.0 nicesrc >/dev/null 2>&1 || \
+       ! gst-inspect-1.0 glupload >/dev/null 2>&1 || \
        [ ! -f /usr/include/obs/obs-module.h ] || \
        [ ! -f /usr/lib/x86_64-linux-gnu/libQt6Widgets.so ]; then
       echo "[Setup] Installing missing system packages..."
@@ -216,14 +218,17 @@ function restartFullPC(callback) {
       dpkg --configure -a 2>/dev/null || true
       apt-get update
       apt-get install -y --no-install-recommends \
-        xfce4-session xfwm4 xfce4-panel xfdesktop4 xfce4-terminal \
+        xfce4-session xfwm4 xfce4-panel xfdesktop4 xfce4-terminal dbus-x11 adwaita-icon-theme \
         thunar thunar-archive-plugin xarchiver zip unzip p7zip-full firefox-esr \
         tigervnc-standalone-server tigervnc-tools novnc websockify wmctrl xdotool x11-xserver-utils \
-        obs-studio libobs-dev meson ninja-build build-essential pkg-config curl ca-certificates \
+        openssh-client procps psmisc git curl ca-certificates pulseaudio \
+        obs-studio libobs-dev meson ninja-build build-essential pkg-config \
         squashfs-tools zstd fuse3 libfuse2 \
         gstreamer1.0-tools libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
         gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
         gstreamer1.0-plugins-ugly gstreamer1.0-libav libgstreamer-plugins-bad1.0-dev \
+        gstreamer1.0-nice gstreamer1.0-gl gstreamer1.0-vaapi gstreamer1.0-x \
+        gstreamer1.0-pulseaudio gstreamer1.0-alsa \
         libgstrtspserver-1.0-0 libgstrtspserver-1.0-dev gstreamer1.0-rtsp \
         libsoup-3.0-dev qt6-base-dev
     fi

@@ -27,7 +27,7 @@ static void encoder_cb_get_video_info(void *data, struct video_scale_info *info)
 {
 	UNUSED_PARAMETER(data);
 	if (!info) return;
-	info->format = VIDEO_FORMAT_BGRA;
+	info->format = VIDEO_FORMAT_RGBA;
 }
 
 static void *encoder_cb_create(obs_data_t *settings, obs_encoder_t *encoder)
@@ -45,16 +45,22 @@ static void encoder_cb_destroy(void *p)
 	if (data) bfree(data);
 }
 
-static bool encoder_cb_encode(void *p, uint32_t handle, int64_t pts, uint64_t lock_key, uint64_t *next_key, struct encoder_packet *packet, bool *received_packet)
+static bool encoder_cb_encode_raw(void *p, struct encoder_frame *frame, struct encoder_packet *packet, bool *received_packet)
 {
-	if (next_key) *next_key = lock_key;
 	UNUSED_PARAMETER(packet);
 	if (received_packet) *received_packet = false;
 
 	struct encoder_private_data *data = (struct encoder_private_data *)p;
-	if (!data || !data->active || !data->pipeline) return true;
+	if (!data || !data->active || !data->pipeline || !frame) return true;
 
-	gst_master_pipeline_push_texture(data->pipeline, (void *)(uintptr_t)handle, (uint64_t)pts);
+	struct video_data vframe = {0};
+	for (int i = 0; i < MAX_AV_PLANES; i++)
+	{
+		vframe.data[i] = frame->data[i];
+		vframe.linesize[i] = frame->linesize[i];
+	}
+	vframe.timestamp = (uint64_t)(frame->pts > 0 ? frame->pts : 0);
+	gst_master_pipeline_push_raw_video(data->pipeline, &vframe);
 	return true;
 }
 
@@ -63,11 +69,10 @@ static struct obs_encoder_info gstreamer_encoder_cb_info =
 	.id           = "gstreamer-encoder-callback",
 	.type         = OBS_ENCODER_VIDEO,
 	.codec        = "raw",
-	.caps         = OBS_ENCODER_CAP_PASS_TEXTURE,
 	.get_name     = encoder_cb_get_name,
 	.create       = encoder_cb_create,
 	.destroy      = encoder_cb_destroy,
-	.encode_texture = encoder_cb_encode,
+	.encode       = encoder_cb_encode_raw,
 	.get_video_info = encoder_cb_get_video_info,
 };
 
@@ -76,11 +81,10 @@ static struct obs_encoder_info gstreamer_encoder_cb_legacy_info =
 	.id           = "hjm-gstreamer-encoder-callback",
 	.type         = OBS_ENCODER_VIDEO,
 	.codec        = "raw",
-	.caps         = OBS_ENCODER_CAP_PASS_TEXTURE,
 	.get_name     = encoder_cb_get_name,
 	.create       = encoder_cb_create,
 	.destroy      = encoder_cb_destroy,
-	.encode_texture = encoder_cb_encode,
+	.encode       = encoder_cb_encode_raw,
 	.get_video_info = encoder_cb_get_video_info,
 };
 

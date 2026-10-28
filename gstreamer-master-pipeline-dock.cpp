@@ -67,14 +67,15 @@ bool obs_frontend_add_dock_by_id(const char *id, const char *title, void *dock) 
 
 #define DEFAULT_MASTER_PIPELINE \
 	"appsrc name=hub_appsrc is-live=true format=GST_FORMAT_TIME do-timestamp=true " \
-	"caps=\"video/x-raw, format=BGRA, width=%u, height=%u, framerate=%u/%u\" ! " \
-	"videoconvert ! x264enc tune=zerolatency speed-preset=ultrafast bframes=0 key-int-max=30 bitrate=4000 ! " \
-	"h264parse config-interval=1 ! appsink name=hub_appsink sync=false drop=true max-buffers=1"
+	"caps=\"video/x-raw, format=RGBA, width=%u, height=%u, framerate=%u/%u\" ! " \
+	"videoconvert ! video/x-raw, format=I420 ! x264enc tune=zerolatency speed-preset=ultrafast bframes=0 key-int-max=30 bitrate=4000 ! " \
+	"h264parse config-interval=-1 ! video/x-h264, stream-format=byte-stream, alignment=au ! " \
+	"appsink name=hub_appsink sync=false drop=true max-buffers=1"
 
 #define DEFAULT_RTSP_PIPELINE \
 	"( appsrc name=appsrc_video is-live=true format=GST_FORMAT_TIME do-timestamp=true " \
 	"caps=\"video/x-h264, stream-format=byte-stream, alignment=au\" ! " \
-	"h264parse config-interval=1 ! rtph264pay name=pay0 pt=96 config-interval=1 )"
+	"h264parse config-interval=-1 ! rtph264pay name=pay0 pt=96 config-interval=1 )"
 
 /* --------------------------------------------------------------------------
  * Destination Data Structures & Types
@@ -537,6 +538,26 @@ static bool start_destination(GstMasterHub *hub, GstDestination *dest)
 		}
 		dest->is_active = true;
 		export_dock_status_json();
+
+		g_timeout_add(350, [](gpointer) -> gboolean {
+			obs_enum_sources([](void *, obs_source_t *src) -> bool {
+				if (!src) return true;
+				const char *id = obs_source_get_id(src);
+				if (id && (strcmp(id, "gstreamer-source") == 0 || strcmp(id, "gstreamer-source-video") == 0)) {
+					obs_data_t *s = obs_source_get_settings(src);
+					if (s) {
+						const char *pipe = obs_data_get_string(s, "pipeline");
+						if (pipe && strstr(pipe, "rtsp://") != nullptr) {
+							obs_source_update(src, s);
+						}
+						obs_data_release(s);
+					}
+				}
+				return true;
+			}, nullptr);
+			return G_SOURCE_REMOVE;
+		}, nullptr);
+
 		return true;
 	} else if (dest->type == DEST_TYPE_WEBRTC) {
 		obs_data_t *settings = obs_data_create();
@@ -1278,6 +1299,10 @@ static void on_frontend_event(enum obs_frontend_event event, void *private_data)
 					start_destination(hub.get(), dest.get());
 				}
 			}
+		}
+
+		if (g_dock_widget) {
+			g_dock_widget->refreshTable();
 		}
 
 		export_dock_status_json();

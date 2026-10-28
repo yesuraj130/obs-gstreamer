@@ -14,20 +14,8 @@
 static GstElement *create_master_encoder_pipeline(gst_master_pipeline_t *hub, const char *custom_master_pipe, const char *encoder_type, int bitrate_kbps, int keyint_sec)
 {
 	gchar *pipe_desc = NULL;
-
-#if defined(_WIN32) && defined(HAVE_GST_D3D11) && HAVE_GST_D3D11
-	const char *gpu_mem_caps = "video/x-raw(memory:D3D11Memory)";
-	const char *convert_elem = "d3d11convert";
-	const char *download_elem = "d3d11convert ! d3d11download ! videoconvert";
-#elif defined(HAVE_GST_GL) && HAVE_GST_GL
-	const char *gpu_mem_caps = "video/x-raw(memory:GLMemory)";
-	const char *convert_elem = "glcolorconvert";
-	const char *download_elem = "glcolorconvert ! gldownload ! videoconvert";
-#else
-	const char *gpu_mem_caps = "video/x-raw";
-	const char *convert_elem = "videoconvert";
-	const char *download_elem = "videoconvert";
-#endif
+	const char *convert_elem = "videoconvert ! video/x-raw, format=I420";
+	const char *download_elem = "videoconvert ! video/x-raw, format=I420";
 
 	if (custom_master_pipe && custom_master_pipe[0])
 	{
@@ -52,10 +40,10 @@ static GstElement *create_master_encoder_pipeline(gst_master_pipeline_t *hub, co
 
 		pipe_desc = g_strdup_printf(
 			"appsrc name=hub_appsrc is-live=true format=GST_FORMAT_TIME do-timestamp=true "
-			"caps=\"%s, width=%u, height=%u, format=RGBA, framerate=%u/%u\" ! "
-			"%s ! h264parse config-interval=1 ! "
+			"caps=\"video/x-raw, width=%u, height=%u, format=RGBA, framerate=%u/%u\" ! "
+			"%s ! h264parse config-interval=-1 ! video/x-h264, stream-format=byte-stream, alignment=au ! "
 			"appsink name=hub_appsink sync=false drop=true max-buffers=1",
-			gpu_mem_caps, hub->width, hub->height, hub->fps_num, hub->fps_den,
+			hub->width, hub->height, hub->fps_num, hub->fps_den,
 			encoder_elem);
 
 		g_free(encoder_elem);
@@ -109,45 +97,89 @@ static GstFlowReturn video_new_sample_cb(GstAppSink *sink, gpointer user_data)
 
 void gst_master_pipeline_push_texture(gst_master_pipeline_t *hub, void *gpu_handle, uint64_t pts)
 {
-	if (!hub || !gpu_handle || g_atomic_int_get(&hub->active_destinations) <= 0) return;
+	if (!hub || !gpu_handle || g_atomic_int_get(&hub->active_destinations) <= 0 || !hub->appsrc) return;
 
-	GstBuffer *in_buf = gst_buffer_new();
-	if (!in_buf) return;
+	gs_texture_t *tex = (gs_texture_t *)gpu_handle;
+	uint32_t tex_w = gs_texture_get_width(tex);
+	uint32_t tex_h = gs_texture_get_height(tex);
+	enum gs_color_format fmt = gs_texture_get_color_format(tex);
 
-	GstMemory *mem = gst_memory_new_wrapped(GST_MEMORY_FLAG_READONLY, gpu_handle, sizeof(void *), 0, sizeof(void *), NULL, NULL);
+	if (tex_w == 0 || tex_h == 0) return;
 
-	if (!mem)
+	if (!hub->stagesurf ||
+	    gs_stagesurface_get_width(hub->stagesurf) != tex_w ||
+	    gs_stagesurface_get_height(hub->stagesurf) != tex_h ||
+	    gs_stagesurface_get_color_format(hub->stagesurf) != fmt)
 	{
-		gst_buffer_unref(in_buf);
-		return;
+		if (hub->stagesurf)
+		{
+			gs_stagesurface_destroy(hub->stagesurf);
+			hub->stagesurf = NULL;
+		}
+		hub->stagesurf = gs_stagesurface_create(tex_w, tex_h, fmt);
 	}
 
-	gst_buffer_append_memory(in_buf, mem);
+	if (!hub->stagesurf) return;
 
-	uint64_t duration = gst_util_uint64_scale_int(GST_SECOND, hub->fps_den, hub->fps_num);
-	GST_BUFFER_PTS(in_buf) = pts > 0 ? pts : (hub->frame_index * duration);
-	GST_BUFFER_DTS(in_buf) = GST_BUFFER_PTS(in_buf);
-	GST_BUFFER_DURATION(in_buf) = duration;
-	hub->frame_index++;
+	gs_stage_texture(hub->stagesurf, tex);
 
-	if (hub->appsrc)
+	uint8_t *src_data = NULL;
+	uint32_t src_linesize = 0;
+	if (!gs_stagesurface_map(hub->stagesurf, &src_data, &src_linesize))
+		return;
+
+	uint32_t copy_w = tex_w < hub->width ? tex_w : hub->width;
+	uint32_t copy_h = tex_h < hub->height ? tex_h : hub->height;
+	size_t dst_stride = (size_t)hub->width * 4;
+	size_t total_size = dst_stride * hub->height;
+
+	GstBuffer *in_buf = gst_buffer_new_allocate(NULL, total_size, NULL);
+	if (in_buf)
 	{
+		GstMapInfo map;
+		if (gst_buffer_map(in_buf, &map, GST_MAP_WRITE))
+		{
+			bool is_bgra = (fmt == GS_BGRA || fmt == GS_BGRA_UNORM || fmt == GS_BGRX);
+			for (uint32_t y = 0; y < copy_h; y++)
+			{
+				const uint8_t *src_row = src_data + (size_t)y * src_linesize;
+				uint8_t *dst_row = map.data + (size_t)y * dst_stride;
+				if (!is_bgra)
+				{
+					memcpy(dst_row, src_row, (size_t)copy_w * 4);
+				}
+				else
+				{
+					for (uint32_t x = 0; x < copy_w; x++)
+					{
+						dst_row[x * 4 + 0] = src_row[x * 4 + 2];
+						dst_row[x * 4 + 1] = src_row[x * 4 + 1];
+						dst_row[x * 4 + 2] = src_row[x * 4 + 0];
+						dst_row[x * 4 + 3] = src_row[x * 4 + 3];
+					}
+				}
+			}
+			gst_buffer_unmap(in_buf, &map);
+		}
+
+		uint64_t duration = gst_util_uint64_scale_int(GST_SECOND, hub->fps_den, hub->fps_num);
+		GST_BUFFER_PTS(in_buf) = pts > 0 ? pts : (hub->frame_index * duration);
+		GST_BUFFER_DTS(in_buf) = GST_BUFFER_PTS(in_buf);
+		GST_BUFFER_DURATION(in_buf) = duration;
+		hub->frame_index++;
+
 		gst_app_src_push_buffer(GST_APP_SRC(hub->appsrc), in_buf);
 	}
-	else
-	{
-		gst_buffer_unref(in_buf);
-	}
+
+	gs_stagesurface_unmap(hub->stagesurf);
 }
 
 void gst_master_pipeline_push_raw_video(gst_master_pipeline_t *hub, struct video_data *frame)
 {
-	if (!hub || !frame || g_atomic_int_get(&hub->active_destinations) <= 0 || !hub->appsrc) return;
+	if (!hub || !frame || !frame->data[0] || g_atomic_int_get(&hub->active_destinations) <= 0 || !hub->appsrc) return;
 
-	size_t plane0_size = (size_t)frame->linesize[0] * hub->height;
-	size_t plane1_size = frame->linesize[1] > 0 ? (size_t)frame->linesize[1] * (hub->height / 2) : 0;
-	size_t plane2_size = frame->linesize[2] > 0 ? (size_t)frame->linesize[2] * (hub->height / 2) : 0;
-	size_t total_size = plane0_size + plane1_size + plane2_size;
+	size_t dst_stride = (size_t)hub->width * 4;
+	size_t total_size = dst_stride * hub->height;
 	if (total_size == 0) return;
 
 	GstBuffer *buf = gst_buffer_new_allocate(NULL, total_size, NULL);
@@ -157,19 +189,17 @@ void gst_master_pipeline_push_raw_video(gst_master_pipeline_t *hub, struct video
 	if (gst_buffer_map(buf, &map, GST_MAP_WRITE))
 	{
 		uint8_t *dst = map.data;
-		if (frame->data[0] && plane0_size > 0)
+		if (frame->linesize[0] == dst_stride)
 		{
-			memcpy(dst, frame->data[0], plane0_size);
-			dst += plane0_size;
+			memcpy(dst, frame->data[0], total_size);
 		}
-		if (frame->data[1] && plane1_size > 0)
+		else
 		{
-			memcpy(dst, frame->data[1], plane1_size);
-			dst += plane1_size;
-		}
-		if (frame->data[2] && plane2_size > 0)
-		{
-			memcpy(dst, frame->data[2], plane2_size);
+			size_t copy_bytes = frame->linesize[0] < dst_stride ? frame->linesize[0] : dst_stride;
+			for (uint32_t y = 0; y < hub->height; y++)
+			{
+				memcpy(dst + (size_t)y * dst_stride, frame->data[0] + (size_t)y * frame->linesize[0], copy_bytes);
+			}
 		}
 		gst_buffer_unmap(buf, &map);
 	}
@@ -354,6 +384,14 @@ void gst_master_pipeline_destroy(gst_master_pipeline_t *hub)
 		if (hub->appsink) gst_object_unref(hub->appsink);
 		gst_object_unref(hub->pipe);
 		hub->pipe = NULL;
+	}
+
+	if (hub->stagesurf)
+	{
+		obs_enter_graphics();
+		gs_stagesurface_destroy(hub->stagesurf);
+		hub->stagesurf = NULL;
+		obs_leave_graphics();
 	}
 
 	GPtrArray *subs = (GPtrArray *)hub->subscribers_atomic;

@@ -73,8 +73,7 @@ static void filter_cb_video_render(void *p, gs_effect_t *effect)
 		gs_texture_t *tex = gs_texrender_get_texture(data->texrender);
 		if (tex)
 		{
-			void *handle = gs_texture_get_obj(tex);
-			if (handle) gst_master_pipeline_push_texture(data->pipeline, handle, os_gettime_ns());
+			gst_master_pipeline_push_texture(data->pipeline, tex, os_gettime_ns());
 		}
 	}
 
