@@ -43,14 +43,18 @@ static inline GstVideoFormat obs_to_gst_video_format(enum video_format format)
 		//Formats with Alpha
 		case VIDEO_FORMAT_AYUV: return GST_VIDEO_FORMAT_AYUV;
 		case VIDEO_FORMAT_I40A: return GST_VIDEO_FORMAT_A420;
+#ifdef GST_VIDEO_FORMAT_A422
 		case VIDEO_FORMAT_I42A: return GST_VIDEO_FORMAT_A422;
+#endif
 
 		//0-bit and 12-bit HDR formats
 		case VIDEO_FORMAT_I010: return GST_VIDEO_FORMAT_I420_10LE;
 		case VIDEO_FORMAT_P010: return GST_VIDEO_FORMAT_P010_10LE;
 		case VIDEO_FORMAT_I210: return GST_VIDEO_FORMAT_I422_10LE;
 		case VIDEO_FORMAT_I412: return GST_VIDEO_FORMAT_Y444_12LE;
+#ifdef VIDEO_FORMAT_V210
 		case VIDEO_FORMAT_V210: return GST_VIDEO_FORMAT_v210;
+#endif
 
 		default: return GST_VIDEO_FORMAT_UNKNOWN;
 	}
@@ -96,14 +100,18 @@ static inline enum video_format gst_to_obs_video_format(GstVideoFormat format)
 		//Formats with Alpha
 		case GST_VIDEO_FORMAT_AYUV: return VIDEO_FORMAT_AYUV;
 		case GST_VIDEO_FORMAT_A420: return VIDEO_FORMAT_I40A;
+#if defined(GST_VIDEO_FORMAT_A422) && defined(VIDEO_FORMAT_I42A)
 		case GST_VIDEO_FORMAT_A422: return VIDEO_FORMAT_I42A;
+#endif
 
 		//10-bit and 12-bit HDR formats
 		case GST_VIDEO_FORMAT_I420_10LE: return VIDEO_FORMAT_I010;
 		case GST_VIDEO_FORMAT_P010_10LE: return VIDEO_FORMAT_P010;
 		case GST_VIDEO_FORMAT_I422_10LE: return VIDEO_FORMAT_I210;
 		case GST_VIDEO_FORMAT_Y444_12LE: return VIDEO_FORMAT_I412;
+#ifdef VIDEO_FORMAT_V210
 		case GST_VIDEO_FORMAT_v210: return VIDEO_FORMAT_V210;
+#endif
 
 		default: return VIDEO_FORMAT_NONE;
 	}

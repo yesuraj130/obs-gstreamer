@@ -51,19 +51,34 @@ endif
 dock_opt = get_option('dock')
 qt_dep = dependency('', required : false)
 if not dock_opt.disabled()
-  qt6 = import('qt6', required : false)
-  qt_dep = dependency('qt6', version : '>= 6.4.0', modules : ['Core', 'Gui', 'Widgets'], required : false)
+  if obs_dep.version().version_compare('< 30.0')
+    qt5 = import('qt5', required : false)
+    qt_dep = dependency('qt5', version : '>= 5.15.0', modules : ['Core', 'Gui', 'Widgets'], required : false)
+    if not qt_dep.found()
+      cpp = meson.get_compiler('cpp')
+      qt_core = cpp.find_library('Qt5Core', required : false)
+      qt_gui = cpp.find_library('Qt5Gui', required : false)
+      qt_widgets = cpp.find_library('Qt5Widgets', required : false)
+      if qt_core.found() and qt_gui.found() and qt_widgets.found()
+        qt_dep = declare_dependency(dependencies : [qt_core, qt_gui, qt_widgets])
+      endif
+    endif
+  endif
   if not qt_dep.found()
-    cpp = meson.get_compiler('cpp')
-    qt_core = cpp.find_library('Qt6Core', required : false)
-    qt_gui = cpp.find_library('Qt6Gui', required : false)
-    qt_widgets = cpp.find_library('Qt6Widgets', required : false)
-    if qt_core.found() and qt_gui.found() and qt_widgets.found()
-      qt_dep = declare_dependency(dependencies : [qt_core, qt_gui, qt_widgets])
+    qt6 = import('qt6', required : false)
+    qt_dep = dependency('qt6', version : '>= 6.4.0', modules : ['Core', 'Gui', 'Widgets'], required : false)
+    if not qt_dep.found()
+      cpp = meson.get_compiler('cpp')
+      qt_core = cpp.find_library('Qt6Core', required : false)
+      qt_gui = cpp.find_library('Qt6Gui', required : false)
+      qt_widgets = cpp.find_library('Qt6Widgets', required : false)
+      if qt_core.found() and qt_gui.found() and qt_widgets.found()
+        qt_dep = declare_dependency(dependencies : [qt_core, qt_gui, qt_widgets])
+      endif
     endif
   endif
   if dock_opt.enabled() and not qt_dep.found()
-    error('Qt6 (Core, Gui, Widgets) >= 6.4.0 was requested (-Ddock=enabled) but not found.')
+    error('Qt (Core, Gui, Widgets) was requested (-Ddock=enabled) but not found.')
   endif
 endif
 

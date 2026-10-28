@@ -49,49 +49,91 @@ function checkPort(port, host, callback) {
   socket.connect(port, host);
 }
 
-function startVNCAndOBS(callback) {
-  addLog('Starting TigerVNC, Websockify and OBS Studio...');
-  const startScript = `
-    mkdir -p /root/.vnc
-    echo '#!/bin/sh
+function ensureVNC(callback) {
+  checkPort(VNC_PORT, '127.0.0.1', (err, vncOnline) => {
+    if (vncOnline) {
+      ensureWebsockify(callback);
+      return;
+    }
+    addLog('TigerVNC offline. Starting TigerVNC on :1...');
+    const startVncScript = `
+      mkdir -p /root/.vnc
+      echo '#!/bin/sh
 unset SESSION_MANAGER
 unset DBUS_SESSION_BUS_ADDRESS
 exec startxfce4' > /root/.vnc/xstartup
-    chmod +x /root/.vnc/xstartup
+      chmod +x /root/.vnc/xstartup
 
-    # Configure VNC Password
-    mkdir -p /root/.vnc
-    echo "vncpassword" | vncpasswd -f > /root/.vnc/passwd 2>/dev/null || true
-    chmod 600 /root/.vnc/passwd 2>/dev/null || true
+      echo "vncpassword" | vncpasswd -f > /root/.vnc/passwd 2>/dev/null || true
+      chmod 600 /root/.vnc/passwd 2>/dev/null || true
 
-    # Kill any stale VNC display
-    vncserver -kill :1 >/dev/null 2>&1 || true
-    rm -rf /tmp/.X1-lock /tmp/.X11-unix/X1 2>/dev/null || true
+      vncserver -kill :1 >/dev/null 2>&1 || true
+      rm -rf /tmp/.X1-lock /tmp/.X11-unix/X1 2>/dev/null || true
 
-    # Start TigerVNC on :1 (port 5901)
-    vncserver :1 -geometry 1280x800 -depth 24 -localhost no -SecurityTypes None >/tmp/vnc.log 2>&1 || \
-    vncserver :1 -geometry 1280x800 -depth 24 -localhost no >/tmp/vnc.log 2>&1 || true
-
-    # Start websockify for noVNC on 6080 -> 5901
-    pkill -f websockify 2>/dev/null || true
-    sleep 1
-    nohup websockify --web=/usr/share/novnc/ 6080 localhost:5901 >/tmp/websockify.log 2>&1 &
-
-    # Launch OBS Studio with display :1
-    if ! pgrep -x obs >/dev/null; then
-      DISPLAY=:1 nohup obs >/root/.obs.log 2>&1 &
-    fi
-  `;
-
-  exec(startScript, (err, stdout, stderr) => {
-    if (err) {
-      addLog(`Start script error: ${err.message}`);
-    } else {
-      addLog('VNC services launch commands dispatched successfully');
-    }
-    if (callback) callback(err);
+      vncserver :1 -geometry 1280x800 -depth 24 -localhost no -SecurityTypes None >/tmp/vnc.log 2>&1 || \
+      vncserver :1 -geometry 1280x800 -depth 24 -localhost no >/tmp/vnc.log 2>&1 || true
+    `;
+    exec(startVncScript, (startErr) => {
+      if (startErr) addLog('VNC startup error: ' + startErr.message);
+      else addLog('TigerVNC started on :1');
+      ensureWebsockify(callback);
+    });
   });
 }
+
+function ensureWebsockify(callback) {
+  checkPort(NOVNC_PORT, '127.0.0.1', (err, novncOnline) => {
+    if (novncOnline) {
+      if (callback) callback();
+      return;
+    }
+    addLog('Websockify offline. Starting Websockify on 6080 -> 5901...');
+    exec('setsid websockify --web=/usr/share/novnc/ 6080 localhost:5901 >/tmp/websockify.log 2>&1 < /dev/null &', (wsErr) => {
+      if (wsErr) addLog('Websockify start error: ' + wsErr.message);
+      else addLog('Websockify launched');
+      setTimeout(() => {
+        if (callback) callback();
+      }, 500);
+    });
+  });
+}
+
+function restartOBSOnly(callback) {
+  addLog('Restarting OBS Studio (preserving desktop & VNC connection)...');
+  ensureVNC(() => {
+    const restartCmd = `
+      pkill -9 -x obs 2>/dev/null || true
+      sleep 0.5
+      DISPLAY=:1 setsid obs >/tmp/obs.log 2>&1 < /dev/null &
+      sleep 1
+      DISPLAY=:1 wmctrl -r "OBS" -b add,maximized_vert,maximized_horz 2>/dev/null || true
+    `;
+    exec(restartCmd, (err) => {
+      if (err) addLog('OBS restart error: ' + err.message);
+      else addLog('OBS Studio restarted and active on desktop');
+      if (callback) callback(err);
+    });
+  });
+}
+
+function startVNCAndOBS(callback) {
+  restartOBSOnly(callback);
+}
+
+function ensureOBS() {
+  exec('pgrep -x obs >/dev/null && echo "1" || echo "0"', (err, stdout) => {
+    if (stdout && stdout.trim() !== '1') {
+      exec('DISPLAY=:1 setsid obs >/tmp/obs.log 2>&1 < /dev/null &', () => {});
+    }
+  });
+}
+
+// Background supervisor to auto-heal desktop services & keep OBS open
+setInterval(() => {
+  ensureVNC(() => {
+    ensureOBS();
+  });
+}, 5000);
 
 function runFullSetup(callback) {
   if (isSettingUp) {

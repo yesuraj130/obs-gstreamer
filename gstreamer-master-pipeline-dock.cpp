@@ -21,8 +21,8 @@
 #include "gstreamer-helper.h"
 
 #include <QtCore/qglobal.h>
-#if QT_VERSION < QT_VERSION_CHECK(6, 4, 0)
-#error "obs-gstreamer requires Qt 6.4.0 or newer"
+#if QT_VERSION < QT_VERSION_CHECK(5, 15, 0)
+#error "obs-gstreamer requires Qt 5.15.0 or newer"
 #endif
 
 #include <QtCore/QJsonDocument>
@@ -1057,13 +1057,47 @@ private:
  * -------------------------------------------------------------------------- */
 extern "C" {
 
+static void on_frontend_event(enum obs_frontend_event event, void *private_data)
+{
+	(void)private_data;
+	if (event == OBS_FRONTEND_EVENT_FINISHED_LOADING) {
+		/* Create the Main Dock Widget once frontend window is initialized */
+		if (!g_dock_widget) {
+			g_dock_widget = new GstMasterDockWidget();
+			g_dock_widget->refreshTable();
+
+			/* Register dock into OBS Studio Docks menu */
+#if LIBOBS_API_MAJOR_VER >= 30
+			obs_frontend_add_dock_by_id(
+				"gstreamer_master_pipeline_dock",
+				"GStreamer Master Hub",
+				(void *)g_dock_widget
+			);
+#else
+			obs_frontend_add_dock((void *)g_dock_widget);
+#endif
+		}
+
+		/* Check for autostart destinations */
+		for (auto &hub : g_master_hubs) {
+			for (auto &dest : hub->destinations) {
+				if (dest->enabled && dest->autostart && !dest->is_active) {
+					blog(LOG_INFO, "[obs-gstreamer-dock] Autostarting destination '%s' for hub '%s'",
+						dest->name.c_str(), hub->name.c_str());
+					start_destination(hub.get(), dest.get());
+				}
+			}
+		}
+
+		export_dock_status_json();
+		blog(LOG_INFO, "[obs-gstreamer-dock] Registered GStreamer Master Hub dock");
+	}
+}
+
 void gstreamer_dock_register(void)
 {
 	/* Load persistent Master Hub configuration */
 	load_dock_config();
-
-	/* Create the Main Dock Widget */
-	g_dock_widget = new GstMasterDockWidget();
 
 	/* Add default Master Hub if empty */
 	if (g_master_hubs.empty()) {
@@ -1083,28 +1117,7 @@ void gstreamer_dock_register(void)
 		save_dock_config();
 	}
 
-	g_dock_widget->refreshTable();
-
-	/* Register dock into OBS Studio Docks menu using obs_frontend_add_dock_by_id */
-	obs_frontend_add_dock_by_id(
-		"gstreamer_master_pipeline_dock",
-		"GStreamer Master Hub",
-		(void *)g_dock_widget
-	);
-
-	/* Check for autostart destinations */
-	for (auto &hub : g_master_hubs) {
-		for (auto &dest : hub->destinations) {
-			if (dest->enabled && dest->autostart && !dest->is_active) {
-				blog(LOG_INFO, "[obs-gstreamer-dock] Autostarting destination '%s' for hub '%s'",
-					dest->name.c_str(), hub->name.c_str());
-				start_destination(hub.get(), dest.get());
-			}
-		}
-	}
-
-	export_dock_status_json();
-	blog(LOG_INFO, "[obs-gstreamer-dock] Registered GStreamer Master Hub dock via obs_frontend_add_dock_by_id (OBS 32+ / Qt 6)");
+	obs_frontend_add_event_callback(on_frontend_event, nullptr);
 }
 
 void gstreamer_dock_unregister(void)
