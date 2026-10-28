@@ -207,10 +207,29 @@ struct gst_hub_branch *gst_rtsp_branch_start(gst_master_pipeline_t *pipeline,
 	}
 
 	const char *requested_mount = "/live";
+	char mount_buf[256];
 	if (mount) {
 		const char *m = mount;
 		while (*m == ' ' || *m == '\t') m++;
-		if (*m != '\0') requested_mount = m;
+		if (*m != '\0') {
+			if (*m != '/') {
+				snprintf(mount_buf, sizeof(mount_buf), "/%s", m);
+				requested_mount = mount_buf;
+			} else {
+				requested_mount = m;
+			}
+		}
+	}
+
+	/* Collision check: ensure another active branch isn't already using the same port and mount */
+	for (struct gst_hub_branch *b = g_branches; b; b = b->next) {
+		if (b->active && g_strcmp0(b->service, requested_service) == 0 &&
+		    g_strcmp0(b->mount_point, requested_mount) == 0) {
+			blog(LOG_ERROR, "[obs-gstreamer-rtspserver] Cannot start RTSP branch '%s': Mount point '%s' on port %s is already in use by active branch '%s'!",
+				name ? name : "Output", requested_mount, requested_service, b->name ? b->name : "Unknown");
+			g_mutex_unlock(&g_hub_mutex);
+			return NULL;
+		}
 	}
 
 	struct gst_hub_server_entry *server_entry = get_or_create_rtsp_server(requested_service);

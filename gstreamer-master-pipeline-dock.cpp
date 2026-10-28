@@ -176,6 +176,61 @@ static void stop_destination(GstMasterHub *hub, GstDestination *dest)
 	}
 
 	dest->is_active = false;
+
+	/* If no active destinations remain on this master hub, detach and destroy GPU render callback */
+	bool any_active = false;
+	for (const auto &d : hub->destinations) {
+		if (d->is_active) {
+			any_active = true;
+			break;
+		}
+	}
+
+	if (!any_active && hub->active_render_cb) {
+		blog(LOG_INFO, "[obs-gstreamer-dock] All destinations stopped: tearing down master pipeline for '%s'",
+			hub->name.c_str());
+		gst_render_callback_destroy(hub->active_render_cb);
+		hub->active_render_cb = nullptr;
+	}
+}
+
+static bool ensure_master_pipeline(GstMasterHub *hub)
+{
+	if (hub->active_render_cb)
+		return true;
+
+	gst_source_type_t stype = GST_SOURCE_MAIN_OUTPUT;
+	if (hub->source_type == "Scene")
+		stype = GST_SOURCE_SCENE;
+	else if (hub->source_type == "Source")
+		stype = GST_SOURCE_SOURCE;
+
+	struct obs_video_info ovi = {};
+	obs_get_video_info(&ovi);
+	uint32_t fps_num = ovi.fps_num ? ovi.fps_num : 60;
+	uint32_t fps_den = ovi.fps_den ? ovi.fps_den : 1;
+
+	blog(LOG_INFO, "[obs-gstreamer-dock] Starting Master Hardware Pipeline for '%s' (encoder=%s, bitrate=%d kbps)",
+		hub->name.c_str(), hub->gpu_encoder_type.c_str(), hub->bitrate_kbps);
+
+	hub->active_render_cb = gst_render_callback_create(
+		stype,
+		hub->scene_name.c_str(),
+		hub->source_name.c_str(),
+		hub->master_pipeline.c_str(),
+		hub->gpu_encoder_type.c_str(),
+		hub->bitrate_kbps,
+		hub->keyint_sec,
+		fps_num,
+		fps_den
+	);
+
+	if (!hub->active_render_cb) {
+		blog(LOG_ERROR, "[obs-gstreamer-dock] Failed to create Master Render Callback for '%s'", hub->name.c_str());
+		return false;
+	}
+
+	return true;
 }
 
 static bool start_destination(GstMasterHub *hub, GstDestination *dest)
@@ -183,36 +238,26 @@ static bool start_destination(GstMasterHub *hub, GstDestination *dest)
 	stop_destination(hub, dest);
 
 	if (dest->type == DEST_TYPE_RTSP) {
-		obs_data_t *settings = obs_data_create();
-		obs_data_set_string(settings, "name", hub->name.c_str());
-		obs_data_set_string(settings, "source_type", hub->source_type.c_str());
+		if (!ensure_master_pipeline(hub))
+			return false;
 
-		const char *src_name = "";
-		if (hub->source_type == "Scene")
-			src_name = hub->scene_name.c_str();
-		else if (hub->source_type == "Source")
-			src_name = hub->source_name.c_str();
+		gst_master_pipeline_t *master_pipe = gst_render_callback_get_pipeline(hub->active_render_cb);
+		if (!master_pipe) {
+			blog(LOG_ERROR, "[obs-gstreamer-dock] Master pipeline object is NULL");
+			return false;
+		}
 
-		obs_data_set_string(settings, "source_name", src_name);
-		obs_data_set_string(settings, "render_mode", hub->render_mode.c_str());
+		blog(LOG_INFO, "[obs-gstreamer-dock] Starting RTSP destination on port %s%s linked to master pipeline '%s'...",
+			dest->rtsp_port.c_str(), dest->rtsp_mount.c_str(), hub->name.c_str());
 
-		int port = atoi(dest->rtsp_port.c_str());
-		if (port <= 0) port = 8554;
-		obs_data_set_int(settings, "rtsp_port", port);
-		obs_data_set_string(settings, "rtsp_service", dest->rtsp_port.c_str());
-		obs_data_set_string(settings, "rtsp_mount", dest->rtsp_mount.c_str());
-
-		obs_data_set_string(settings, "encoder_type", hub->gpu_encoder_type.c_str());
-		obs_data_set_int(settings, "bitrate_kbps", hub->bitrate_kbps);
-		obs_data_set_int(settings, "keyint_sec", hub->keyint_sec);
-		obs_data_set_string(settings, "master_pipeline", hub->master_pipeline.c_str());
-		obs_data_set_string(settings, "rtsp_pipeline", dest->rtsp_pipeline.c_str());
-
-		blog(LOG_INFO, "[obs-gstreamer-dock] Starting RTSP destination on port %s%s...",
-			dest->rtsp_port.c_str(), dest->rtsp_mount.c_str());
-
-		dest->rtsp_branch = gst_render_hub_start_branch_data(settings);
-		obs_data_release(settings);
+		dest->rtsp_branch = gst_rtsp_branch_start(
+			master_pipe,
+			dest->name.c_str(),
+			dest->rtsp_port.c_str(),
+			dest->rtsp_mount.c_str(),
+			hub->gpu_encoder_type.c_str(),
+			dest->rtsp_pipeline.c_str()
+		);
 
 		if (!dest->rtsp_branch) {
 			blog(LOG_ERROR, "[obs-gstreamer-dock] Failed to start RTSP branch");
