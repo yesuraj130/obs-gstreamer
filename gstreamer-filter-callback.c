@@ -13,7 +13,7 @@ struct gst_filter_callback
 	gst_master_pipeline_t *pipeline;
 };
 
-struct filter_private_data_t
+struct filter_private_data
 {
 	obs_source_t *source;
 	gst_master_pipeline_t *pipeline;
@@ -30,7 +30,7 @@ static const char *filter_cb_get_name(void *type_data)
 static void *filter_cb_create(obs_data_t *settings, obs_source_t *source)
 {
 	UNUSED_PARAMETER(settings);
-	filter_private_data_t *data = bzalloc(sizeof(filter_private_data_t));
+	struct filter_private_data *data = bzalloc(sizeof(struct filter_private_data));
 	data->source = source;
 	data->active = false;
 	data->texrender = gs_texrender_create(GS_RGBA, GS_ZS_NONE);
@@ -39,7 +39,7 @@ static void *filter_cb_create(obs_data_t *settings, obs_source_t *source)
 
 static void filter_cb_destroy(void *p)
 {
-	filter_private_data_t *data = (filter_private_data_t *)p;
+	struct filter_private_data *data = (struct filter_private_data *)p;
 	if (data) 
 	{
 		if (data->texrender) gs_texrender_destroy(data->texrender);
@@ -50,7 +50,7 @@ static void filter_cb_destroy(void *p)
 static void filter_cb_video_render(void *p, gs_effect_t *effect)
 {
 	UNUSED_PARAMETER(effect);
-	filter_private_data_t *data = (filter_private_data_t *)p;
+	struct filter_private_data *data = (struct filter_private_data *)p;
 	if (!data || !data->active || !data->pipeline)
 	{
 		obs_source_skip_video_filter(data ? data->source : NULL);
@@ -107,7 +107,7 @@ static void pipeline_state_change(bool active, void *user_data)
 	gst_filter_callback_t *cb = (gst_filter_callback_t *)user_data;
 	if (!cb || !cb->filter) return;
 
-	filter_private_data_t *priv = (filter_private_data_t *)obs_obj_get_data(cb->filter);
+	struct filter_private_data *priv = (struct filter_private_data *)obs_obj_get_data(cb->filter);
 	if (priv) priv->active = active;
 }
 
@@ -160,7 +160,7 @@ gst_filter_callback_t *gst_filter_callback_create(gst_source_type_t type, const 
 		return NULL;
 	}
 
-	filter_private_data_t *priv = (filter_private_data_t *)obs_obj_get_data(filter);
+	struct filter_private_data *priv = (struct filter_private_data *)obs_obj_get_data(filter);
 	if (priv)
 	{
 		priv->pipeline = cb->pipeline;
@@ -186,7 +186,7 @@ void gst_filter_callback_destroy(gst_filter_callback_t *cb)
 
 	if (cb->filter)
 	{
-		filter_private_data_t *priv = (filter_private_data_t *)obs_obj_get_data(cb->filter);
+		struct filter_private_data *priv = (struct filter_private_data *)obs_obj_get_data(cb->filter);
 		if (priv)
 		{
 			priv->active = false;
