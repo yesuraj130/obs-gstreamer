@@ -17,6 +17,7 @@ typedef struct
 	obs_source_t *source;
 	gst_master_pipeline_t *pipeline;
 	bool active;
+	gs_texrender_t *texrender;
 } filter_private_data_t;
 
 static const char *filter_cb_get_name(void *type_data)
@@ -31,17 +32,22 @@ static void *filter_cb_create(obs_data_t *settings, obs_source_t *source)
 	filter_private_data_t *data = bzalloc(sizeof(filter_private_data_t));
 	data->source = source;
 	data->active = false;
+	data->texrender = gs_texrender_create(GS_RGBA, GS_ZS_NONE);
 	return data;
 }
 
 static void filter_cb_destroy(void *p)
 {
 	filter_private_data_t *data = (filter_private_data_t *)p;
-	if (data) bfree(data);
+	if (data) {
+		if (data->texrender) gs_texrender_destroy(data->texrender);
+		bfree(data);
+	}
 }
 
 static void filter_cb_video_render(void *p, gs_effect_t *effect)
 {
+	UNUSED_PARAMETER(effect);
 	filter_private_data_t *data = (filter_private_data_t *)p;
 	if (!data || !data->active || !data->pipeline)
 	{
@@ -49,17 +55,28 @@ static void filter_cb_video_render(void *p, gs_effect_t *effect)
 		return;
 	}
 
-	if (obs_source_process_filter_begin(data->source, GS_RGBA, OBS_ALLOW_DIRECT_RENDERING))
-	{
-		obs_source_process_filter_end(data->source, effect, 0, 0);
+	obs_source_t *target = obs_filter_get_target(data->source);
+	uint32_t width = target ? obs_source_get_base_width(target) : 0;
+	uint32_t height = target ? obs_source_get_base_height(target) : 0;
 
-		gs_texture_t *tex = gs_filter_get_target_texture(data->source);
+	if (width > 0 && height > 0 && data->texrender)
+	{
+		gs_texrender_begin(data->texrender, width, height);
+		struct vec4 clear_color;
+		vec4_set(&clear_color, 0.0f, 0.0f, 0.0f, 0.0f);
+		gs_clear(GS_CLEAR_COLOR, &clear_color, 0.0f, 0);
+		obs_source_video_render(target);
+		gs_texrender_end(data->texrender);
+
+		gs_texture_t *tex = gs_texrender_get_texture(data->texrender);
 		if (tex)
 		{
 			void *handle = gs_texture_get_obj(tex);
 			if (handle) gst_master_pipeline_push_texture(data->pipeline, handle, os_gettime_ns());
 		}
 	}
+
+	obs_source_skip_video_filter(data->source);
 }
 
 static struct obs_source_info gst_filter_callback_info = {

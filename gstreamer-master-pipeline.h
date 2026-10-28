@@ -10,10 +10,8 @@
 #include <gst/gst.h>
 #include <obs.h>
 
-#if defined(_WIN32) && defined(HAVE_GST_D3D11) && HAVE_GST_D3D11
-#include <gst/d3d11/gstd3d11.h>
-#elif defined(HAVE_GST_GL) && HAVE_GST_GL
-#include <gst/gl/gstgl.h>
+#if defined(HAVE_GST_GL) && HAVE_GST_GL
+#include <gst/gl/gl.h>
 #endif
 
 #ifdef __cplusplus
@@ -47,10 +45,7 @@ struct gst_master_pipeline
 	GstElement *appsrc;
 	GstElement *appsink;
 
-#if defined(_WIN32) && defined(HAVE_GST_D3D11) && HAVE_GST_D3D11
-	GstD3D11Device *d3d11_device;
-	GstAllocator *d3d11_allocator;
-#elif defined(HAVE_GST_GL) && HAVE_GST_GL
+#if defined(HAVE_GST_GL) && HAVE_GST_GL
 	GstGLDisplay *gl_display;
 	GstGLContext *gl_context;
 	GstAllocator *gl_allocator;
@@ -76,6 +71,7 @@ void gst_master_pipeline_push_raw_video(gst_master_pipeline_t *hub, struct video
 /* Pub-sub distribution */
 gst_pipeline_subscriber_t *gst_master_pipeline_subscribe(gst_master_pipeline_t *hub, gst_master_frame_cb cb, gpointer user_data, const char *name);
 void gst_master_pipeline_unsubscribe(gst_master_pipeline_t *hub, gst_pipeline_subscriber_t *sub);
+void gst_master_pipeline_request_keyframe(gst_master_pipeline_t *hub);
 
 
 

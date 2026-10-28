@@ -23,6 +23,7 @@
 #ifdef __linux__
 #include <dirent.h>
 #endif
+#include <stdio.h>
 #include <obs-module.h>
 #include <util/dstr.h>
 #include <gst/gst.h>

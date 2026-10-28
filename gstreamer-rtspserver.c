@@ -15,6 +15,7 @@
 #include <gst/app/gstappsink.h>
 #include <gst/video/video.h>
 #include <gst/rtsp-server/rtsp-server.h>
+#include <stdio.h>
 #include <string.h>
 
 typedef struct gst_hub_server_entry {
@@ -313,7 +314,7 @@ gst_hub_branch_t *gst_render_hub_start_branch_data(obs_data_t *settings)
 	int port = (int)obs_data_get_int(settings, "rtsp_port");
 	char port_buf[16] = {0};
 	if (port > 0) {
-		snprintf(port_buf, sizeof(port_buf), "%d", port);
+		g_snprintf(port_buf, sizeof(port_buf), "%d", port);
 		params.rtsp_service = port_buf;
 	} else {
 		params.rtsp_service = obs_data_get_string(settings, "rtsp_service");

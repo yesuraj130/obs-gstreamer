@@ -116,11 +116,8 @@ void gst_master_pipeline_push_texture(gst_master_pipeline_t *hub, void *gpu_hand
 
 	GstMemory *mem = NULL;
 
-#if defined(_WIN32) && defined(HAVE_GST_D3D11) && HAVE_GST_D3D11
-	if (hub->d3d11_allocator && hub->d3d11_device)
-	{
-		mem = gst_d3d11_allocator_alloc_wrapped(GST_D3D11_ALLOCATOR(hub->d3d11_allocator), hub->d3d11_device, (ID3D11Texture2D *)gpu_handle, sizeof(void *), NULL, NULL);
-	}
+#if defined(_WIN32)
+	mem = gst_memory_new_wrapped(GST_MEMORY_FLAG_READONLY, gpu_handle, sizeof(void *), 0, sizeof(void *), NULL, NULL);
 #elif defined(HAVE_GST_GL) && HAVE_GST_GL
 	if (hub->gl_context && hub->gl_allocator)
 	{
@@ -320,6 +317,13 @@ void gst_master_pipeline_unsubscribe(gst_master_pipeline_t *hub, gst_pipeline_su
 	update_active_destinations(hub, -1);
 }
 
+void gst_master_pipeline_request_keyframe(gst_master_pipeline_t *hub)
+{
+	if (!hub || !hub->appsink) return;
+	GstEvent *event = gst_video_event_new_upstream_force_key_unit(GST_CLOCK_TIME_NONE, TRUE, 0);
+	gst_element_send_event(hub->appsink, event);
+}
+
 gst_master_pipeline_t *gst_master_pipeline_create(const char *custom_master_pipe, const char *encoder_type, int bitrate_kbps, int keyint_sec, uint32_t width, uint32_t height, uint32_t fps_num, uint32_t fps_den, gst_master_state_cb state_cb, gpointer user_data)
 {
 	gst_master_pipeline_t *hub = bzalloc(sizeof(gst_master_pipeline_t));
@@ -333,14 +337,7 @@ gst_master_pipeline_t *gst_master_pipeline_create(const char *custom_master_pipe
 	hub->state_cb = state_cb;
 	hub->state_user_data = user_data;
 
-#if defined(_WIN32) && defined(HAVE_GST_D3D11) && HAVE_GST_D3D11
-	GError *err = NULL;
-	hub->d3d11_device = gst_d3d11_device_new(0, &err);
-	if (hub->d3d11_device)
-	{
-		hub->d3d11_allocator = GST_ALLOCATOR(gst_d3d11_allocator_new(hub->d3d11_device));
-	}
-#elif defined(HAVE_GST_GL) && HAVE_GST_GL
+#if defined(HAVE_GST_GL) && HAVE_GST_GL
 	hub->gl_display = gst_gl_display_new();
 	if (hub->gl_display)
 	{
@@ -383,18 +380,7 @@ void gst_master_pipeline_destroy(gst_master_pipeline_t *hub)
 {
 	if (!hub) return;
 
-#if defined(_WIN32) && defined(HAVE_GST_D3D11) && HAVE_GST_D3D11
-	if (hub->d3d11_allocator)
-	{
-		gst_object_unref(hub->d3d11_allocator);
-		hub->d3d11_allocator = NULL;
-	}
-	if (hub->d3d11_device)
-	{
-		gst_object_unref(hub->d3d11_device);
-		hub->d3d11_device = NULL;
-	}
-#elif defined(HAVE_GST_GL) && HAVE_GST_GL
+#if defined(HAVE_GST_GL) && HAVE_GST_GL
 	if (hub->gl_allocator)
 	{
 		gst_object_unref(hub->gl_allocator);

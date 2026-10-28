@@ -116,7 +116,7 @@ else
   extra_c_args += ['-DHAVE_GST_D3D11=0']
 endif
 
-extra_c_args += ['-DENABLE_DOCK=1']
+extra_c_args += ['-DENABLE_DOCK=1', '-DGST_USE_UNSTABLE_API']
 
 if obs_frontend_dep.found()
   deps += [obs_frontend_dep]
