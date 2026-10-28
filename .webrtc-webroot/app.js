@@ -198,23 +198,26 @@
       });
   });
 
-  // Restart Full PC (VNC, XFCE Desktop, Websockify, OBS)
+  // Restart Full PC (Check/Install all tools, configure VNC, XFCE Desktop, Websockify, OBS 32 & GStreamer)
   var btnRestartPc = document.getElementById('btn-restart-pc');
   if (btnRestartPc) {
     btnRestartPc.addEventListener('click', function () {
-      vncStatusText.textContent = 'Restarting PC...';
-      log('Triggering full PC restart (VNC, Desktop, OBS)...', 'info');
+      vncStatusText.textContent = 'Checking Tools & Restarting PC...';
+      btnRestartPc.disabled = true;
+      log('Checking/installing all required tools (noVNC, OBS 32, GStreamer, Desktop) & restarting PC...', 'info');
 
       fetch('/api/vnc/restart-pc', { method: 'POST' })
         .then(function (res) { return res.json(); })
         .then(function (data) {
-          log('Full PC restart completed', 'info');
+          btnRestartPc.disabled = false;
+          log('All tools verified & Full PC restart completed', 'info');
           setTimeout(function () {
             checkVncStatus();
             if (btnReloadIframe) btnReloadIframe.click();
-          }, 2000);
+          }, 1500);
         })
         .catch(function (err) {
+          btnRestartPc.disabled = false;
           log('Full PC restart error: ' + err.message, 'error');
         });
     });

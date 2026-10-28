@@ -196,9 +196,101 @@ function restartOBSOnly(callback) {
 }
 
 function restartFullPC(callback) {
-  addLog('Restarting full PC environment (VNC, XFCE Desktop, Websockify, OBS)...');
+  if (isSettingUp) {
+    if (callback) callback(null, 'Setup/Restart already in progress');
+    return;
+  }
+  addLog('Checking, installing & configuring all required tools (noVNC, XFCE, GStreamer, OBS 32, Plugin) and restarting PC...');
   isRestarting = true;
-  const fullRestartCmd = `
+  isSettingUp = true;
+
+  const fullProvisionAndRestartCmd = `
+    export DEBIAN_FRONTEND=noninteractive
+
+    # 1. Check & install system packages (VNC, noVNC, XFCE, File Manager, Zip GUI, Browser, GStreamer, Qt6, Build tools)
+    if ! which Xtigervnc websockify startxfce4 wmctrl xdotool xrandr thunar xarchiver firefox-esr meson ninja gst-launch-1.0 >/dev/null 2>&1 || \
+       [ ! -f /usr/include/obs/obs-module.h ] || \
+       [ ! -f /usr/lib/x86_64-linux-gnu/libQt6Widgets.so ]; then
+      echo "[Setup] Installing missing system packages..."
+      dpkg --remove --force-all lightdm 2>/dev/null || true
+      dpkg --configure -a 2>/dev/null || true
+      apt-get update
+      apt-get install -y --no-install-recommends \
+        xfce4-session xfwm4 xfce4-panel xfdesktop4 xfce4-terminal \
+        thunar thunar-archive-plugin xarchiver zip unzip p7zip-full firefox-esr \
+        tigervnc-standalone-server tigervnc-tools novnc websockify wmctrl xdotool x11-xserver-utils \
+        obs-studio libobs-dev meson ninja-build build-essential pkg-config curl ca-certificates \
+        squashfs-tools zstd fuse3 libfuse2 \
+        gstreamer1.0-tools libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+        gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
+        gstreamer1.0-plugins-ugly gstreamer1.0-libav libgstreamer-plugins-bad1.0-dev \
+        libgstrtspserver-1.0-0 libgstrtspserver-1.0-dev gstreamer1.0-rtsp \
+        libsoup-3.0-dev qt6-base-dev
+    fi
+
+    # 2. Check & install OBS Studio 32.2.2 AppImage
+    if [ ! -x /opt/obs-studio-32/AppDir/AppRun ]; then
+      echo "[Setup] Downloading and extracting OBS Studio 32.2.2..."
+      mkdir -p /opt/obs-studio-32
+      APPIMAGE_URL="https://github.com/ivan-hc/OBS-Studio-appimage/releases/download/continuous/OBS-Studio_32.2.2-1-archimage5.0-lite-x86_64.AppImage"
+      curl -L -s --retry 3 -o /tmp/obs32.AppImage "$APPIMAGE_URL"
+      chmod +x /tmp/obs32.AppImage
+      cd /opt/obs-studio-32
+      /tmp/obs32.AppImage --appimage-extract >/dev/null 2>&1 || true
+      if [ -d /opt/obs-studio-32/squashfs-root ] && [ ! -d /opt/obs-studio-32/AppDir ]; then
+        mv /opt/obs-studio-32/squashfs-root /opt/obs-studio-32/AppDir
+        ln -sf ./AppDir /opt/obs-studio-32/squashfs-root
+      fi
+      rm -f /tmp/obs32.AppImage
+    fi
+
+    if [ -x /opt/obs-studio-32/AppDir/AppRun ]; then
+      ln -sf /opt/obs-studio-32/AppDir/AppRun /usr/bin/obs
+    fi
+
+    # 3. Check, compile & install obs-gstreamer plugin with Qt6 Dock
+    cd /app/applet
+    if [ ! -f /app/applet/build/obs-gstreamer.so ]; then
+      echo "[Setup] Building obs-gstreamer plugin with Qt6 Dock..."
+      meson setup build --wipe -Ddock=enabled
+      ninja -C build
+    fi
+
+    mkdir -p /root/.config/obs-studio/plugins/obs-gstreamer/bin/64bit
+    cp -f /app/applet/build/obs-gstreamer.so /root/.config/obs-studio/plugins/obs-gstreamer/bin/64bit/obs-gstreamer.so 2>/dev/null || true
+    rm -f /opt/obs-studio-32/AppDir/lib/obs-plugins/obs-gstreamer.so 2>/dev/null || true
+
+    # 4. Configure Desktop shortcuts & VNC startup/passwords
+    mkdir -p /root/Desktop
+    cp -f /usr/share/applications/thunar.desktop /root/Desktop/ 2>/dev/null || true
+    cp -f /usr/share/applications/xarchiver.desktop /root/Desktop/ 2>/dev/null || true
+    cp -f /usr/share/applications/firefox-esr.desktop /root/Desktop/ 2>/dev/null || true
+    cat << 'EOF' > /root/Desktop/obs.desktop
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=OBS Studio 32
+Comment=Open Broadcaster Software 32.2.2
+Exec=obs
+Icon=com.obsproject.Studio
+Terminal=false
+Categories=AudioVideo;Recorder;
+EOF
+    chmod +x /root/Desktop/*.desktop 2>/dev/null || true
+
+    mkdir -p /root/.vnc /root/.config/tigervnc
+    echo '#!/bin/sh
+unset SESSION_MANAGER
+unset DBUS_SESSION_BUS_ADDRESS
+exec startxfce4' > /root/.vnc/xstartup
+    chmod +x /root/.vnc/xstartup
+
+    echo "vncpassword" | vncpasswd -f > /root/.vnc/passwd 2>/dev/null || true
+    chmod 600 /root/.vnc/passwd 2>/dev/null || true
+    cp -f /root/.vnc/passwd /root/.config/tigervnc/passwd 2>/dev/null || true
+    chmod 600 /root/.config/tigervnc/passwd 2>/dev/null || true
+
+    # 5. Restart all desktop processes cleanly
     pkill -9 -x obs 2>/dev/null || true
     pkill -9 -x thunar 2>/dev/null || true
     pkill -9 -x xarchiver 2>/dev/null || true
@@ -213,14 +305,8 @@ function restartFullPC(callback) {
     rm -rf /tmp/.X1-lock /tmp/.X11-unix/X1 /root/.config/obs-studio/.sentinel 2>/dev/null || true
     sleep 1
 
-    mkdir -p /root/.vnc /root/.config/tigervnc
-    echo "vncpassword" | vncpasswd -f > /root/.vnc/passwd 2>/dev/null || true
-    chmod 600 /root/.vnc/passwd 2>/dev/null || true
-    cp /root/.vnc/passwd /root/.config/tigervnc/passwd 2>/dev/null || true
-    chmod 600 /root/.config/tigervnc/passwd 2>/dev/null || true
-
-    vncserver :1 -geometry 1280x800 -depth 24 -localhost no -PasswordFile /root/.vnc/passwd -SecurityTypes VncAuth -UseBlacklist=0 -AlwaysShared=1 >/tmp/vnc.log 2>&1 || \
-    vncserver :1 -geometry 1280x800 -depth 24 -localhost no -UseBlacklist=0 -AlwaysShared=1 >/tmp/vnc.log 2>&1 || true
+    vncserver :1 -geometry 1280x800 -depth 24 -localhost no -PasswordFile /root/.vnc/passwd -SecurityTypes VncAuth -UseBlacklist=0 -AlwaysShared=1 >/tmp/vnc.log 2>&1 < /dev/null || \
+    vncserver :1 -geometry 1280x800 -depth 24 -localhost no -UseBlacklist=0 -AlwaysShared=1 >/tmp/vnc.log 2>&1 < /dev/null || true
 
     setsid websockify --web=/usr/share/novnc/ 6080 localhost:5901 >/tmp/websockify.log 2>&1 < /dev/null &
     sleep 1.5
@@ -228,17 +314,24 @@ function restartFullPC(callback) {
     sleep 2.5
     DISPLAY=:1 wmctrl -r "OBS" -b add,maximized_vert,maximized_horz 2>/dev/null || true
   `;
-  exec(fullRestartCmd, (err) => {
+
+  exec(fullProvisionAndRestartCmd, { maxBuffer: 1024 * 1024 * 10 }, (err) => {
     isRestarting = false;
-    if (err) addLog('Full PC restart error: ' + err.message);
-    else addLog('Full PC Desktop & OBS restarted');
+    isSettingUp = false;
+    if (err) addLog('Full PC check/setup/restart error: ' + err.message);
+    else addLog('All tools verified, configured & Full PC Desktop restarted');
+
+    if (tcpTunnelInfo.status !== 'online') {
+      startTCPTunnel();
+    }
+
     ensureCustomModes(() => {
       if (currentResolutionMode && currentResolutionMode !== 'auto') {
         setVNCResolution(currentResolutionMode, () => {
-          if (callback) callback(err);
+          if (callback) callback(err, 'All tools verified and PC restarted');
         });
       } else {
-        if (callback) callback(err);
+        if (callback) callback(err, 'All tools verified and PC restarted');
       }
     });
   });
@@ -249,7 +342,7 @@ function startVNCAndOBS(callback) {
 }
 
 function ensureOBS() {
-  if (isRestarting) return;
+  if (isRestarting || isSettingUp) return;
   exec('pgrep -x obs >/dev/null && echo "1" || echo "0"', (err, stdout) => {
     if (stdout && stdout.trim() !== '1') {
       exec('rm -rf /root/.config/obs-studio/.sentinel 2>/dev/null || true; DISPLAY=:1 setsid obs >/tmp/obs.log 2>&1 < /dev/null &', () => {});
@@ -299,56 +392,26 @@ function setVNCResolution(resolution, callback) {
   });
 }
 
-// Ensure custom portrait modes on server boot
-ensureCustomModes();
+// Ensure custom portrait modes on server boot; auto-provision if environment was reset
+exec('which Xtigervnc websockify >/dev/null 2>&1 && [ -x /opt/obs-studio-32/AppDir/AppRun ] && echo "1" || echo "0"', (err, stdout) => {
+  if (stdout && stdout.trim() !== '1') {
+    addLog('Detected fresh/reset container on boot — running automatic provisioning...');
+    restartFullPC();
+  } else {
+    ensureCustomModes();
+  }
+});
 
 // Background supervisor to auto-heal desktop services & keep OBS open
 setInterval(() => {
-  if (isRestarting) return;
+  if (isRestarting || isSettingUp) return;
   ensureVNC(() => {
     ensureOBS();
   });
 }, 5000);
 
 function runFullSetup(callback) {
-  if (isSettingUp) {
-    if (callback) callback(null, 'Setup already in progress');
-    return;
-  }
-  isSettingUp = true;
-  addLog('Starting environment setup & package installation...');
-
-  const setupCmd = `
-    export DEBIAN_FRONTEND=noninteractive
-    dpkg --remove --force-all lightdm 2>/dev/null || true
-    dpkg --configure -a || true
-    apt-get update
-    apt-get install -y --no-install-recommends xfce4-session xfwm4 xfce4-panel xfdesktop4 xfce4-terminal tigervnc-standalone-server tigervnc-tools novnc websockify obs-studio libobs-dev meson ninja-build build-essential gstreamer1.0-tools libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad libgstreamer-plugins-bad1.0-dev libgstrtspserver-1.0-0 libgstrtspserver-1.0-dev gstreamer1.0-rtsp libsoup-3.0-dev qt6-base-dev
-
-    # Build obs-gstreamer plugin
-    cd /app/applet
-    rm -rf build
-    meson setup build || true
-    ninja -C build || true
-
-    # Copy plugin to OBS plugin locations
-    mkdir -p /root/.config/obs-studio/plugins/obs-gstreamer/bin/64bit
-    cp build/obs-gstreamer.so /root/.config/obs-studio/plugins/obs-gstreamer/bin/64bit/ 2>/dev/null || true
-    cp build/obs-gstreamer.so /usr/lib/x86_64-linux-gnu/obs-plugins/ 2>/dev/null || true
-  `;
-
-  exec(setupCmd, (err, stdout, stderr) => {
-    isSettingUp = false;
-    if (err) {
-      addLog(`Setup failed: ${err.message}`);
-      if (callback) callback(err);
-      return;
-    }
-    addLog('Setup & build completed! Starting desktop environment...');
-    startVNCAndOBS(() => {
-      if (callback) callback(null, 'Setup and startup complete');
-    });
-  });
+  restartFullPC(callback);
 }
 
 const server = http.createServer((req, res) => {
