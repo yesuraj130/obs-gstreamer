@@ -20,6 +20,11 @@
 #include "gstreamer-render-callback.h"
 #include "gstreamer-helper.h"
 
+#include <QtCore/qglobal.h>
+#if QT_VERSION < QT_VERSION_CHECK(6, 4, 0)
+#error "obs-gstreamer requires Qt 6.4.0 or newer"
+#endif
+
 #include <QtGui/QColor>
 #include <QtGui/QBrush>
 #include <QtWidgets/QWidget>

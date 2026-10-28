@@ -52,7 +52,7 @@ dock_opt = get_option('dock')
 qt_dep = dependency('', required : false)
 if not dock_opt.disabled()
   qt6 = import('qt6', required : false)
-  qt_dep = dependency('qt6', modules : ['Core', 'Gui', 'Widgets'], required : dock_opt.enabled())
+  qt_dep = dependency('qt6', version : '>= 6.4.0', modules : ['Core', 'Gui', 'Widgets'], required : dock_opt.enabled())
 endif
 
 webrtc_opt = get_option('webrtc')
