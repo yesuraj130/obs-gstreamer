@@ -3,10 +3,10 @@
  *
  * Implements a native OBS Dock using obs_frontend_add_dock_by_id:
  * - Main Window: Listed in OBS "Docks" menu, displays all configured Master Hubs.
- * - Child Window (Double-click): Opens detailed editor for master encoder & destinations.
- * - Multi-destination support: Unlimited RTSP, WebRTC, and Custom pipeline destinations
- *   attached to a master hub (e.g. 2 RTSP, 3 WebRTC concurrently).
- * - No scenes or filters cluttered.
+ * - Child Window (Double-click / Configure): Opens detailed editor for master encoder & destinations.
+ * - Destination Editor Dialog: Edit individual RTSP, WebRTC, or Custom pipeline properties.
+ * - JSON Persistence: Automatically saves & restores Master Hub settings across OBS sessions.
+ * - Live Status Export: Writes JSON telemetry to /tmp/obs_gstreamer_hubs.json for Web UI monitoring.
  */
 
 #include <obs.h>
@@ -24,6 +24,13 @@
 #if QT_VERSION < QT_VERSION_CHECK(6, 4, 0)
 #error "obs-gstreamer requires Qt 6.4.0 or newer"
 #endif
+
+#include <QtCore/QJsonDocument>
+#include <QtCore/QJsonObject>
+#include <QtCore/QJsonArray>
+#include <QtCore/QFile>
+#include <QtCore/QDir>
+#include <QtCore/QDateTime>
 
 #include <QtGui/QColor>
 #include <QtGui/QBrush>
@@ -61,7 +68,7 @@
 	"h264parse config-interval=1 ! rtph264pay name=pay0 pt=96 config-interval=1 )"
 
 /* --------------------------------------------------------------------------
- * Destination Data Structures (Supports Multiple Destinations of Any Type)
+ * Destination Data Structures & Types
  * -------------------------------------------------------------------------- */
 enum DestinationType {
 	DEST_TYPE_RTSP = 0,
@@ -137,19 +144,212 @@ struct GstMasterHub {
 		  gpu_encoder_type("auto"),
 		  bitrate_kbps(4000),
 		  keyint_sec(1),
-		  master_pipeline(DEFAULT_MASTER_PIPELINE),
+		  master_pipeline(""),
 		  is_active(false),
 		  active_render_cb(nullptr)
 	{
 	}
 };
 
-/* Global list of all Master Hubs managed by the Dock */
+/* Global Master Hubs managed by the Dock */
 static std::vector<std::shared_ptr<GstMasterHub>> g_master_hubs;
 
-/* Forward declaration */
 class GstMasterDockWidget;
 static GstMasterDockWidget *g_dock_widget = nullptr;
+
+/* --------------------------------------------------------------------------
+ * Persistence & Telemetry Helpers
+ * -------------------------------------------------------------------------- */
+static QString get_config_file_path()
+{
+	QString dirPath = "/root/.config/obs-studio/plugin_config/obs-gstreamer";
+	QDir().mkpath(dirPath);
+	return dirPath + "/master_hubs.json";
+}
+
+static void export_dock_status_json()
+{
+	QJsonArray hubsArray;
+	for (const auto &hub : g_master_hubs) {
+		QJsonObject hubObj;
+		hubObj["name"] = QString::fromStdString(hub->name);
+		hubObj["source_type"] = QString::fromStdString(hub->source_type);
+		hubObj["source_name"] = QString::fromStdString(hub->source_name);
+		hubObj["scene_name"] = QString::fromStdString(hub->scene_name);
+		hubObj["gpu_encoder_type"] = QString::fromStdString(hub->gpu_encoder_type);
+		hubObj["bitrate_kbps"] = hub->bitrate_kbps;
+		hubObj["is_active"] = hub->is_active || (hub->active_render_cb != nullptr);
+
+		QJsonArray destsArray;
+		for (const auto &d : hub->destinations) {
+			QJsonObject dObj;
+			dObj["name"] = QString::fromStdString(d->name);
+			dObj["type"] = (d->type == DEST_TYPE_RTSP) ? "RTSP" :
+			               (d->type == DEST_TYPE_WEBRTC) ? "WebRTC" : "Custom";
+			dObj["enabled"] = d->enabled;
+			dObj["autostart"] = d->autostart;
+			dObj["is_active"] = d->is_active;
+			dObj["rtsp_port"] = QString::fromStdString(d->rtsp_port);
+			dObj["rtsp_mount"] = QString::fromStdString(d->rtsp_mount);
+			dObj["webrtc_port"] = QString::fromStdString(d->webrtc_port);
+			dObj["custom_pipeline"] = QString::fromStdString(d->custom_pipeline);
+			destsArray.append(dObj);
+		}
+		hubObj["destinations"] = destsArray;
+		hubsArray.append(hubObj);
+	}
+
+	QJsonObject rootObj;
+	rootObj["timestamp"] = QDateTime::currentDateTime().toString(Qt::ISODate);
+	rootObj["master_hubs"] = hubsArray;
+
+	QFile file("/tmp/obs_gstreamer_hubs.json");
+	if (file.open(QIODevice::WriteOnly)) {
+		file.write(QJsonDocument(rootObj).toJson(QJsonDocument::Indented));
+		file.close();
+	}
+}
+
+static void save_dock_config()
+{
+	QJsonArray hubsArray;
+	for (const auto &hub : g_master_hubs) {
+		QJsonObject hubObj;
+		hubObj["name"] = QString::fromStdString(hub->name);
+		hubObj["source_type"] = QString::fromStdString(hub->source_type);
+		hubObj["source_name"] = QString::fromStdString(hub->source_name);
+		hubObj["scene_name"] = QString::fromStdString(hub->scene_name);
+		hubObj["gpu_encoder_type"] = QString::fromStdString(hub->gpu_encoder_type);
+		hubObj["bitrate_kbps"] = hub->bitrate_kbps;
+		hubObj["keyint_sec"] = hub->keyint_sec;
+		hubObj["master_pipeline"] = QString::fromStdString(hub->master_pipeline);
+
+		QJsonArray destsArray;
+		for (const auto &d : hub->destinations) {
+			QJsonObject dObj;
+			dObj["name"] = QString::fromStdString(d->name);
+			dObj["type"] = (int)d->type;
+			dObj["enabled"] = d->enabled;
+			dObj["autostart"] = d->autostart;
+			dObj["rtsp_port"] = QString::fromStdString(d->rtsp_port);
+			dObj["rtsp_mount"] = QString::fromStdString(d->rtsp_mount);
+			dObj["rtsp_pipeline"] = QString::fromStdString(d->rtsp_pipeline);
+			dObj["webrtc_port"] = QString::fromStdString(d->webrtc_port);
+			dObj["webrtc_stun"] = QString::fromStdString(d->webrtc_stun);
+			dObj["webrtc_web_root"] = QString::fromStdString(d->webrtc_web_root);
+			dObj["custom_pipeline"] = QString::fromStdString(d->custom_pipeline);
+			destsArray.append(dObj);
+		}
+		hubObj["destinations"] = destsArray;
+		hubsArray.append(hubObj);
+	}
+
+	QJsonObject rootObj;
+	rootObj["master_hubs"] = hubsArray;
+
+	QFile file(get_config_file_path());
+	if (file.open(QIODevice::WriteOnly)) {
+		file.write(QJsonDocument(rootObj).toJson(QJsonDocument::Indented));
+		file.close();
+	}
+
+	export_dock_status_json();
+}
+
+static void load_dock_config()
+{
+	QFile file(get_config_file_path());
+	if (!file.open(QIODevice::ReadOnly))
+		return;
+
+	QByteArray data = file.readAll();
+	file.close();
+
+	QJsonDocument doc = QJsonDocument::fromJson(data);
+	if (!doc.isObject())
+		return;
+
+	QJsonObject rootObj = doc.object();
+	QJsonArray hubsArray = rootObj["master_hubs"].toArray();
+	if (hubsArray.isEmpty())
+		return;
+
+	g_master_hubs.clear();
+
+	for (const auto &val : hubsArray) {
+		QJsonObject hubObj = val.toObject();
+		auto hub = std::make_shared<GstMasterHub>();
+		hub->name = hubObj["name"].toString("Master Hub").toStdString();
+		hub->source_type = hubObj["source_type"].toString("Program Output").toStdString();
+		hub->source_name = hubObj["source_name"].toString("").toStdString();
+		hub->scene_name = hubObj["scene_name"].toString("").toStdString();
+		hub->gpu_encoder_type = hubObj["gpu_encoder_type"].toString("auto").toStdString();
+		hub->bitrate_kbps = hubObj["bitrate_kbps"].toInt(4000);
+		hub->keyint_sec = hubObj["keyint_sec"].toInt(1);
+		hub->master_pipeline = hubObj["master_pipeline"].toString("").toStdString();
+
+		QJsonArray destsArray = hubObj["destinations"].toArray();
+		for (const auto &dVal : destsArray) {
+			QJsonObject dObj = dVal.toObject();
+			auto dest = std::make_shared<GstDestination>();
+			dest->name = dObj["name"].toString("Destination").toStdString();
+			dest->type = (DestinationType)dObj["type"].toInt(0);
+			dest->enabled = dObj["enabled"].toBool(true);
+			dest->autostart = dObj["autostart"].toBool(false);
+			dest->rtsp_port = dObj["rtsp_port"].toString("8554").toStdString();
+			dest->rtsp_mount = dObj["rtsp_mount"].toString("/live").toStdString();
+			dest->rtsp_pipeline = dObj["rtsp_pipeline"].toString(DEFAULT_RTSP_PIPELINE).toStdString();
+			dest->webrtc_port = dObj["webrtc_port"].toString("8888").toStdString();
+			dest->webrtc_stun = dObj["webrtc_stun"].toString("").toStdString();
+			dest->webrtc_web_root = dObj["webrtc_web_root"].toString("").toStdString();
+			dest->custom_pipeline = dObj["custom_pipeline"].toString("autovideosink sync=false").toStdString();
+
+			hub->destinations.push_back(dest);
+		}
+
+		g_master_hubs.push_back(hub);
+	}
+
+	export_dock_status_json();
+}
+
+/* --------------------------------------------------------------------------
+ * OBS Scene / Source Enumeration Helpers
+ * -------------------------------------------------------------------------- */
+static std::vector<std::string> get_obs_scene_names()
+{
+	std::vector<std::string> scenes;
+	struct obs_frontend_source_list list = {};
+	obs_frontend_get_scenes(&list);
+	for (size_t i = 0; i < list.sources.num; i++) {
+		obs_source_t *src = list.sources.array[i];
+		if (src) {
+			const char *name = obs_source_get_name(src);
+			if (name && name[0])
+				scenes.push_back(name);
+		}
+	}
+	obs_frontend_source_list_free(&list);
+	return scenes;
+}
+
+static bool enum_source_cb(void *param, obs_source_t *source)
+{
+	auto *sources = static_cast<std::vector<std::string> *>(param);
+	if (source) {
+		const char *name = obs_source_get_name(source);
+		if (name && name[0])
+			sources->push_back(name);
+	}
+	return true;
+}
+
+static std::vector<std::string> get_obs_source_names()
+{
+	std::vector<std::string> sources;
+	obs_enum_sources(enum_source_cb, &sources);
+	return sources;
+}
 
 /* --------------------------------------------------------------------------
  * Destination Control Helpers
@@ -197,6 +397,8 @@ static void stop_destination(GstMasterHub *hub, GstDestination *dest)
 		gst_render_callback_destroy(hub->active_render_cb);
 		hub->active_render_cb = nullptr;
 	}
+
+	export_dock_status_json();
 }
 
 static bool ensure_master_pipeline(GstMasterHub *hub)
@@ -269,6 +471,7 @@ static bool start_destination(GstMasterHub *hub, GstDestination *dest)
 			return false;
 		}
 		dest->is_active = true;
+		export_dock_status_json();
 		return true;
 	} else if (dest->type == DEST_TYPE_WEBRTC) {
 		obs_data_t *settings = obs_data_create();
@@ -295,6 +498,7 @@ static bool start_destination(GstMasterHub *hub, GstDestination *dest)
 		}
 		dest->is_active = true;
 		blog(LOG_INFO, "[obs-gstreamer-dock] WebRTC output active on port %s", dest->webrtc_port.c_str());
+		export_dock_status_json();
 		return true;
 	} else if (dest->type == DEST_TYPE_CUSTOM) {
 		obs_data_t *settings = obs_data_create();
@@ -318,11 +522,135 @@ static bool start_destination(GstMasterHub *hub, GstDestination *dest)
 		}
 		dest->is_active = true;
 		blog(LOG_INFO, "[obs-gstreamer-dock] Custom pipeline output active");
+		export_dock_status_json();
 		return true;
 	}
 
 	return false;
 }
+
+/* --------------------------------------------------------------------------
+ * Dialog: Edit Individual Destination Properties
+ * -------------------------------------------------------------------------- */
+class GstDestinationDetailDialog : public QDialog {
+public:
+	GstDestinationDetailDialog(std::shared_ptr<GstDestination> dest, QWidget *parent = nullptr)
+		: QDialog(parent), m_dest(dest)
+	{
+		setWindowTitle(QString("Edit Destination: %1").arg(QString::fromStdString(dest->name)));
+		resize(520, 420);
+
+		QVBoxLayout *layout = new QVBoxLayout(this);
+		QFormLayout *form = new QFormLayout();
+
+		m_nameEdit = new QLineEdit(QString::fromStdString(dest->name), this);
+		form->addRow("Destination Name:", m_nameEdit);
+
+		m_typeCombo = new QComboBox(this);
+		m_typeCombo->addItem("RTSP Stream", DEST_TYPE_RTSP);
+		m_typeCombo->addItem("WebRTC (WHEP)", DEST_TYPE_WEBRTC);
+		m_typeCombo->addItem("Custom Pipeline Sink", DEST_TYPE_CUSTOM);
+		int typeIdx = m_typeCombo->findData((int)dest->type);
+		if (typeIdx >= 0) m_typeCombo->setCurrentIndex(typeIdx);
+		form->addRow("Type:", m_typeCombo);
+
+		m_autostartCheck = new QCheckBox("Auto-start when OBS launches", this);
+		m_autostartCheck->setChecked(dest->autostart);
+		form->addRow("Autostart:", m_autostartCheck);
+
+		/* RTSP Section */
+		m_rtspGroup = new QGroupBox("RTSP Server Settings", this);
+		QFormLayout *rtspForm = new QFormLayout(m_rtspGroup);
+		m_rtspPortEdit = new QLineEdit(QString::fromStdString(dest->rtsp_port), this);
+		m_rtspMountEdit = new QLineEdit(QString::fromStdString(dest->rtsp_mount), this);
+		m_rtspPipeEdit = new QLineEdit(QString::fromStdString(dest->rtsp_pipeline), this);
+		rtspForm->addRow("RTSP Port:", m_rtspPortEdit);
+		rtspForm->addRow("Mount Path:", m_rtspMountEdit);
+		rtspForm->addRow("Payloader Pipeline:", m_rtspPipeEdit);
+
+		/* WebRTC Section */
+		m_webrtcGroup = new QGroupBox("WebRTC WHEP Settings", this);
+		QFormLayout *webrtcForm = new QFormLayout(m_webrtcGroup);
+		m_webrtcPortEdit = new QLineEdit(QString::fromStdString(dest->webrtc_port), this);
+		m_webrtcStunEdit = new QLineEdit(QString::fromStdString(dest->webrtc_stun), this);
+		m_webrtcRootEdit = new QLineEdit(QString::fromStdString(dest->webrtc_web_root), this);
+		webrtcForm->addRow("WHEP Port:", m_webrtcPortEdit);
+		webrtcForm->addRow("STUN Server:", m_webrtcStunEdit);
+		webrtcForm->addRow("Web Root Path:", m_webrtcRootEdit);
+
+		/* Custom Pipeline Section */
+		m_customGroup = new QGroupBox("Custom GStreamer Sink Settings", this);
+		QFormLayout *customForm = new QFormLayout(m_customGroup);
+		m_customPipeEdit = new QPlainTextEdit(QString::fromStdString(dest->custom_pipeline), this);
+		m_customPipeEdit->setMaximumHeight(80);
+		customForm->addRow("GStreamer Pipeline:", m_customPipeEdit);
+
+		layout->addLayout(form);
+		layout->addWidget(m_rtspGroup);
+		layout->addWidget(m_webrtcGroup);
+		layout->addWidget(m_customGroup);
+
+		connect(m_typeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &GstDestinationDetailDialog::onTypeChanged);
+		onTypeChanged();
+
+		QHBoxLayout *footer = new QHBoxLayout();
+		QPushButton *btnSave = new QPushButton("Save", this);
+		QPushButton *btnCancel = new QPushButton("Cancel", this);
+		footer->addStretch();
+		footer->addWidget(btnSave);
+		footer->addWidget(btnCancel);
+		layout->addLayout(footer);
+
+		connect(btnSave, &QPushButton::clicked, this, &GstDestinationDetailDialog::saveAndClose);
+		connect(btnCancel, &QPushButton::clicked, this, &QDialog::reject);
+	}
+
+private:
+	void onTypeChanged()
+	{
+		DestinationType t = (DestinationType)m_typeCombo->currentData().toInt();
+		m_rtspGroup->setVisible(t == DEST_TYPE_RTSP);
+		m_webrtcGroup->setVisible(t == DEST_TYPE_WEBRTC);
+		m_customGroup->setVisible(t == DEST_TYPE_CUSTOM);
+	}
+
+	void saveAndClose()
+	{
+		m_dest->name = m_nameEdit->text().toStdString();
+		m_dest->type = (DestinationType)m_typeCombo->currentData().toInt();
+		m_dest->autostart = m_autostartCheck->isChecked();
+
+		m_dest->rtsp_port = m_rtspPortEdit->text().toStdString();
+		m_dest->rtsp_mount = m_rtspMountEdit->text().toStdString();
+		m_dest->rtsp_pipeline = m_rtspPipeEdit->text().toStdString();
+
+		m_dest->webrtc_port = m_webrtcPortEdit->text().toStdString();
+		m_dest->webrtc_stun = m_webrtcStunEdit->text().toStdString();
+		m_dest->webrtc_web_root = m_webrtcRootEdit->text().toStdString();
+
+		m_dest->custom_pipeline = m_customPipeEdit->toPlainText().toStdString();
+
+		accept();
+	}
+
+	std::shared_ptr<GstDestination> m_dest;
+	QLineEdit *m_nameEdit;
+	QComboBox *m_typeCombo;
+	QCheckBox *m_autostartCheck;
+
+	QGroupBox *m_rtspGroup;
+	QLineEdit *m_rtspPortEdit;
+	QLineEdit *m_rtspMountEdit;
+	QLineEdit *m_rtspPipeEdit;
+
+	QGroupBox *m_webrtcGroup;
+	QLineEdit *m_webrtcPortEdit;
+	QLineEdit *m_webrtcStunEdit;
+	QLineEdit *m_webrtcRootEdit;
+
+	QGroupBox *m_customGroup;
+	QPlainTextEdit *m_customPipeEdit;
+};
 
 /* --------------------------------------------------------------------------
  * Child Window: Detailed Configuration Dialog (Opened on Double-Click)
@@ -332,12 +660,12 @@ public:
 	GstMasterDetailDialog(std::shared_ptr<GstMasterHub> hub, QWidget *parent = nullptr)
 		: QDialog(parent), m_hub(hub)
 	{
-		setWindowTitle(QString("Edit Master: %1").arg(QString::fromStdString(hub->name)));
-		resize(680, 560);
+		setWindowTitle(QString("Edit Master Hub: %1").arg(QString::fromStdString(hub->name)));
+		resize(720, 620);
 
 		QVBoxLayout *rootLayout = new QVBoxLayout(this);
 
-		/* Tab 1: Master Hardware Encoder */
+		/* Master Hardware Encoder Settings */
 		QGroupBox *masterGroup = new QGroupBox("Master Video & Hardware Encoder", this);
 		QFormLayout *formLayout = new QFormLayout(masterGroup);
 
@@ -351,18 +679,15 @@ public:
 		m_sourceTypeCombo->setCurrentText(QString::fromStdString(hub->source_type));
 		formLayout->addRow("Capture Source:", m_sourceTypeCombo);
 
-		m_targetNameEdit = new QLineEdit(this);
-		if (hub->source_type == "Scene")
-			m_targetNameEdit->setText(QString::fromStdString(hub->scene_name));
-		else if (hub->source_type == "Source")
-			m_targetNameEdit->setText(QString::fromStdString(hub->source_name));
-		formLayout->addRow("Target Name (Scene/Source):", m_targetNameEdit);
+		m_targetCombo = new QComboBox(this);
+		m_targetCombo->setEditable(true);
+		formLayout->addRow("Target Scene/Source:", m_targetCombo);
 
 		m_encoderCombo = new QComboBox(this);
 		m_encoderCombo->addItem("Auto Detect", "auto");
-		m_encoderCombo->addItem("NVIDIA NVENC", "nvenc");
-		m_encoderCombo->addItem("Intel / AMD QuickSync (VAAPI)", "vaapi");
-		m_encoderCombo->addItem("Apple VideoToolbox", "vtenc");
+		m_encoderCombo->addItem("NVIDIA NVENC (nvh264enc)", "nvh264enc");
+		m_encoderCombo->addItem("Intel QuickSync (qsvh264enc)", "qsvh264enc");
+		m_encoderCombo->addItem("VAAPI GPU (vaapih264enc)", "vaapih264enc");
 		m_encoderCombo->addItem("Software (x264enc)", "x264enc");
 		int encIdx = m_encoderCombo->findData(QString::fromStdString(hub->gpu_encoder_type));
 		if (encIdx >= 0) m_encoderCombo->setCurrentIndex(encIdx);
@@ -381,15 +706,23 @@ public:
 		m_keyintSpin->setSuffix(" sec");
 		formLayout->addRow("Keyframe Interval:", m_keyintSpin);
 
+		m_customPipeEdit = new QPlainTextEdit(QString::fromStdString(hub->master_pipeline), this);
+		m_customPipeEdit->setPlaceholderText("Optional: Custom GStreamer Master Pipeline string (leave empty for auto hardware encoder)");
+		m_customPipeEdit->setMaximumHeight(55);
+		formLayout->addRow("Custom Master Pipeline:", m_customPipeEdit);
+
 		rootLayout->addWidget(masterGroup);
 
-		/* Tab 2: Multiple Destinations Manager */
-		QGroupBox *destGroup = new QGroupBox("Destinations (Unlimited RTSP, WebRTC, Custom Pipelines)", this);
+		connect(m_sourceTypeCombo, &QComboBox::currentTextChanged, this, &GstMasterDetailDialog::populateTargetCombo);
+		populateTargetCombo(m_sourceTypeCombo->currentText());
+
+		/* Multiple Destinations Manager */
+		QGroupBox *destGroup = new QGroupBox("Destinations (Unlimited RTSP, WebRTC, Custom Sinks)", this);
 		QVBoxLayout *destLayout = new QVBoxLayout(destGroup);
 
 		m_destTable = new QTableWidget(this);
-		m_destTable->setColumnCount(5);
-		m_destTable->setHorizontalHeaderLabels({"Type", "Name", "Target / Port", "Status", "Action"});
+		m_destTable->setColumnCount(6);
+		m_destTable->setHorizontalHeaderLabels({"Type", "Name", "Target / Port", "Status", "Control", "Edit"});
 		m_destTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
 		m_destTable->setSelectionBehavior(QAbstractItemView::SelectRows);
 		destLayout->addWidget(m_destTable);
@@ -410,6 +743,7 @@ public:
 		connect(btnAddWebRTC, &QPushButton::clicked, this, &GstMasterDetailDialog::addWebRTCDestination);
 		connect(btnAddCustom, &QPushButton::clicked, this, &GstMasterDetailDialog::addCustomDestination);
 		connect(btnRemove, &QPushButton::clicked, this, &GstMasterDetailDialog::removeSelectedDestination);
+		connect(m_destTable, &QTableWidget::cellDoubleClicked, this, &GstMasterDetailDialog::onCellDoubleClicked);
 
 		rootLayout->addWidget(destGroup);
 
@@ -429,6 +763,29 @@ public:
 	}
 
 private:
+	void populateTargetCombo(const QString &sourceType)
+	{
+		m_targetCombo->clear();
+		if (sourceType == "Scene") {
+			m_targetCombo->setEnabled(true);
+			auto scenes = get_obs_scene_names();
+			for (const auto &s : scenes) {
+				m_targetCombo->addItem(QString::fromStdString(s));
+			}
+			m_targetCombo->setCurrentText(QString::fromStdString(m_hub->scene_name));
+		} else if (sourceType == "Source") {
+			m_targetCombo->setEnabled(true);
+			auto sources = get_obs_source_names();
+			for (const auto &s : sources) {
+				m_targetCombo->addItem(QString::fromStdString(s));
+			}
+			m_targetCombo->setCurrentText(QString::fromStdString(m_hub->source_name));
+		} else {
+			m_targetCombo->setEnabled(false);
+			m_targetCombo->setCurrentText("");
+		}
+	}
+
 	void refreshDestTable()
 	{
 		m_destTable->setRowCount((int)m_hub->destinations.size());
@@ -461,7 +818,29 @@ private:
 				toggleDestination(rowIdx);
 			});
 			m_destTable->setCellWidget(i, 4, actionBtn);
+
+			QPushButton *editBtn = new QPushButton("Edit", this);
+			connect(editBtn, &QPushButton::clicked, [this, rowIdx]() {
+				editDestination(rowIdx);
+			});
+			m_destTable->setCellWidget(i, 5, editBtn);
 		}
+	}
+
+	void editDestination(int idx)
+	{
+		if (idx < 0 || idx >= (int)m_hub->destinations.size()) return;
+		GstDestinationDetailDialog dlg(m_hub->destinations[idx], this);
+		if (dlg.exec() == QDialog::Accepted) {
+			save_dock_config();
+			refreshDestTable();
+		}
+	}
+
+	void onCellDoubleClicked(int row, int col)
+	{
+		Q_UNUSED(col);
+		editDestination(row);
 	}
 
 	void toggleDestination(int idx)
@@ -473,6 +852,7 @@ private:
 		} else {
 			start_destination(m_hub.get(), dest.get());
 		}
+		save_dock_config();
 		refreshDestTable();
 	}
 
@@ -484,6 +864,7 @@ private:
 		dest->rtsp_port = std::to_string(8554 + m_hub->destinations.size());
 		dest->rtsp_mount = "/live" + std::to_string(m_hub->destinations.size() + 1);
 		m_hub->destinations.push_back(dest);
+		save_dock_config();
 		refreshDestTable();
 	}
 
@@ -494,6 +875,7 @@ private:
 		dest->name = "WebRTC Stream " + std::to_string(m_hub->destinations.size() + 1);
 		dest->webrtc_port = std::to_string(8888 + m_hub->destinations.size());
 		m_hub->destinations.push_back(dest);
+		save_dock_config();
 		refreshDestTable();
 	}
 
@@ -504,6 +886,7 @@ private:
 		dest->name = "Custom Sink " + std::to_string(m_hub->destinations.size() + 1);
 		dest->custom_pipeline = "autovideosink sync=false";
 		m_hub->destinations.push_back(dest);
+		save_dock_config();
 		refreshDestTable();
 	}
 
@@ -513,6 +896,7 @@ private:
 		if (row >= 0 && row < (int)m_hub->destinations.size()) {
 			stop_destination(m_hub.get(), m_hub->destinations[row].get());
 			m_hub->destinations.erase(m_hub->destinations.begin() + row);
+			save_dock_config();
 			refreshDestTable();
 		}
 	}
@@ -522,23 +906,27 @@ private:
 		m_hub->name = m_nameEdit->text().toStdString();
 		m_hub->source_type = m_sourceTypeCombo->currentText().toStdString();
 		if (m_hub->source_type == "Scene")
-			m_hub->scene_name = m_targetNameEdit->text().toStdString();
+			m_hub->scene_name = m_targetCombo->currentText().toStdString();
 		else if (m_hub->source_type == "Source")
-			m_hub->source_name = m_targetNameEdit->text().toStdString();
+			m_hub->source_name = m_targetCombo->currentText().toStdString();
 
 		m_hub->gpu_encoder_type = m_encoderCombo->currentData().toString().toStdString();
 		m_hub->bitrate_kbps = m_bitrateSpin->value();
 		m_hub->keyint_sec = m_keyintSpin->value();
+		m_hub->master_pipeline = m_customPipeEdit->toPlainText().toStdString();
+
+		save_dock_config();
 		accept();
 	}
 
 	std::shared_ptr<GstMasterHub> m_hub;
 	QLineEdit *m_nameEdit;
 	QComboBox *m_sourceTypeCombo;
-	QLineEdit *m_targetNameEdit;
+	QComboBox *m_targetCombo;
 	QComboBox *m_encoderCombo;
 	QSpinBox *m_bitrateSpin;
 	QSpinBox *m_keyintSpin;
+	QPlainTextEdit *m_customPipeEdit;
 	QTableWidget *m_destTable;
 };
 
@@ -557,13 +945,20 @@ public:
 		QHBoxLayout *topBar = new QHBoxLayout();
 		QPushButton *btnAddMaster = new QPushButton("+ Add Master Hub", this);
 		QPushButton *btnDeleteMaster = new QPushButton("- Delete Master", this);
+		QPushButton *btnSaveConfig = new QPushButton("Save Config", this);
+
 		topBar->addWidget(btnAddMaster);
 		topBar->addWidget(btnDeleteMaster);
+		topBar->addWidget(btnSaveConfig);
 		topBar->addStretch();
 		layout->addLayout(topBar);
 
 		connect(btnAddMaster, &QPushButton::clicked, this, &GstMasterDockWidget::onAddMasterClicked);
 		connect(btnDeleteMaster, &QPushButton::clicked, this, &GstMasterDockWidget::onDeleteMasterClicked);
+		connect(btnSaveConfig, &QPushButton::clicked, [this]() {
+			save_dock_config();
+			QMessageBox::information(this, "Master Hubs", "Master Hub configuration saved successfully.");
+		});
 
 		/* Main Table of Masters */
 		m_table = new QTableWidget(this);
@@ -621,6 +1016,7 @@ private:
 		if (row < 0 || row >= (int)g_master_hubs.size()) return;
 		GstMasterDetailDialog dlg(g_master_hubs[row], this);
 		dlg.exec();
+		save_dock_config();
 		refreshTable();
 	}
 
@@ -629,12 +1025,13 @@ private:
 		auto hub = std::make_shared<GstMasterHub>();
 		hub->name = "Master Hub " + std::to_string(g_master_hubs.size() + 1);
 
-		/* Add a default RTSP destination */
+		/* Add default RTSP destination */
 		auto defaultRtsp = std::make_shared<GstDestination>();
 		defaultRtsp->name = "RTSP Main";
 		hub->destinations.push_back(defaultRtsp);
 
 		g_master_hubs.push_back(hub);
+		save_dock_config();
 		refreshTable();
 	}
 
@@ -647,6 +1044,7 @@ private:
 				stop_destination(g_master_hubs[row].get(), dest.get());
 			}
 			g_master_hubs.erase(g_master_hubs.begin() + row);
+			save_dock_config();
 			refreshTable();
 		}
 	}
@@ -661,6 +1059,9 @@ extern "C" {
 
 void gstreamer_dock_register(void)
 {
+	/* Load persistent Master Hub configuration */
+	load_dock_config();
+
 	/* Create the Main Dock Widget */
 	g_dock_widget = new GstMasterDockWidget();
 
@@ -671,9 +1072,18 @@ void gstreamer_dock_register(void)
 		auto defaultRtsp = std::make_shared<GstDestination>();
 		defaultRtsp->name = "Default RTSP";
 		defaultHub->destinations.push_back(defaultRtsp);
+
+		auto defaultWebRTC = std::make_shared<GstDestination>();
+		defaultWebRTC->type = DEST_TYPE_WEBRTC;
+		defaultWebRTC->name = "Default WebRTC";
+		defaultWebRTC->webrtc_port = "8888";
+		defaultHub->destinations.push_back(defaultWebRTC);
+
 		g_master_hubs.push_back(defaultHub);
-		g_dock_widget->refreshTable();
+		save_dock_config();
 	}
+
+	g_dock_widget->refreshTable();
 
 	/* Register dock into OBS Studio Docks menu using obs_frontend_add_dock_by_id */
 	obs_frontend_add_dock_by_id(
@@ -682,6 +1092,18 @@ void gstreamer_dock_register(void)
 		(void *)g_dock_widget
 	);
 
+	/* Check for autostart destinations */
+	for (auto &hub : g_master_hubs) {
+		for (auto &dest : hub->destinations) {
+			if (dest->enabled && dest->autostart && !dest->is_active) {
+				blog(LOG_INFO, "[obs-gstreamer-dock] Autostarting destination '%s' for hub '%s'",
+					dest->name.c_str(), hub->name.c_str());
+				start_destination(hub.get(), dest.get());
+			}
+		}
+	}
+
+	export_dock_status_json();
 	blog(LOG_INFO, "[obs-gstreamer-dock] Registered GStreamer Master Hub dock via obs_frontend_add_dock_by_id (OBS 32+ / Qt 6)");
 }
 
@@ -694,6 +1116,7 @@ void gstreamer_dock_unregister(void)
 		}
 	}
 
+	save_dock_config();
 	g_master_hubs.clear();
 
 	if (g_dock_widget) {

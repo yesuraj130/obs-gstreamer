@@ -193,6 +193,63 @@
   setInterval(checkStreamStatus, 3000);
   checkStreamStatus();
 
+  // Master Hub Dock Telemetry Polling
+  var dockStatusBadge = document.getElementById('dock-status-badge');
+  var dockHubsContainer = document.getElementById('dock-hubs-container');
+
+  function checkDockStatus() {
+    fetch('/api/dock/status')
+      .then(function (res) { return res.json(); })
+      .then(function (data) {
+        if (!dockHubsContainer) return;
+        if (data && data.active && data.master_hubs && data.master_hubs.length > 0) {
+          if (dockStatusBadge) {
+            dockStatusBadge.textContent = data.master_hubs.length + ' Hub(s)';
+            dockStatusBadge.className = 'px-1.5 py-0.5 rounded text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/30';
+          }
+          var html = '';
+          data.master_hubs.forEach(function (hub) {
+            var activeDests = (hub.destinations || []).filter(function (d) { return d.is_active; }).length;
+            var totalDests = (hub.destinations || []).length;
+            html += '<div class="p-2 rounded bg-slate-900 border border-slate-800 space-y-1">';
+            html += '<div class="flex items-center justify-between font-semibold text-slate-200">';
+            html += '<span>' + (hub.name || 'Master Hub') + '</span>';
+            html += '<span class="text-[10px] ' + (hub.is_active ? 'text-emerald-400 font-semibold' : 'text-slate-500') + '">' + (hub.is_active ? '● LIVE' : '○ IDLE') + '</span>';
+            html += '</div>';
+            html += '<div class="text-[10px] text-slate-400 flex items-center justify-between">';
+            html += '<span>Src: ' + (hub.source_type || 'Program') + ' (' + (hub.gpu_encoder_type || 'auto') + ')</span>';
+            html += '<span>' + activeDests + '/' + totalDests + ' dests</span>';
+            html += '</div>';
+
+            if (hub.destinations && hub.destinations.length > 0) {
+              html += '<div class="pt-1 border-t border-slate-800/80 space-y-0.5 text-[10px]">';
+              hub.destinations.forEach(function (d) {
+                var targetStr = d.type === 'RTSP' ? ':' + (d.rtsp_port || 8554) + (d.rtsp_mount || '/live') :
+                                d.type === 'WebRTC' ? 'Port ' + (d.webrtc_port || 8888) : 'Custom Sink';
+                html += '<div class="flex items-center justify-between text-slate-400">';
+                html += '<span>• ' + d.name + ' (' + d.type + ')</span>';
+                html += '<span class="' + (d.is_active ? 'text-emerald-400 font-semibold' : 'text-slate-500') + '">' + targetStr + '</span>';
+                html += '</div>';
+              });
+              html += '</div>';
+            }
+            html += '</div>';
+          });
+          dockHubsContainer.innerHTML = html;
+        } else {
+          if (dockStatusBadge) {
+            dockStatusBadge.textContent = 'Standby';
+            dockStatusBadge.className = 'px-1.5 py-0.5 rounded text-[10px] bg-slate-800 text-slate-400';
+          }
+          dockHubsContainer.innerHTML = '<div class="text-slate-500 text-[10px] italic p-1">No active Master Hubs configured in OBS Dock yet.</div>';
+        }
+      })
+      .catch(function () {});
+  }
+
+  setInterval(checkDockStatus, 3000);
+  checkDockStatus();
+
   function setStreamBadge(state, label) {
     if (!badgeStreamState || !streamPulse || !streamText) return;
     if (state === 'live') {

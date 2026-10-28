@@ -161,6 +161,32 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // API Master Hub Dock status endpoint
+  if (req.url === '/api/dock/status') {
+    const statusFile = '/tmp/obs_gstreamer_hubs.json';
+    fs.readFile(statusFile, 'utf8', (err, data) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      if (err || !data) {
+        res.end(JSON.stringify({
+          active: false,
+          master_hubs: [],
+          message: 'Master Hub Dock state not initialized yet or OBS inactive.'
+        }));
+      } else {
+        try {
+          const parsed = JSON.parse(data);
+          res.end(JSON.stringify({
+            active: true,
+            ...parsed
+          }));
+        } catch (e) {
+          res.end(JSON.stringify({ active: false, master_hubs: [], error: e.message }));
+        }
+      }
+    });
+    return;
+  }
+
   // API VNC Status & Health Check
   if (req.url === '/api/vnc/status') {
     checkPort(VNC_PORT, '127.0.0.1', (err, vncOnline) => {
