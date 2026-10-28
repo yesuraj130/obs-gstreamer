@@ -82,9 +82,27 @@
           Remote Desktop: OBS Studio (Linux X11)
         </span>
         <span class="text-slate-600">|</span>
-        <span>Resolution: <strong class="text-slate-300">1280x800</strong></span>
+        <div class="flex items-center gap-1.5">
+          <span class="text-slate-400">Resolution:</span>
+          <select id="select-resolution" class="bg-slate-950 text-indigo-300 text-xs px-2 py-0.5 rounded border border-slate-700 hover:border-slate-500 focus:outline-none focus:border-indigo-500 font-mono transition cursor-pointer">
+            <option value="auto">Auto (Dynamic Browser)</option>
+            <option value="1280x720">1280x720 (720p Landscape)</option>
+            <option value="720x1280">720x1280 (720p Portrait)</option>
+            <option value="1920x1080">1920x1080 (1080p Landscape)</option>
+            <option value="1080x1920">1080x1920 (1080p Portrait)</option>
+            <option value="1280x800">1280x800 (16:10 Desktop)</option>
+          </select>
+        </div>
         <span class="text-slate-600">|</span>
         <span>Password: <code class="bg-slate-950 text-indigo-300 px-1 py-0.5 rounded border border-slate-800 font-mono">vncpassword</code></span>
+        <span class="text-slate-600">|</span>
+        <span class="flex items-center gap-1.5">
+          <span class="text-slate-400">External VNC IP:Port:</span>
+          <span id="external-vnc-badge" class="bg-slate-950 text-emerald-300 px-1.5 py-0.5 rounded border border-emerald-800/80 font-mono flex items-center gap-1 cursor-pointer hover:border-emerald-400 transition" title="Click to copy IP/Port">
+            <span id="external-vnc-dot" class="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
+            <span id="external-vnc-addr">Connecting tunnel...</span>
+          </span>
+        </span>
       </div>
 
       <div class="flex items-center gap-2">

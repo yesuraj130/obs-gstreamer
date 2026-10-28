@@ -22,6 +22,74 @@ function addLog(msg) {
   console.log(line);
 }
 
+let tcpTunnelInfo = {
+  host: '',
+  port: '',
+  full: '',
+  status: 'connecting',
+  lastUpdated: null
+};
+
+let tunnelProcess = null;
+
+function startTCPTunnel() {
+  if (tunnelProcess) {
+    try { tunnelProcess.kill(); } catch (e) {}
+    tunnelProcess = null;
+  }
+
+  addLog('Starting public TCP tunnel for VNC (port 5901)...');
+  tcpTunnelInfo.status = 'connecting';
+
+  try {
+    const proc = spawn('ssh', [
+      '-p', '443',
+      '-o', 'StrictHostKeyChecking=no',
+      '-o', 'ServerAliveInterval=30',
+      '-o', 'ServerAliveCountMax=3',
+      '-R', '0:localhost:5901',
+      'tcp@a.pinggy.io'
+    ]);
+
+    tunnelProcess = proc;
+
+    const parseOutput = (chunk) => {
+      const text = chunk.toString();
+      const match = text.match(/tcp:\/\/([^:\s]+):(\d+)/);
+      if (match) {
+        tcpTunnelInfo = {
+          host: match[1],
+          port: match[2],
+          full: `${match[1]}:${match[2]}`,
+          status: 'online',
+          lastUpdated: new Date().toISOString()
+        };
+        addLog(`Public VNC TCP Tunnel online: ${tcpTunnelInfo.full}`);
+      }
+    };
+
+    proc.stdout.on('data', parseOutput);
+    proc.stderr.on('data', parseOutput);
+
+    proc.on('close', () => {
+      addLog('TCP tunnel closed. Reconnecting in 5s...');
+      tcpTunnelInfo.status = 'offline';
+      tunnelProcess = null;
+      setTimeout(startTCPTunnel, 5000);
+    });
+
+    proc.on('error', (err) => {
+      addLog(`TCP tunnel error: ${err.message}`);
+      tcpTunnelInfo.status = 'offline';
+    });
+  } catch (e) {
+    addLog(`TCP tunnel spawn error: ${e.message}`);
+  }
+}
+
+// Start public tunnel on server init
+startTCPTunnel();
+
 function checkPort(port, host, callback) {
   const socket = new net.Socket();
   let reported = false;
@@ -127,6 +195,51 @@ function ensureOBS() {
     }
   });
 }
+
+let currentResolutionMode = 'auto';
+
+function ensureCustomModes(callback) {
+  const setupModes = `
+    DISPLAY=:1 xrandr --newmode "720x1280_60.00" 74.50 720 760 832 944 1280 1283 1293 1316 -hsync +vsync 2>/dev/null || true
+    DISPLAY=:1 xrandr --addmode VNC-0 "720x1280_60.00" 2>/dev/null || true
+    DISPLAY=:1 xrandr --newmode "1080x1920_60.00" 173.00 1080 1152 1264 1448 1920 1923 1933 1968 -hsync +vsync 2>/dev/null || true
+    DISPLAY=:1 xrandr --addmode VNC-0 "1080x1920_60.00" 2>/dev/null || true
+  `;
+  exec(setupModes, () => {
+    if (callback) callback();
+  });
+}
+
+function setVNCResolution(resolution, callback) {
+  currentResolutionMode = resolution;
+  ensureCustomModes(() => {
+    let modeArg = '';
+    if (resolution === '720x1280') {
+      modeArg = '"720x1280_60.00"';
+    } else if (resolution === '1080x1920') {
+      modeArg = '"1080x1920_60.00"';
+    } else if (resolution === '1280x720') {
+      modeArg = '1280x720';
+    } else if (resolution === '1920x1080') {
+      modeArg = '1920x1080';
+    } else if (resolution === '1280x800') {
+      modeArg = '1280x800';
+    }
+
+    if (modeArg) {
+      addLog(`Setting desktop resolution to fixed ${resolution}`);
+      exec(`DISPLAY=:1 xrandr -s ${modeArg}; DISPLAY=:1 wmctrl -r "OBS" -b add,maximized_vert,maximized_horz 2>/dev/null || true`, (err) => {
+        if (callback) callback(err, resolution);
+      });
+    } else {
+      addLog('Desktop resolution mode set to auto (dynamic)');
+      if (callback) callback(null, 'auto');
+    }
+  });
+}
+
+// Ensure custom portrait modes on server boot
+ensureCustomModes();
 
 // Background supervisor to auto-heal desktop services & keep OBS open
 setInterval(() => {
@@ -247,12 +360,34 @@ const server = http.createServer((req, res) => {
               vncPort: VNC_PORT,
               novncPort: NOVNC_PORT,
               vncPassword: 'vncpassword',
+              tcpTunnel: tcpTunnelInfo,
+              currentResolution: currentResolutionMode,
               logs: setupLogs.slice(-15),
               timestamp: new Date().toISOString()
             }));
           });
         });
       });
+    });
+    return;
+  }
+
+  // API VNC Resolution Change
+  if (req.url === '/api/vnc/resolution' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', () => {
+      try {
+        const parsed = JSON.parse(body || '{}');
+        const targetRes = parsed.resolution || 'auto';
+        setVNCResolution(targetRes, (err, actual) => {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: !err, actual, resolution: targetRes }));
+        });
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, error: e.message }));
+      }
     });
     return;
   }

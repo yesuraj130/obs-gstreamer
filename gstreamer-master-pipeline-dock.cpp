@@ -18,12 +18,19 @@
 #include "gstreamer-master-pipeline.h"
 #include "gstreamer-rtspserver.h"
 #include "gstreamer-render-callback.h"
+#include "gstreamer-encoder-callback.h"
+#include "gstreamer-output-callback.h"
+#include "gstreamer-filter-callback.h"
 #include "gstreamer-helper.h"
 
 #include <QtCore/qglobal.h>
-#if QT_VERSION < QT_VERSION_CHECK(5, 15, 0)
-#error "obs-gstreamer requires Qt 5.15.0 or newer"
+#if QT_VERSION < QT_VERSION_CHECK(6, 4, 0)
+#error "obs-gstreamer requires Qt 6.4.0 or newer"
 #endif
+
+extern "C" {
+bool obs_frontend_add_dock_by_id(const char *id, const char *title, void *dock) __attribute__((weak));
+}
 
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
@@ -36,6 +43,8 @@
 #include <QtGui/QBrush>
 #include <QtWidgets/QWidget>
 #include <QtWidgets/QDialog>
+#include <QtWidgets/QListWidget>
+#include <QtWidgets/QListWidgetItem>
 #include <QtWidgets/QTableWidget>
 #include <QtWidgets/QVBoxLayout>
 #include <QtWidgets/QHBoxLayout>
@@ -124,7 +133,8 @@ struct GstMasterHub {
 	std::string source_type;      /* "Program Output", "Scene", "Source" */
 	std::string source_name;
 	std::string scene_name;
-	std::string render_mode;      /* Capture Callback */
+	std::string render_mode;      /* Deprecated compatibility */
+	std::string capture_method;   /* 4 Callbacks */
 	std::string gpu_encoder_type; /* "auto", "nvenc", "vaapi", "vtenc", "x264enc" */
 	int bitrate_kbps;
 	int keyint_sec;
@@ -132,6 +142,9 @@ struct GstMasterHub {
 
 	bool is_active;
 	gst_render_callback_t *active_render_cb;
+	gst_encoder_callback_t *active_encoder_cb;
+	gst_output_callback_t *active_output_cb;
+	gst_filter_callback_t *active_filter_cb;
 
 	std::vector<std::shared_ptr<GstDestination>> destinations;
 
@@ -141,15 +154,27 @@ struct GstMasterHub {
 		  source_name(""),
 		  scene_name(""),
 		  render_mode("Render Callback (GPU Direct Texture)"),
+		  capture_method("Render Callback (GPU Direct Texture)"),
 		  gpu_encoder_type("auto"),
 		  bitrate_kbps(4000),
 		  keyint_sec(1),
 		  master_pipeline(""),
 		  is_active(false),
-		  active_render_cb(nullptr)
+		  active_render_cb(nullptr),
+		  active_encoder_cb(nullptr),
+		  active_output_cb(nullptr),
+		  active_filter_cb(nullptr)
 	{
 	}
 };
+
+static inline bool is_hub_pipeline_active(const GstMasterHub *hub)
+{
+	return hub && (hub->active_render_cb != nullptr ||
+	               hub->active_encoder_cb != nullptr ||
+	               hub->active_output_cb != nullptr ||
+	               hub->active_filter_cb != nullptr);
+}
 
 /* Global Master Hubs managed by the Dock */
 static std::vector<std::shared_ptr<GstMasterHub>> g_master_hubs;
@@ -176,9 +201,10 @@ static void export_dock_status_json()
 		hubObj["source_type"] = QString::fromStdString(hub->source_type);
 		hubObj["source_name"] = QString::fromStdString(hub->source_name);
 		hubObj["scene_name"] = QString::fromStdString(hub->scene_name);
+		hubObj["capture_method"] = QString::fromStdString(hub->capture_method);
 		hubObj["gpu_encoder_type"] = QString::fromStdString(hub->gpu_encoder_type);
 		hubObj["bitrate_kbps"] = hub->bitrate_kbps;
-		hubObj["is_active"] = hub->is_active || (hub->active_render_cb != nullptr);
+		hubObj["is_active"] = hub->is_active || is_hub_pipeline_active(hub.get());
 
 		QJsonArray destsArray;
 		for (const auto &d : hub->destinations) {
@@ -219,6 +245,7 @@ static void save_dock_config()
 		hubObj["source_type"] = QString::fromStdString(hub->source_type);
 		hubObj["source_name"] = QString::fromStdString(hub->source_name);
 		hubObj["scene_name"] = QString::fromStdString(hub->scene_name);
+		hubObj["capture_method"] = QString::fromStdString(hub->capture_method);
 		hubObj["gpu_encoder_type"] = QString::fromStdString(hub->gpu_encoder_type);
 		hubObj["bitrate_kbps"] = hub->bitrate_kbps;
 		hubObj["keyint_sec"] = hub->keyint_sec;
@@ -283,6 +310,7 @@ static void load_dock_config()
 		hub->source_type = hubObj["source_type"].toString("Program Output").toStdString();
 		hub->source_name = hubObj["source_name"].toString("").toStdString();
 		hub->scene_name = hubObj["scene_name"].toString("").toStdString();
+		hub->capture_method = hubObj["capture_method"].toString("Render Callback (GPU Direct Texture)").toStdString();
 		hub->gpu_encoder_type = hubObj["gpu_encoder_type"].toString("auto").toStdString();
 		hub->bitrate_kbps = hubObj["bitrate_kbps"].toInt(4000);
 		hub->keyint_sec = hubObj["keyint_sec"].toInt(1);
@@ -391,20 +419,40 @@ static void stop_destination(GstMasterHub *hub, GstDestination *dest)
 		}
 	}
 
-	if (!any_active && hub->active_render_cb) {
+	if (!any_active) {
 		blog(LOG_INFO, "[obs-gstreamer-dock] All destinations stopped: tearing down master pipeline for '%s'",
 			hub->name.c_str());
-		gst_render_callback_destroy(hub->active_render_cb);
-		hub->active_render_cb = nullptr;
+		if (hub->active_render_cb) {
+			gst_render_callback_destroy(hub->active_render_cb);
+			hub->active_render_cb = nullptr;
+		}
+		if (hub->active_encoder_cb) {
+			gst_encoder_callback_destroy(hub->active_encoder_cb);
+			hub->active_encoder_cb = nullptr;
+		}
+		if (hub->active_output_cb) {
+			gst_output_callback_destroy(hub->active_output_cb);
+			hub->active_output_cb = nullptr;
+		}
+		if (hub->active_filter_cb) {
+			gst_filter_callback_destroy(hub->active_filter_cb);
+			hub->active_filter_cb = nullptr;
+		}
 	}
 
 	export_dock_status_json();
 }
 
-static bool ensure_master_pipeline(GstMasterHub *hub)
+static gst_master_pipeline_t *ensure_master_pipeline(GstMasterHub *hub)
 {
 	if (hub->active_render_cb)
-		return true;
+		return gst_render_callback_get_pipeline(hub->active_render_cb);
+	if (hub->active_encoder_cb)
+		return gst_encoder_callback_get_pipeline(hub->active_encoder_cb);
+	if (hub->active_output_cb)
+		return gst_output_callback_get_pipeline(hub->active_output_cb);
+	if (hub->active_filter_cb)
+		return gst_filter_callback_get_pipeline(hub->active_filter_cb);
 
 	gst_source_type_t stype = GST_SOURCE_MAIN_OUTPUT;
 	if (hub->source_type == "Scene")
@@ -417,27 +465,47 @@ static bool ensure_master_pipeline(GstMasterHub *hub)
 	uint32_t fps_num = ovi.fps_num ? ovi.fps_num : 60;
 	uint32_t fps_den = ovi.fps_den ? ovi.fps_den : 1;
 
-	blog(LOG_INFO, "[obs-gstreamer-dock] Starting Master Hardware Pipeline for '%s' (encoder=%s, bitrate=%d kbps)",
-		hub->name.c_str(), hub->gpu_encoder_type.c_str(), hub->bitrate_kbps);
+	const char *target_scene = hub->scene_name.c_str();
+	const char *target_source = hub->source_name.c_str();
+	const char *custom_pipe = hub->master_pipeline.c_str();
+	const char *encoder_type = hub->gpu_encoder_type.c_str();
 
-	hub->active_render_cb = gst_render_callback_create(
-		stype,
-		hub->scene_name.c_str(),
-		hub->source_name.c_str(),
-		hub->master_pipeline.c_str(),
-		hub->gpu_encoder_type.c_str(),
-		hub->bitrate_kbps,
-		hub->keyint_sec,
-		fps_num,
-		fps_den
-	);
+	blog(LOG_INFO, "[obs-gstreamer-dock] Starting Master Pipeline for '%s' (method='%s', encoder=%s, bitrate=%d kbps)",
+		hub->name.c_str(), hub->capture_method.c_str(), encoder_type, hub->bitrate_kbps);
 
-	if (!hub->active_render_cb) {
-		blog(LOG_ERROR, "[obs-gstreamer-dock] Failed to create Master Render Callback for '%s'", hub->name.c_str());
-		return false;
+	if (hub->capture_method == "Encoder Callback (GPU Hardware Texture Encoder)") {
+		hub->active_encoder_cb = gst_encoder_callback_create(
+			stype, target_scene, target_source, custom_pipe, encoder_type,
+			hub->bitrate_kbps, hub->keyint_sec, fps_num, fps_den
+		);
+		if (hub->active_encoder_cb)
+			return gst_encoder_callback_get_pipeline(hub->active_encoder_cb);
+	} else if (hub->capture_method == "Filter Callback (Source Video Filter Tap)") {
+		hub->active_filter_cb = gst_filter_callback_create(
+			stype, target_scene, target_source, custom_pipe, encoder_type,
+			hub->bitrate_kbps, hub->keyint_sec, fps_num, fps_den
+		);
+		if (hub->active_filter_cb)
+			return gst_filter_callback_get_pipeline(hub->active_filter_cb);
+	} else if (hub->capture_method == "Output Callback (Raw Video/Audio Frames)") {
+		hub->active_output_cb = gst_output_callback_create(
+			stype, target_scene, target_source, custom_pipe, encoder_type,
+			hub->bitrate_kbps, hub->keyint_sec, fps_num, fps_den
+		);
+		if (hub->active_output_cb)
+			return gst_output_callback_get_pipeline(hub->active_output_cb);
+	} else {
+		/* Default: Render Callback (GPU Direct Texture) */
+		hub->active_render_cb = gst_render_callback_create(
+			stype, target_scene, target_source, custom_pipe, encoder_type,
+			hub->bitrate_kbps, hub->keyint_sec, fps_num, fps_den
+		);
+		if (hub->active_render_cb)
+			return gst_render_callback_get_pipeline(hub->active_render_cb);
 	}
 
-	return true;
+	blog(LOG_ERROR, "[obs-gstreamer-dock] Failed to create Master Pipeline callback for '%s'", hub->name.c_str());
+	return nullptr;
 }
 
 static bool start_destination(GstMasterHub *hub, GstDestination *dest)
@@ -445,10 +513,7 @@ static bool start_destination(GstMasterHub *hub, GstDestination *dest)
 	stop_destination(hub, dest);
 
 	if (dest->type == DEST_TYPE_RTSP) {
-		if (!ensure_master_pipeline(hub))
-			return false;
-
-		gst_master_pipeline_t *master_pipe = gst_render_callback_get_pipeline(hub->active_render_cb);
+		gst_master_pipeline_t *master_pipe = ensure_master_pipeline(hub);
 		if (!master_pipe) {
 			blog(LOG_ERROR, "[obs-gstreamer-dock] Master pipeline object is NULL");
 			return false;
@@ -661,13 +726,16 @@ public:
 		: QDialog(parent), m_hub(hub)
 	{
 		setWindowTitle(QString("Edit Master Hub: %1").arg(QString::fromStdString(hub->name)));
-		resize(720, 620);
+		resize(680, 600);
 
 		QVBoxLayout *rootLayout = new QVBoxLayout(this);
+		rootLayout->setSpacing(8);
 
 		/* Master Hardware Encoder Settings */
-		QGroupBox *masterGroup = new QGroupBox("Master Video & Hardware Encoder", this);
+		QGroupBox *masterGroup = new QGroupBox("Master Pipeline & Hardware Encoder", this);
 		QFormLayout *formLayout = new QFormLayout(masterGroup);
+		formLayout->setLabelAlignment(Qt::AlignLeft);
+		formLayout->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
 
 		m_nameEdit = new QLineEdit(QString::fromStdString(hub->name), this);
 		formLayout->addRow("Master Name:", m_nameEdit);
@@ -679,12 +747,25 @@ public:
 		m_sourceTypeCombo->setCurrentText(QString::fromStdString(hub->source_type));
 		formLayout->addRow("Capture Source:", m_sourceTypeCombo);
 
+		/* Capture Method Dropdown (4 Callbacks) */
+		m_captureMethodCombo = new QComboBox(this);
+		m_captureMethodCombo->addItem("Render Callback (GPU Direct Texture)");
+		m_captureMethodCombo->addItem("Encoder Callback (GPU Hardware Texture Encoder)");
+		m_captureMethodCombo->addItem("Output Callback (Raw Video/Audio Frames)");
+		m_captureMethodCombo->addItem("Filter Callback (Source Video Filter Tap)");
+		int methodIdx = m_captureMethodCombo->findText(QString::fromStdString(hub->capture_method));
+		if (methodIdx >= 0)
+			m_captureMethodCombo->setCurrentIndex(methodIdx);
+		formLayout->addRow("Capture Method:", m_captureMethodCombo);
+
+		/* Target Scene/Source Dropdown (Conditional - hidden for Program Output) */
+		m_targetLabel = new QLabel("Target Name:", this);
 		m_targetCombo = new QComboBox(this);
-		m_targetCombo->setEditable(true);
-		formLayout->addRow("Target Scene/Source:", m_targetCombo);
+		m_targetCombo->setEditable(false);
+		formLayout->addRow(m_targetLabel, m_targetCombo);
 
 		m_encoderCombo = new QComboBox(this);
-		m_encoderCombo->addItem("Auto Detect", "auto");
+		m_encoderCombo->addItem("Auto Detect GPU", "auto");
 		m_encoderCombo->addItem("NVIDIA NVENC (nvh264enc)", "nvh264enc");
 		m_encoderCombo->addItem("Intel QuickSync (qsvh264enc)", "qsvh264enc");
 		m_encoderCombo->addItem("VAAPI GPU (vaapih264enc)", "vaapih264enc");
@@ -707,47 +788,60 @@ public:
 		formLayout->addRow("Keyframe Interval:", m_keyintSpin);
 
 		m_customPipeEdit = new QPlainTextEdit(QString::fromStdString(hub->master_pipeline), this);
-		m_customPipeEdit->setPlaceholderText("Optional: Custom GStreamer Master Pipeline string (leave empty for auto hardware encoder)");
-		m_customPipeEdit->setMaximumHeight(55);
-		formLayout->addRow("Custom Master Pipeline:", m_customPipeEdit);
+		m_customPipeEdit->setPlaceholderText("Optional: Custom GStreamer Master Pipeline string (leave empty for auto GPU encoder)");
+		m_customPipeEdit->setMaximumHeight(45);
+		formLayout->addRow("Custom Pipeline:", m_customPipeEdit);
 
 		rootLayout->addWidget(masterGroup);
 
 		connect(m_sourceTypeCombo, &QComboBox::currentTextChanged, this, &GstMasterDetailDialog::populateTargetCombo);
 		populateTargetCombo(m_sourceTypeCombo->currentText());
 
-		/* Multiple Destinations Manager */
-		QGroupBox *destGroup = new QGroupBox("Destinations (Unlimited RTSP, WebRTC, Custom Sinks)", this);
+		/* Multiple Destinations Manager (List Box) */
+		QGroupBox *destGroup = new QGroupBox("Destinations (RTSP, WebRTC, Custom Sinks)", this);
 		QVBoxLayout *destLayout = new QVBoxLayout(destGroup);
 
-		m_destTable = new QTableWidget(this);
-		m_destTable->setColumnCount(6);
-		m_destTable->setHorizontalHeaderLabels({"Type", "Name", "Target / Port", "Status", "Control", "Edit"});
-		m_destTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
-		m_destTable->setSelectionBehavior(QAbstractItemView::SelectRows);
-		destLayout->addWidget(m_destTable);
+		m_destList = new QListWidget(this);
+		m_destList->setSelectionMode(QAbstractItemView::SingleSelection);
+		m_destList->setStyleSheet(
+			"QListWidget { background-color: #1e1e24; border: 1px solid #363640; border-radius: 4px; padding: 2px; }"
+			"QListWidget::item { border-bottom: 1px solid #2a2a34; padding: 6px 8px; border-radius: 3px; }"
+			"QListWidget::item:selected { background-color: #3b4252; color: #eceff4; }"
+			"QListWidget::item:hover:!selected { background-color: #2b303c; }"
+		);
+		destLayout->addWidget(m_destList);
 
+		/* OBS-style Destination Action Toolbar */
 		QHBoxLayout *btnLayout = new QHBoxLayout();
 		QPushButton *btnAddRtsp = new QPushButton("+ Add RTSP", this);
 		QPushButton *btnAddWebRTC = new QPushButton("+ Add WebRTC", this);
 		QPushButton *btnAddCustom = new QPushButton("+ Add Custom Sink", this);
-		QPushButton *btnRemove = new QPushButton("- Remove Selected", this);
+		QPushButton *btnRemove = new QPushButton("- Remove", this);
+		QPushButton *btnToggleDest = new QPushButton("Start / Stop", this);
+		QPushButton *btnEditDest = new QPushButton("Properties", this);
 
 		btnLayout->addWidget(btnAddRtsp);
 		btnLayout->addWidget(btnAddWebRTC);
 		btnLayout->addWidget(btnAddCustom);
 		btnLayout->addWidget(btnRemove);
+		btnLayout->addStretch();
+		btnLayout->addWidget(btnToggleDest);
+		btnLayout->addWidget(btnEditDest);
 		destLayout->addLayout(btnLayout);
 
 		connect(btnAddRtsp, &QPushButton::clicked, this, &GstMasterDetailDialog::addRtspDestination);
 		connect(btnAddWebRTC, &QPushButton::clicked, this, &GstMasterDetailDialog::addWebRTCDestination);
 		connect(btnAddCustom, &QPushButton::clicked, this, &GstMasterDetailDialog::addCustomDestination);
 		connect(btnRemove, &QPushButton::clicked, this, &GstMasterDetailDialog::removeSelectedDestination);
-		connect(m_destTable, &QTableWidget::cellDoubleClicked, this, &GstMasterDetailDialog::onCellDoubleClicked);
+		connect(btnToggleDest, &QPushButton::clicked, this, &GstMasterDetailDialog::toggleSelectedDestination);
+		connect(btnEditDest, &QPushButton::clicked, this, &GstMasterDetailDialog::editSelectedDestination);
+
+		/* Double-Click on Destination item -> opens Destination Detail Dialog */
+		connect(m_destList, &QListWidget::itemDoubleClicked, this, &GstMasterDetailDialog::onDestDoubleClicked);
 
 		rootLayout->addWidget(destGroup);
 
-		/* Dialog Buttons */
+		/* Dialog Footer */
 		QHBoxLayout *footerLayout = new QHBoxLayout();
 		QPushButton *btnSave = new QPushButton("Save Changes", this);
 		QPushButton *btnClose = new QPushButton("Close", this);
@@ -759,7 +853,7 @@ public:
 		connect(btnSave, &QPushButton::clicked, this, &GstMasterDetailDialog::saveAndClose);
 		connect(btnClose, &QPushButton::clicked, this, &QDialog::accept);
 
-		refreshDestTable();
+		refreshDestList();
 	}
 
 private:
@@ -767,36 +861,43 @@ private:
 	{
 		m_targetCombo->clear();
 		if (sourceType == "Scene") {
-			m_targetCombo->setEnabled(true);
+			m_targetLabel->setText("Target Scene:");
+			m_targetLabel->show();
+			m_targetCombo->show();
 			auto scenes = get_obs_scene_names();
 			for (const auto &s : scenes) {
 				m_targetCombo->addItem(QString::fromStdString(s));
 			}
-			m_targetCombo->setCurrentText(QString::fromStdString(m_hub->scene_name));
+			int idx = m_targetCombo->findText(QString::fromStdString(m_hub->scene_name));
+			if (idx >= 0) m_targetCombo->setCurrentIndex(idx);
 		} else if (sourceType == "Source") {
-			m_targetCombo->setEnabled(true);
+			m_targetLabel->setText("Target Source:");
+			m_targetLabel->show();
+			m_targetCombo->show();
 			auto sources = get_obs_source_names();
 			for (const auto &s : sources) {
 				m_targetCombo->addItem(QString::fromStdString(s));
 			}
-			m_targetCombo->setCurrentText(QString::fromStdString(m_hub->source_name));
+			int idx = m_targetCombo->findText(QString::fromStdString(m_hub->source_name));
+			if (idx >= 0) m_targetCombo->setCurrentIndex(idx);
 		} else {
-			m_targetCombo->setEnabled(false);
-			m_targetCombo->setCurrentText("");
+			/* Program Output: completely hide target scene/source row */
+			m_targetLabel->hide();
+			m_targetCombo->hide();
 		}
 	}
 
-	void refreshDestTable()
+	void refreshDestList()
 	{
-		m_destTable->setRowCount((int)m_hub->destinations.size());
-		for (int i = 0; i < (int)m_hub->destinations.size(); i++) {
-			auto &dest = m_hub->destinations[i];
+		int selectedRow = m_destList->currentRow();
+		m_destList->clear();
 
-			QString typeStr = (dest->type == DEST_TYPE_RTSP) ? "RTSP" :
-			                  (dest->type == DEST_TYPE_WEBRTC) ? "WebRTC" : "Custom";
-			m_destTable->setItem(i, 0, new QTableWidgetItem(typeStr));
-			m_destTable->setItem(i, 1, new QTableWidgetItem(QString::fromStdString(dest->name)));
+		for (size_t i = 0; i < m_hub->destinations.size(); i++) {
+			const auto &dest = m_hub->destinations[i];
 
+			QString statusIcon = dest->is_active ? "● " : "○ ";
+			QString typeBadge = (dest->type == DEST_TYPE_RTSP) ? "[RTSP]" :
+			                    (dest->type == DEST_TYPE_WEBRTC) ? "[WebRTC]" : "[Custom]";
 			QString targetStr;
 			if (dest->type == DEST_TYPE_RTSP)
 				targetStr = QString(":%1%2").arg(QString::fromStdString(dest->rtsp_port), QString::fromStdString(dest->rtsp_mount));
@@ -804,27 +905,39 @@ private:
 				targetStr = QString("Port %1").arg(QString::fromStdString(dest->webrtc_port));
 			else
 				targetStr = "Custom Pipeline";
-			m_destTable->setItem(i, 2, new QTableWidgetItem(targetStr));
 
-			QString statusStr = dest->is_active ? "● Running" : "○ Stopped";
-			QTableWidgetItem *statusItem = new QTableWidgetItem(statusStr);
-			if (dest->is_active)
-				statusItem->setForeground(QBrush(QColor(40, 167, 69)));
-			m_destTable->setItem(i, 3, statusItem);
+			QString statusStr = dest->is_active ? "Running" : "Stopped";
+			QString autoStr = dest->autostart ? " • Autostart" : "";
 
-			QPushButton *actionBtn = new QPushButton(dest->is_active ? "Stop" : "Start", this);
-			int rowIdx = i;
-			connect(actionBtn, &QPushButton::clicked, [this, rowIdx]() {
-				toggleDestination(rowIdx);
-			});
-			m_destTable->setCellWidget(i, 4, actionBtn);
+			QString title = QString("%1%2 %3").arg(statusIcon, typeBadge, QString::fromStdString(dest->name));
+			QString sub = QString("     Target: %1  |  Status: %2%3").arg(targetStr, statusStr, autoStr);
 
-			QPushButton *editBtn = new QPushButton("Edit", this);
-			connect(editBtn, &QPushButton::clicked, [this, rowIdx]() {
-				editDestination(rowIdx);
-			});
-			m_destTable->setCellWidget(i, 5, editBtn);
+			QListWidgetItem *item = new QListWidgetItem(title + "\n" + sub);
+			if (dest->is_active) {
+				item->setForeground(QBrush(QColor(50, 205, 80)));
+			} else {
+				item->setForeground(QBrush(QColor(185, 190, 200)));
+			}
+			m_destList->addItem(item);
 		}
+
+		if (selectedRow >= 0 && selectedRow < m_destList->count()) {
+			m_destList->setCurrentRow(selectedRow);
+		} else if (m_destList->count() > 0) {
+			m_destList->setCurrentRow(0);
+		}
+	}
+
+	void onDestDoubleClicked(QListWidgetItem *item)
+	{
+		int row = m_destList->row(item);
+		editDestination(row);
+	}
+
+	void editSelectedDestination()
+	{
+		int row = m_destList->currentRow();
+		if (row >= 0) editDestination(row);
 	}
 
 	void editDestination(int idx)
@@ -833,27 +946,22 @@ private:
 		GstDestinationDetailDialog dlg(m_hub->destinations[idx], this);
 		if (dlg.exec() == QDialog::Accepted) {
 			save_dock_config();
-			refreshDestTable();
+			refreshDestList();
 		}
 	}
 
-	void onCellDoubleClicked(int row, int col)
+	void toggleSelectedDestination()
 	{
-		Q_UNUSED(col);
-		editDestination(row);
-	}
-
-	void toggleDestination(int idx)
-	{
-		if (idx < 0 || idx >= (int)m_hub->destinations.size()) return;
-		auto &dest = m_hub->destinations[idx];
+		int row = m_destList->currentRow();
+		if (row < 0 || row >= (int)m_hub->destinations.size()) return;
+		auto &dest = m_hub->destinations[row];
 		if (dest->is_active) {
 			stop_destination(m_hub.get(), dest.get());
 		} else {
 			start_destination(m_hub.get(), dest.get());
 		}
 		save_dock_config();
-		refreshDestTable();
+		refreshDestList();
 	}
 
 	void addRtspDestination()
@@ -865,7 +973,8 @@ private:
 		dest->rtsp_mount = "/live" + std::to_string(m_hub->destinations.size() + 1);
 		m_hub->destinations.push_back(dest);
 		save_dock_config();
-		refreshDestTable();
+		refreshDestList();
+		m_destList->setCurrentRow((int)m_hub->destinations.size() - 1);
 	}
 
 	void addWebRTCDestination()
@@ -876,7 +985,8 @@ private:
 		dest->webrtc_port = std::to_string(8888 + m_hub->destinations.size());
 		m_hub->destinations.push_back(dest);
 		save_dock_config();
-		refreshDestTable();
+		refreshDestList();
+		m_destList->setCurrentRow((int)m_hub->destinations.size() - 1);
 	}
 
 	void addCustomDestination()
@@ -887,17 +997,18 @@ private:
 		dest->custom_pipeline = "autovideosink sync=false";
 		m_hub->destinations.push_back(dest);
 		save_dock_config();
-		refreshDestTable();
+		refreshDestList();
+		m_destList->setCurrentRow((int)m_hub->destinations.size() - 1);
 	}
 
 	void removeSelectedDestination()
 	{
-		int row = m_destTable->currentRow();
+		int row = m_destList->currentRow();
 		if (row >= 0 && row < (int)m_hub->destinations.size()) {
 			stop_destination(m_hub.get(), m_hub->destinations[row].get());
 			m_hub->destinations.erase(m_hub->destinations.begin() + row);
 			save_dock_config();
-			refreshDestTable();
+			refreshDestList();
 		}
 	}
 
@@ -905,6 +1016,7 @@ private:
 	{
 		m_hub->name = m_nameEdit->text().toStdString();
 		m_hub->source_type = m_sourceTypeCombo->currentText().toStdString();
+		m_hub->capture_method = m_captureMethodCombo->currentText().toStdString();
 		if (m_hub->source_type == "Scene")
 			m_hub->scene_name = m_targetCombo->currentText().toStdString();
 		else if (m_hub->source_type == "Source")
@@ -922,12 +1034,14 @@ private:
 	std::shared_ptr<GstMasterHub> m_hub;
 	QLineEdit *m_nameEdit;
 	QComboBox *m_sourceTypeCombo;
+	QComboBox *m_captureMethodCombo;
+	QLabel *m_targetLabel;
 	QComboBox *m_targetCombo;
 	QComboBox *m_encoderCombo;
 	QSpinBox *m_bitrateSpin;
 	QSpinBox *m_keyintSpin;
 	QPlainTextEdit *m_customPipeEdit;
-	QTableWidget *m_destTable;
+	QListWidget *m_destList;
 };
 
 /* --------------------------------------------------------------------------
@@ -940,75 +1054,123 @@ public:
 	{
 		QVBoxLayout *layout = new QVBoxLayout(this);
 		layout->setContentsMargins(4, 4, 4, 4);
+		layout->setSpacing(4);
 
-		/* Header Controls */
+		/* Header */
 		QHBoxLayout *topBar = new QHBoxLayout();
-		QPushButton *btnAddMaster = new QPushButton("+ Add Master Hub", this);
-		QPushButton *btnDeleteMaster = new QPushButton("- Delete Master", this);
-		QPushButton *btnSaveConfig = new QPushButton("Save Config", this);
-
-		topBar->addWidget(btnAddMaster);
-		topBar->addWidget(btnDeleteMaster);
-		topBar->addWidget(btnSaveConfig);
+		QLabel *titleLabel = new QLabel("<b>Master Pipeline Hubs</b>", this);
+		topBar->addWidget(titleLabel);
 		topBar->addStretch();
 		layout->addLayout(topBar);
 
+		/* Main List Box of Masters */
+		m_hubList = new QListWidget(this);
+		m_hubList->setSelectionMode(QAbstractItemView::SingleSelection);
+		m_hubList->setStyleSheet(
+			"QListWidget { background-color: #1a1a20; border: 1px solid #363640; border-radius: 4px; padding: 2px; }"
+			"QListWidget::item { border-bottom: 1px solid #282834; padding: 8px 10px; border-radius: 3px; }"
+			"QListWidget::item:selected { background-color: #3b4252; color: #eceff4; }"
+			"QListWidget::item:hover:!selected { background-color: #262a34; }"
+		);
+		layout->addWidget(m_hubList);
+
+		/* Bottom OBS-style Action Toolbar */
+		QHBoxLayout *botBar = new QHBoxLayout();
+		QPushButton *btnAddMaster = new QPushButton("+ Add Master", this);
+		QPushButton *btnDeleteMaster = new QPushButton("- Remove", this);
+		QPushButton *btnConfigMaster = new QPushButton("Configure", this);
+		QPushButton *btnToggleAll = new QPushButton("Start / Stop All", this);
+		QPushButton *btnSaveConfig = new QPushButton("Save", this);
+
+		botBar->addWidget(btnAddMaster);
+		botBar->addWidget(btnDeleteMaster);
+		botBar->addStretch();
+		botBar->addWidget(btnConfigMaster);
+		botBar->addWidget(btnToggleAll);
+		botBar->addWidget(btnSaveConfig);
+		layout->addLayout(botBar);
+
 		connect(btnAddMaster, &QPushButton::clicked, this, &GstMasterDockWidget::onAddMasterClicked);
 		connect(btnDeleteMaster, &QPushButton::clicked, this, &GstMasterDockWidget::onDeleteMasterClicked);
+		connect(btnConfigMaster, &QPushButton::clicked, this, &GstMasterDockWidget::onConfigureClicked);
+		connect(btnToggleAll, &QPushButton::clicked, this, &GstMasterDockWidget::onToggleAllClicked);
 		connect(btnSaveConfig, &QPushButton::clicked, [this]() {
 			save_dock_config();
 			QMessageBox::information(this, "Master Hubs", "Master Hub configuration saved successfully.");
 		});
 
-		/* Main Table of Masters */
-		m_table = new QTableWidget(this);
-		m_table->setColumnCount(5);
-		m_table->setHorizontalHeaderLabels({"Master Hub Name", "Source", "Encoder", "Destinations", "Action"});
-		m_table->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
-		m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
-		m_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
-		layout->addWidget(m_table);
+		/* Double-Click on Master Item -> Opens Child Configuration Dialog */
+		connect(m_hubList, &QListWidget::itemDoubleClicked, [this](QListWidgetItem *item) {
+			int row = m_hubList->row(item);
+			openDetailDialog(row);
+		});
 
-		/* Double-Click Row -> Opens Child Detail Dialog */
-		connect(m_table, &QTableWidget::cellDoubleClicked, this, &GstMasterDockWidget::onCellDoubleClicked);
+		refreshList();
+	}
 
-		refreshTable();
+	void refreshList()
+	{
+		int selectedRow = m_hubList->currentRow();
+		m_hubList->clear();
+
+		for (size_t i = 0; i < g_master_hubs.size(); i++) {
+			const auto &hub = g_master_hubs[i];
+
+			bool anyActive = false;
+			int runningCount = 0;
+			for (const auto &d : hub->destinations) {
+				if (d->is_active) {
+					anyActive = true;
+					runningCount++;
+				}
+			}
+
+			QString statusIcon = anyActive ? "● " : "○ ";
+			QString title = QString("%1%2").arg(statusIcon, QString::fromStdString(hub->name));
+
+			QString srcStr = QString("Source: %1").arg(QString::fromStdString(hub->source_type));
+			if (hub->source_type == "Scene" && !hub->scene_name.empty())
+				srcStr += QString(" (%1)").arg(QString::fromStdString(hub->scene_name));
+			else if (hub->source_type == "Source" && !hub->source_name.empty())
+				srcStr += QString(" (%1)").arg(QString::fromStdString(hub->source_name));
+
+			QString methodStr = QString::fromStdString(hub->capture_method);
+			if (methodStr.contains("Render Callback")) methodStr = "Render CB";
+			else if (methodStr.contains("Encoder Callback")) methodStr = "Encoder CB";
+			else if (methodStr.contains("Output Callback")) methodStr = "Output CB";
+			else if (methodStr.contains("Filter Callback")) methodStr = "Filter CB";
+
+			QString line2 = QString("     %1  |  %2  |  %3 (%4 kbps)")
+			                    .arg(srcStr, methodStr, QString::fromStdString(hub->gpu_encoder_type), QString::number(hub->bitrate_kbps));
+			QString line3 = QString("     Destinations: %1 running / %2 total  (Double-click to configure)")
+			                    .arg(QString::number(runningCount), QString::number(hub->destinations.size()));
+
+			QListWidgetItem *item = new QListWidgetItem(title + "\n" + line2 + "\n" + line3);
+			if (anyActive) {
+				item->setForeground(QBrush(QColor(50, 205, 80)));
+			} else {
+				item->setForeground(QBrush(QColor(200, 205, 215)));
+			}
+			m_hubList->addItem(item);
+		}
+
+		if (selectedRow >= 0 && selectedRow < m_hubList->count()) {
+			m_hubList->setCurrentRow(selectedRow);
+		} else if (m_hubList->count() > 0) {
+			m_hubList->setCurrentRow(0);
+		}
 	}
 
 	void refreshTable()
 	{
-		m_table->setRowCount((int)g_master_hubs.size());
-		for (int i = 0; i < (int)g_master_hubs.size(); i++) {
-			auto &hub = g_master_hubs[i];
-
-			m_table->setItem(i, 0, new QTableWidgetItem(QString::fromStdString(hub->name)));
-			m_table->setItem(i, 1, new QTableWidgetItem(QString::fromStdString(hub->source_type)));
-
-			QString encStr = QString("%1 (%2k)").arg(QString::fromStdString(hub->gpu_encoder_type), QString::number(hub->bitrate_kbps));
-			m_table->setItem(i, 2, new QTableWidgetItem(encStr));
-
-			int runningCount = 0;
-			for (const auto &d : hub->destinations) {
-				if (d->is_active) runningCount++;
-			}
-			QString destSummary = QString("%1 active / %2 total")
-			                          .arg(QString::number(runningCount), QString::number(hub->destinations.size()));
-			m_table->setItem(i, 3, new QTableWidgetItem(destSummary));
-
-			QPushButton *editBtn = new QPushButton("Configure", this);
-			int rowIdx = i;
-			connect(editBtn, &QPushButton::clicked, [this, rowIdx]() {
-				openDetailDialog(rowIdx);
-			});
-			m_table->setCellWidget(i, 4, editBtn);
-		}
+		refreshList();
 	}
 
 private:
-	void onCellDoubleClicked(int row, int column)
+	void onConfigureClicked()
 	{
-		Q_UNUSED(column);
-		openDetailDialog(row);
+		int row = m_hubList->currentRow();
+		if (row >= 0) openDetailDialog(row);
 	}
 
 	void openDetailDialog(int row)
@@ -1017,7 +1179,7 @@ private:
 		GstMasterDetailDialog dlg(g_master_hubs[row], this);
 		dlg.exec();
 		save_dock_config();
-		refreshTable();
+		refreshList();
 	}
 
 	void onAddMasterClicked()
@@ -1032,12 +1194,13 @@ private:
 
 		g_master_hubs.push_back(hub);
 		save_dock_config();
-		refreshTable();
+		refreshList();
+		m_hubList->setCurrentRow((int)g_master_hubs.size() - 1);
 	}
 
 	void onDeleteMasterClicked()
 	{
-		int row = m_table->currentRow();
+		int row = m_hubList->currentRow();
 		if (row >= 0 && row < (int)g_master_hubs.size()) {
 			/* Stop all destinations on this hub */
 			for (auto &dest : g_master_hubs[row]->destinations) {
@@ -1045,11 +1208,43 @@ private:
 			}
 			g_master_hubs.erase(g_master_hubs.begin() + row);
 			save_dock_config();
-			refreshTable();
+			refreshList();
 		}
 	}
 
-	QTableWidget *m_table;
+	void onToggleAllClicked()
+	{
+		int row = m_hubList->currentRow();
+		if (row < 0 || row >= (int)g_master_hubs.size()) return;
+		auto &hub = g_master_hubs[row];
+
+		bool anyActive = false;
+		for (const auto &d : hub->destinations) {
+			if (d->is_active) {
+				anyActive = true;
+				break;
+			}
+		}
+
+		if (anyActive) {
+			/* Stop all */
+			for (auto &d : hub->destinations) {
+				stop_destination(hub.get(), d.get());
+			}
+		} else {
+			/* Start all enabled */
+			for (auto &d : hub->destinations) {
+				if (d->enabled) {
+					start_destination(hub.get(), d.get());
+				}
+			}
+		}
+
+		save_dock_config();
+		refreshList();
+	}
+
+	QListWidget *m_hubList;
 };
 
 /* --------------------------------------------------------------------------
@@ -1067,15 +1262,11 @@ static void on_frontend_event(enum obs_frontend_event event, void *private_data)
 			g_dock_widget->refreshTable();
 
 			/* Register dock into OBS Studio Docks menu */
-#if LIBOBS_API_MAJOR_VER >= 30
 			obs_frontend_add_dock_by_id(
 				"gstreamer_master_pipeline_dock",
 				"GStreamer Master Hub",
 				(void *)g_dock_widget
 			);
-#else
-			obs_frontend_add_dock((void *)g_dock_widget);
-#endif
 		}
 
 		/* Check for autostart destinations */

@@ -119,15 +119,66 @@
     btnGotoDesktop.addEventListener('click', function () { switchTab('vnc'); });
   }
 
-  btnReloadIframe.addEventListener('click', function () {
-    if (vncIframe) {
-      var currentSrc = vncIframe.src;
-      vncIframe.src = 'about:blank';
-      setTimeout(function () {
-        vncIframe.src = currentSrc;
-      }, 100);
+  // Resolution Dropdown & Scaling Handler
+  var selectResolution = document.getElementById('select-resolution');
+  var linkVncNewWindow = document.getElementById('link-vnc-new-window');
+  var currentResMode = localStorage.getItem('vnc_res_mode') || 'auto';
+
+  function updateVncLinks(resMode) {
+    var resizeParam = (resMode === 'auto') ? 'remote' : 'scale';
+    var newSrc = '/novnc/vnc.html?autoconnect=true&resize=' + resizeParam + '&password=vncpassword';
+    if (vncIframe && vncIframe.src !== newSrc) {
+      vncIframe.src = newSrc;
     }
-  });
+    if (linkVncNewWindow) {
+      linkVncNewWindow.href = newSrc;
+    }
+  }
+
+  function applyResolution(resVal, shouldReload) {
+    currentResMode = resVal;
+    localStorage.setItem('vnc_res_mode', resVal);
+
+    fetch('/api/vnc/resolution', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ resolution: resVal })
+    })
+    .then(function (res) { return res.json(); })
+    .then(function (data) {
+      log('Desktop resolution updated: ' + resVal, 'info');
+      updateVncLinks(resVal);
+      if (shouldReload && btnReloadIframe) {
+        setTimeout(function () { btnReloadIframe.click(); }, 300);
+      }
+    })
+    .catch(function (err) {
+      log('Resolution change request failed: ' + err.message, 'error');
+    });
+  }
+
+  if (selectResolution) {
+    selectResolution.value = currentResMode;
+    selectResolution.addEventListener('change', function () {
+      applyResolution(selectResolution.value, true);
+    });
+
+    if (currentResMode !== 'auto') {
+      applyResolution(currentResMode, false);
+    }
+  }
+
+  if (btnReloadIframe) {
+    btnReloadIframe.addEventListener('click', function () {
+      if (vncIframe) {
+        var currentSrc = vncIframe.src;
+        vncIframe.src = 'about:blank';
+        setTimeout(function () {
+          vncIframe.src = currentSrc;
+        }, 100);
+      }
+    });
+  }
 
   // Restart VNC & OBS Studio
   btnRestartVnc.addEventListener('click', function () {
@@ -148,6 +199,23 @@
       });
   });
 
+  var externalVncBadge = document.getElementById('external-vnc-badge');
+  var externalVncAddr = document.getElementById('external-vnc-addr');
+  var externalVncDot = document.getElementById('external-vnc-dot');
+
+  if (externalVncBadge) {
+    externalVncBadge.addEventListener('click', function () {
+      var text = externalVncAddr.textContent;
+      if (text && text.includes(':')) {
+        navigator.clipboard.writeText(text).then(function () {
+          var original = externalVncAddr.textContent;
+          externalVncAddr.textContent = 'Copied to Clipboard!';
+          setTimeout(function () { externalVncAddr.textContent = original; }, 1500);
+        });
+      }
+    });
+  }
+
   // VNC & OBS Health Check
   function checkVncStatus() {
     fetch('/api/vnc/status')
@@ -155,10 +223,23 @@
       .then(function (data) {
         if (data && data.vncOnline && data.novncOnline) {
           navVncDot.className = 'w-2 h-2 rounded-full bg-emerald-400 animate-pulse';
-          vncStatusText.textContent = data.obsRunning ? 'OBS & VNC Active' : 'VNC Desktop Ready';
+          vncStatusText.textContent = data.obsRunning ? 'OBS 32 & VNC Active' : 'VNC Desktop Ready';
         } else {
           navVncDot.className = 'w-2 h-2 rounded-full bg-amber-400';
           vncStatusText.textContent = 'Desktop Starting...';
+        }
+
+        if (externalVncAddr && data && data.tcpTunnel) {
+          if (data.tcpTunnel.status === 'online' && data.tcpTunnel.full) {
+            externalVncAddr.textContent = data.tcpTunnel.full;
+            externalVncDot.className = 'w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse';
+          } else if (data.tcpTunnel.status === 'connecting') {
+            externalVncAddr.textContent = 'Exposing public port...';
+            externalVncDot.className = 'w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse';
+          } else {
+            externalVncAddr.textContent = 'Tunnel offline (reconnecting)';
+            externalVncDot.className = 'w-1.5 h-1.5 rounded-full bg-rose-400';
+          }
         }
       })
       .catch(function () {});
