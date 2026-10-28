@@ -114,28 +114,7 @@ void gst_master_pipeline_push_texture(gst_master_pipeline_t *hub, void *gpu_hand
 	GstBuffer *in_buf = gst_buffer_new();
 	if (!in_buf) return;
 
-	GstMemory *mem = NULL;
-
-#if defined(_WIN32)
-	mem = gst_memory_new_wrapped(GST_MEMORY_FLAG_READONLY, gpu_handle, sizeof(void *), 0, sizeof(void *), NULL, NULL);
-#elif defined(HAVE_GST_GL) && HAVE_GST_GL
-	if (hub->gl_context && hub->gl_allocator)
-	{
-		GLuint tex_id = (GLuint)(uintptr_t)gpu_handle;
-		GstVideoInfo vinfo;
-		gst_video_info_set_format(&vinfo, GST_VIDEO_FORMAT_RGBA, hub->width, hub->height);
-
-		GstGLVideoAllocationParams *params = gst_gl_video_allocation_params_new_wrapped_texture(hub->gl_context, NULL, &vinfo, 0, NULL, GST_GL_TEXTURE_TARGET_2D, GST_GL_RGBA, tex_id, NULL, NULL);
-
-		if (params)
-		{
-			mem = gst_gl_memory_allocator_alloc(GST_GL_MEMORY_ALLOCATOR(hub->gl_allocator), params);
-			gst_gl_allocation_params_free((GstGLAllocationParams *)params);
-		}
-	}
-#else
-	UNUSED_PARAMETER(gpu_handle);
-#endif
+	GstMemory *mem = gst_memory_new_wrapped(GST_MEMORY_FLAG_READONLY, gpu_handle, sizeof(void *), 0, sizeof(void *), NULL, NULL);
 
 	if (!mem)
 	{
@@ -337,17 +316,7 @@ gst_master_pipeline_t *gst_master_pipeline_create(const char *custom_master_pipe
 	hub->state_cb = state_cb;
 	hub->state_user_data = user_data;
 
-#if defined(HAVE_GST_GL) && HAVE_GST_GL
-	hub->gl_display = gst_gl_display_new();
-	if (hub->gl_display)
-	{
-		hub->gl_context = gst_gl_context_new(hub->gl_display);
-		if (hub->gl_context)
-		{
-			hub->gl_allocator = GST_ALLOCATOR(gst_gl_memory_allocator_get_default(hub->gl_context));
-		}
-	}
-#endif
+
 
 	hub->pipe = create_master_encoder_pipeline(hub, custom_master_pipe, encoder_type, bitrate_kbps, keyint_sec);
 	if (!hub->pipe)
@@ -380,23 +349,7 @@ void gst_master_pipeline_destroy(gst_master_pipeline_t *hub)
 {
 	if (!hub) return;
 
-#if defined(HAVE_GST_GL) && HAVE_GST_GL
-	if (hub->gl_allocator)
-	{
-		gst_object_unref(hub->gl_allocator);
-		hub->gl_allocator = NULL;
-	}
-	if (hub->gl_context)
-	{
-		gst_object_unref(hub->gl_context);
-		hub->gl_context = NULL;
-	}
-	if (hub->gl_display)
-	{
-		gst_object_unref(hub->gl_display);
-		hub->gl_display = NULL;
-	}
-#endif
+
 
 	if (hub->pipe)
 	{

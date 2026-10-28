@@ -100,22 +100,6 @@ deps = [
   dependency('gstreamer-rtsp-server-1.0'),
 ]
 
-gst_gl_dep = dependency('gstreamer-gl-1.0', required : false)
-if gst_gl_dep.found()
-  deps += [gst_gl_dep]
-  extra_c_args += ['-DHAVE_GST_GL=1']
-else
-  extra_c_args += ['-DHAVE_GST_GL=0']
-endif
-
-gst_d3d11_dep = dependency('gstreamer-d3d11-1.0', required : false)
-if gst_d3d11_dep.found()
-  deps += [gst_d3d11_dep]
-  extra_c_args += ['-DHAVE_GST_D3D11=1']
-else
-  extra_c_args += ['-DHAVE_GST_D3D11=0']
-endif
-
 extra_c_args += ['-DENABLE_DOCK=1', '-DGST_USE_UNSTABLE_API']
 
 if obs_frontend_dep.found()

@@ -10,10 +10,6 @@
 #include <gst/gst.h>
 #include <obs.h>
 
-#if defined(HAVE_GST_GL) && HAVE_GST_GL
-#include <gst/gl/gl.h>
-#endif
-
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -44,12 +40,6 @@ struct gst_master_pipeline
 	GstElement *pipe;
 	GstElement *appsrc;
 	GstElement *appsink;
-
-#if defined(HAVE_GST_GL) && HAVE_GST_GL
-	GstGLDisplay *gl_display;
-	GstGLContext *gl_context;
-	GstAllocator *gl_allocator;
-#endif
 
 	gint active_destinations;
 
