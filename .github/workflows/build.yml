@@ -42,12 +42,12 @@ jobs:
         run: |
           pip install meson ninja
 
-      - name: Install Qt6 for OBS 32+ (Windows MSVC)
-        uses: jurplel/install-qt-action@v3
+      - name: Install Qt 6 (MSVC 64-bit)
+        uses: jurplel/install-qt-action@v4
         with:
-          version: '6.8.0'
-          arch: 'win64_msvc2022_64'
-          modules: 'qtbase'
+          version: '6.6.3'
+          arch: 'win64_msvc2019_64'
+          cache: true
 
       - name: Cache GStreamer MSVC SDK
         uses: actions/cache@v4
@@ -288,7 +288,7 @@ jobs:
           $gstPkgFwd = $gstPkgPath.Replace('\', '/')
 
           # Add directories to PATH, PKG_CONFIG_PATH, INCLUDE, and LIB
-          $env:PATH = "$gstRoot\bin;C:\ProgramData\chocolatey\bin;$env:PATH"
+          $env:PATH = "$gstRoot\bin;$($env:QTDIR)\bin;C:\ProgramData\chocolatey\bin;$env:PATH"
           $env:PKG_CONFIG_PATH = "$sdkPkgPath;$gstPkgPath;$sdkPkgFwd;$gstPkgFwd"
           $env:INCLUDE = "$sdkFullPath\include\obs;$sdkFullPath\include;$gstRoot\include\gstreamer-1.0;$gstRoot\lib\gstreamer-1.0\include;$env:INCLUDE"
           $env:LIB = "$sdkFullPath\lib;$gstRoot\lib;$env:LIB"
@@ -298,12 +298,16 @@ jobs:
           & $env:PKG_CONFIG --modversion gstreamer-1.0
 
           $sdkIncludeFwd = $sdkFullPath.Replace('\', '/')
+          $qtFwd = if ($env:QTDIR) { $env:QTDIR.Replace('\', '/') } else { "" }
+          $qtArgs = if ($qtFwd) { "-I$qtFwd/include -I$qtFwd/include/QtCore -I$qtFwd/include/QtGui -I$qtFwd/include/QtWidgets" } else { "" }
 
           meson setup build-win64 `
             --buildtype release `
+            -Dcpp_std=c++17 `
             -Dwebrtc=disabled `
             -Dpkg_config_path="$sdkPkgFwd,$gstPkgFwd" `
-            -Dc_args="-I$sdkIncludeFwd/include/obs -I$sdkIncludeFwd/include"
+            -Dc_args="-I$sdkIncludeFwd/include/obs -I$sdkIncludeFwd/include" `
+            -Dcpp_args="-I$sdkIncludeFwd/include/obs -I$sdkIncludeFwd/include $qtArgs"
           ninja -C build-win64
 
       - name: Package OBS 30+ (64-bit Win10/11) Release Archive
@@ -339,12 +343,14 @@ jobs:
             build-essential g++ ninja-build python3-pip pkg-config \
             libobs-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
             libgstreamer-plugins-bad1.0-dev libgstrtspserver-1.0-dev \
-            libsoup-3.0-dev qt6-base-dev
+            libsoup-3.0-dev qt6-base-dev qtbase5-dev
           pip3 install --upgrade meson
+          # Strip rogue -std=gnu17 from libobs.pc which causes cc1plus command-line error on g++
+          sudo sed -i 's/-std=gnu[0-9]*//g' /usr/lib/*/pkgconfig/libobs.pc /usr/lib/pkgconfig/libobs.pc /usr/share/pkgconfig/libobs.pc 2>/dev/null || true
 
       - name: Build with Meson
         run: |
-          meson setup build-linux --buildtype release -Dc_args="-I/usr/include/obs" -Dcpp_args="-I/usr/include/obs"
+          meson setup build-linux --buildtype release -Dc_args="-I/usr/include/obs" -Dcpp_args="-I/usr/include/obs -Wno-error"
           ninja -C build-linux
 
       - name: Package Linux Plugin

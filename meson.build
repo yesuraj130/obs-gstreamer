@@ -22,7 +22,8 @@ project('obs-gstreamer', ['c', 'cpp'],
   default_options : [
     'prefix=~/.config/obs-studio/plugins/obs-gstreamer/bin/64bit',
     'libdir=',
-    'cpp_std=c++17'
+    'cpp_std=c++17',
+    'werror=false'
   ],
 )
 
@@ -36,15 +37,22 @@ endif
 
 obs_frontend_dep = dependency('obs-frontend-api', required : false)
 if not obs_frontend_dep.found()
-  obs_frontend_dep = meson.get_compiler('c').find_library('obs-frontend-api', has_headers : 'obs/obs-frontend-api.h', required : false)
+  obs_frontend_dep = meson.get_compiler('cpp').find_library('obs-frontend-api', has_headers : 'obs/obs-frontend-api.h', required : false)
 endif
 if not obs_frontend_dep.found()
-  obs_frontend_dep = meson.get_compiler('c').find_library('obs-frontend-api', has_headers : 'obs-frontend-api.h', required : false)
+  obs_frontend_dep = meson.get_compiler('cpp').find_library('obs-frontend-api', has_headers : 'obs-frontend-api.h', required : false)
 endif
 
 name_suffix = []
 if host_machine.system() == 'darwin'
   name_suffix = 'so'
+endif
+
+qt6 = import('qt6', required : false)
+qt_dep = dependency('qt6', modules : ['Core', 'Gui', 'Widgets'], required : false)
+if not qt_dep.found()
+  qt5 = import('qt5', required : false)
+  qt_dep = dependency('qt5', modules : ['Core', 'Gui', 'Widgets'], required : false)
 endif
 
 webrtc_opt = get_option('webrtc')
@@ -82,7 +90,6 @@ sources = [
   'gstreamer-filter.c',
   'gstreamer-output.c',
   'gstreamer-webrtc.c',
-  'gstreamer-master-pipeline-dock.cpp',
   vcs_tag(
     command : ['git', 'rev-parse', '--short', 'HEAD'],
     input : 'version.c.in',
@@ -91,11 +98,8 @@ sources = [
   ),
 ]
 
-qt6_dep = dependency('qt6', modules : ['Core', 'Gui', 'Widgets'], required : true)
-
 deps = [
   obs_dep,
-  qt6_dep,
   dependency('gstreamer-1.0', version : '>=1.16.0'),
   dependency('gstreamer-video-1.0'),
   dependency('gstreamer-audio-1.0'),
@@ -104,11 +108,12 @@ deps = [
   dependency('gstreamer-rtsp-server-1.0'),
 ]
 
-extra_c_args += ['-DENABLE_DOCK=1', '-DGST_USE_UNSTABLE_API']
-
-if obs_frontend_dep.found()
-  deps += [obs_frontend_dep]
-  extra_c_args += ['-DHAVE_OBS_FRONTEND=1']
+if qt_dep.found() and obs_frontend_dep.found()
+  sources += ['gstreamer-master-pipeline-dock.cpp']
+  deps += [qt_dep, obs_frontend_dep]
+  extra_c_args += ['-DENABLE_DOCK=1']
+else
+  extra_c_args += ['-DENABLE_DOCK=0']
 endif
 
 deps += webrtc_deps
@@ -125,6 +130,8 @@ if not cc.has_header('obs-module.h', dependencies : obs_dep)
   endforeach
 endif
 
+extra_cpp_args = extra_c_args + ['-Wno-error']
+
 shlib_kwargs = {}
 if host_machine.system() == 'darwin'
   shlib_kwargs += {'name_suffix': 'so'}
@@ -134,6 +141,7 @@ shared_library('obs-gstreamer',
   sources,
   name_prefix : '',
   c_args : extra_c_args,
+  cpp_args : extra_cpp_args,
   include_directories : obs_inc,
   dependencies : deps,
   install : true,

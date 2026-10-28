@@ -9,7 +9,7 @@
  * - No scenes or filters cluttered.
  */
 
-#include <obs-module.h>
+#include <obs.h>
 #include <obs-frontend-api.h>
 #include <util/platform.h>
 #include <util/dstr.h>
@@ -20,6 +20,8 @@
 #include "gstreamer-render-callback.h"
 #include "gstreamer-helper.h"
 
+#include <QtGui/QColor>
+#include <QtGui/QBrush>
 #include <QtWidgets/QWidget>
 #include <QtWidgets/QDialog>
 #include <QtWidgets/QTableWidget>
