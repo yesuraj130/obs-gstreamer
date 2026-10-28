@@ -85,7 +85,8 @@ static void output_cb_raw_video(void *p, struct video_data *frame)
 	gst_master_pipeline_push_raw_video(data->pipeline, frame);
 }
 
-static struct obs_output_info gstreamer_output_cb_info = {
+static struct obs_output_info gstreamer_output_cb_info =
+{
 	.id = "gstreamer-output-callback",
 	.flags = OBS_OUTPUT_VIDEO,
 	.get_name = output_cb_get_name,
@@ -159,12 +160,8 @@ gst_output_callback_t *gst_output_callback_create(gst_source_type_t type, const 
 
 		cb->view = obs_view_create();
 		obs_view_set_source(cb->view, 0, cb->source);
-#if defined(LIBOBS_API_MAJOR_VER) && (LIBOBS_API_MAJOR_VER >= 28)
 		cb->custom_video = obs_view_add(cb->view);
 		obs_output_set_media(obs_out, cb->custom_video, obs_get_audio());
-#else
-		obs_output_set_media(obs_out, obs_get_video(), obs_get_audio());
-#endif
 	}
 
 	cb->pipeline = gst_master_pipeline_create(custom_master_pipe, encoder_type, bitrate_kbps, keyint_sec, width, height, fps_num, fps_den, pipeline_state_change, cb);
@@ -188,19 +185,13 @@ void gst_output_callback_destroy(gst_output_callback_t *cb)
 
 	cb->running = false;
 
-	if (cb->output && obs_output_active(cb->output))
-	{
-		obs_output_stop(cb->output);
-	}
-
+	if (cb->output && obs_output_active(cb->output)) obs_output_stop(cb->output);
+	
 	if (cb->pipeline)
 	{
 		gst_master_pipeline_destroy(cb->pipeline);
 		cb->pipeline = NULL;
 	}
 
-	if (cb->output)
-	{
-		obs_output_release(cb->output);
-	}
+	if (cb->output) obs_output_release(cb->output);
 }

@@ -5,10 +5,6 @@
 #include "gstreamer-encoder-callback.h"
 #include <obs-module.h>
 
-#ifndef OBS_ENCODER_CAP_PASS_TEXTURE
-#define OBS_ENCODER_CAP_PASS_TEXTURE (1 << 0)
-#endif
-
 /*
  * -----------------------------------------------------------------------------
  * 1. Private Texture Encoder Implementation
@@ -63,7 +59,8 @@ static bool encoder_cb_encode(void *p, uint32_t handle, int64_t pts, uint64_t lo
 	return true;
 }
 
-static struct obs_encoder_info gstreamer_encoder_cb_info = {
+static struct obs_encoder_info gstreamer_encoder_cb_info = 
+{
 	.id           = "gstreamer-encoder-callback",
 	.type         = OBS_ENCODER_VIDEO,
 	.codec        = "raw",
@@ -75,7 +72,8 @@ static struct obs_encoder_info gstreamer_encoder_cb_info = {
 	.get_video_info = encoder_cb_get_video_info,
 };
 
-static struct obs_encoder_info gstreamer_encoder_cb_legacy_info = {
+static struct obs_encoder_info gstreamer_encoder_cb_legacy_info = 
+{
 	.id           = "hjm-gstreamer-encoder-callback",
 	.type         = OBS_ENCODER_VIDEO,
 	.codec        = "raw",
@@ -129,7 +127,8 @@ static void encoder_driver_encoded_packet(void *data, struct encoder_packet *pac
 	UNUSED_PARAMETER(packet);
 }
 
-static struct obs_output_info gstreamer_encoder_driver_output_info = {
+static struct obs_output_info gstreamer_encoder_driver_output_info = 
+{
 	.id             = "gst_encoder_driver_output",
 	.flags          = OBS_OUTPUT_VIDEO | OBS_OUTPUT_ENCODED,
 	.get_name       = encoder_driver_get_name,
@@ -275,12 +274,8 @@ gst_encoder_callback_t *gst_encoder_callback_create(gst_source_type_t type, cons
 	{
 		cb->view = obs_view_create();
 		obs_view_set_source(cb->view, 0, cb->source);
-#if defined(LIBOBS_API_MAJOR_VER) && (LIBOBS_API_MAJOR_VER >= 28)
 		cb->custom_video = obs_view_add(cb->view);
 		obs_output_set_media(cb->output, cb->custom_video, obs_get_audio());
-#else
-		obs_output_set_media(cb->output, obs_get_video(), obs_get_audio());
-#endif
 	}
 
 	return cb;
@@ -305,10 +300,8 @@ void gst_encoder_callback_destroy(gst_encoder_callback_t *cb)
 		}
 	}
 
-	if (cb->output)
-	{
-		if (obs_output_active(cb->output)) obs_output_stop(cb->output);
-	}
+	if (cb->output) if (obs_output_active(cb->output)) obs_output_stop(cb->output);
+	
 
 	if (cb->pipeline)
 	{
@@ -330,13 +323,11 @@ void gst_encoder_callback_destroy(gst_encoder_callback_t *cb)
 
 	if (cb->view)
 	{
-#if defined(LIBOBS_API_MAJOR_VER) && (LIBOBS_API_MAJOR_VER >= 28)
 		if (cb->custom_video)
 		{
 			obs_view_remove(cb->view);
 			cb->custom_video = NULL;
 		}
-#endif
 		obs_view_destroy(cb->view);
 		cb->view = NULL;
 	}

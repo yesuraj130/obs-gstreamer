@@ -88,7 +88,8 @@ gst_render_callback_t *gst_render_callback_create(gst_source_type_t type, const 
 	cb->source_type = type;
 
 	struct obs_video_info ovi = {};
-	if (!obs_get_video_info(&ovi)) {
+	if (!obs_get_video_info(&ovi))
+	{
 		ovi.base_width = 1920;
 		ovi.base_height = 1080;
 	}

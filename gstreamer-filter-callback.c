@@ -13,13 +13,13 @@ struct gst_filter_callback
 	gst_master_pipeline_t *pipeline;
 };
 
-typedef struct
+struct filter_private_data_t
 {
 	obs_source_t *source;
 	gst_master_pipeline_t *pipeline;
 	bool active;
 	gs_texrender_t *texrender;
-} filter_private_data_t;
+};
 
 static const char *filter_cb_get_name(void *type_data)
 {
@@ -40,7 +40,8 @@ static void *filter_cb_create(obs_data_t *settings, obs_source_t *source)
 static void filter_cb_destroy(void *p)
 {
 	filter_private_data_t *data = (filter_private_data_t *)p;
-	if (data) {
+	if (data) 
+	{
 		if (data->texrender) gs_texrender_destroy(data->texrender);
 		bfree(data);
 	}
@@ -80,7 +81,8 @@ static void filter_cb_video_render(void *p, gs_effect_t *effect)
 	obs_source_skip_video_filter(data->source);
 }
 
-static struct obs_source_info gst_filter_callback_info = {
+static struct obs_source_info gst_filter_callback_info =
+{
 	.id           = "gst_private_filter_callback",
 	.type         = OBS_SOURCE_TYPE_FILTER,
 	.output_flags = OBS_SOURCE_VIDEO | OBS_SOURCE_CUSTOM_DRAW,
@@ -122,7 +124,8 @@ gst_filter_callback_t *gst_filter_callback_create(gst_source_type_t type, const 
 	}
 
 	struct obs_video_info ovi = {};
-	if (!obs_get_video_info(&ovi)) {
+	if (!obs_get_video_info(&ovi))
+	{
 		ovi.base_width = 1920;
 		ovi.base_height = 1080;
 	}
@@ -140,10 +143,7 @@ gst_filter_callback_t *gst_filter_callback_create(gst_source_type_t type, const 
 		}
 	}
 
-	cb->pipeline = gst_master_pipeline_create(custom_master_pipe, encoder_type, bitrate_kbps, keyint_sec,
-	                                          width, height,
-	                                          fps_num, fps_den,
-	                                          pipeline_state_change, cb);
+	cb->pipeline = gst_master_pipeline_create(custom_master_pipe, encoder_type, bitrate_kbps, keyint_sec, width, height, fps_num, fps_den, pipeline_state_change, cb);
 	if (!cb->pipeline)
 	{
 		obs_source_release(target);
@@ -194,10 +194,7 @@ void gst_filter_callback_destroy(gst_filter_callback_t *cb)
 		}
 	}
 
-	if (cb->target && cb->filter)
-	{
-		obs_source_filter_remove(cb->target, cb->filter);
-	}
+	if (cb->target && cb->filter) obs_source_filter_remove(cb->target, cb->filter);
 
 	if (cb->pipeline)
 	{

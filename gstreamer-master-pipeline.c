@@ -316,8 +316,6 @@ gst_master_pipeline_t *gst_master_pipeline_create(const char *custom_master_pipe
 	hub->state_cb = state_cb;
 	hub->state_user_data = user_data;
 
-
-
 	hub->pipe = create_master_encoder_pipeline(hub, custom_master_pipe, encoder_type, bitrate_kbps, keyint_sec);
 	if (!hub->pipe)
 	{
@@ -348,8 +346,6 @@ gst_master_pipeline_t *gst_master_pipeline_create(const char *custom_master_pipe
 void gst_master_pipeline_destroy(gst_master_pipeline_t *hub)
 {
 	if (!hub) return;
-
-
 
 	if (hub->pipe)
 	{
