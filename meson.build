@@ -18,11 +18,10 @@
 # along with obs-gstreamer. If not, see <http://www.gnu.org/licenses/>.
 #
 
-project('obs-gstreamer', ['c', 'cpp'],
+project('obs-gstreamer', ['c'],
   default_options : [
     'prefix=~/.config/obs-studio/plugins/obs-gstreamer/bin/64bit',
-    'libdir=',
-    'cpp_std=c++17'
+    'libdir='
   ],
 )
 
@@ -36,22 +35,15 @@ endif
 
 obs_frontend_dep = dependency('obs-frontend-api', required : false)
 if not obs_frontend_dep.found()
-  obs_frontend_dep = meson.get_compiler('cpp').find_library('obs-frontend-api', has_headers : 'obs/obs-frontend-api.h', required : false)
+  obs_frontend_dep = meson.get_compiler('c').find_library('obs-frontend-api', has_headers : 'obs/obs-frontend-api.h', required : false)
 endif
 if not obs_frontend_dep.found()
-  obs_frontend_dep = meson.get_compiler('cpp').find_library('obs-frontend-api', has_headers : 'obs-frontend-api.h', required : false)
+  obs_frontend_dep = meson.get_compiler('c').find_library('obs-frontend-api', has_headers : 'obs-frontend-api.h', required : false)
 endif
 
 name_suffix = []
 if host_machine.system() == 'darwin'
   name_suffix = 'so'
-endif
-
-qt6 = import('qt6', required : false)
-qt_dep = dependency('qt6', modules : ['Core', 'Gui', 'Widgets'], required : false)
-if not qt_dep.found()
-  qt5 = import('qt5', required : false)
-  qt_dep = dependency('qt5', modules : ['Core', 'Gui', 'Widgets'], required : false)
 endif
 
 webrtc_opt = get_option('webrtc')
@@ -89,6 +81,7 @@ sources = [
   'gstreamer-filter.c',
   'gstreamer-output.c',
   'gstreamer-webrtc.c',
+  'gstreamer-master-pipeline-dock.c',
   vcs_tag(
     command : ['git', 'rev-parse', '--short', 'HEAD'],
     input : 'version.c.in',
@@ -109,12 +102,11 @@ deps = [
   dependency('gstreamer-d3d11-1.0', required : false),
 ]
 
-if qt_dep.found() and obs_frontend_dep.found()
-  sources += ['gstreamer-dock.cpp']
-  deps += [qt_dep, obs_frontend_dep]
-  extra_c_args += ['-DENABLE_DOCK=1']
-else
-  extra_c_args += ['-DENABLE_DOCK=0']
+extra_c_args += ['-DENABLE_DOCK=1']
+
+if obs_frontend_dep.found()
+  deps += [obs_frontend_dep]
+  extra_c_args += ['-DHAVE_OBS_FRONTEND=1']
 endif
 
 deps += webrtc_deps
@@ -140,7 +132,6 @@ shared_library('obs-gstreamer',
   sources,
   name_prefix : '',
   c_args : extra_c_args,
-  cpp_args : extra_c_args,
   include_directories : obs_inc,
   dependencies : deps,
   install : true,

@@ -11,10 +11,10 @@ on:
 jobs:
   # =========================================================================
   # Target 1: Modern OBS Studio 30+/32+ (64-bit x64) for Windows 10/11
-  # Native MSVC + Qt 6 Build (Enables Native Qt6 Dock in OBS Studio Menu)
+  # Native MSVC Build (Pure C, Zero Qt)
   # =========================================================================
   build-win64-obs30:
-    name: "Windows 10/11 / OBS 30+ (64-bit MSVC + Qt6 Dock)"
+    name: "Windows 10/11 / OBS 30+ (64-bit MSVC Pure C)"
     runs-on: windows-latest
     steps:
       - name: Checkout repository
@@ -41,13 +41,6 @@ jobs:
         shell: pwsh
         run: |
           pip install meson ninja
-
-      - name: Install Qt 6 (MSVC 64-bit)
-        uses: jurplel/install-qt-action@v4
-        with:
-          version: '6.6.3'
-          arch: 'win64_msvc2019_64'
-          cache: true
 
       - name: Cache GStreamer MSVC SDK
         uses: actions/cache@v4
@@ -234,7 +227,7 @@ jobs:
           )
           $frontendLines | Out-File -FilePath "obs-sdk\lib\pkgconfig\obs-frontend-api.pc" -Encoding ascii
 
-      - name: Configure and Compile with Meson and Ninja (MSVC + Qt6 Dock)
+      - name: Configure and Compile with Meson and Ninja (MSVC Pure C)
         shell: pwsh
         run: |
           # 1. Resolve GStreamer root and pkgconfig directory
@@ -288,7 +281,7 @@ jobs:
           $gstPkgFwd = $gstPkgPath.Replace('\', '/')
 
           # Add directories to PATH, PKG_CONFIG_PATH, INCLUDE, and LIB
-          $env:PATH = "$gstRoot\bin;$($env:QTDIR)\bin;C:\ProgramData\chocolatey\bin;$env:PATH"
+          $env:PATH = "$gstRoot\bin;C:\ProgramData\chocolatey\bin;$env:PATH"
           $env:PKG_CONFIG_PATH = "$sdkPkgPath;$gstPkgPath;$sdkPkgFwd;$gstPkgFwd"
           $env:INCLUDE = "$sdkFullPath\include\obs;$sdkFullPath\include;$gstRoot\include\gstreamer-1.0;$gstRoot\lib\gstreamer-1.0\include;$env:INCLUDE"
           $env:LIB = "$sdkFullPath\lib;$gstRoot\lib;$env:LIB"
@@ -298,16 +291,12 @@ jobs:
           & $env:PKG_CONFIG --modversion gstreamer-1.0
 
           $sdkIncludeFwd = $sdkFullPath.Replace('\', '/')
-          $qtFwd = if ($env:QTDIR) { $env:QTDIR.Replace('\', '/') } else { "" }
-          $qtArgs = if ($qtFwd) { "-I$qtFwd/include -I$qtFwd/include/QtCore -I$qtFwd/include/QtGui -I$qtFwd/include/QtWidgets" } else { "" }
 
           meson setup build-win64 `
             --buildtype release `
-            -Dcpp_std=c++17 `
             -Dwebrtc=disabled `
             -Dpkg_config_path="$sdkPkgFwd,$gstPkgFwd" `
-            -Dc_args="-I$sdkIncludeFwd/include/obs -I$sdkIncludeFwd/include" `
-            -Dcpp_args="-I$sdkIncludeFwd/include/obs -I$sdkIncludeFwd/include $qtArgs"
+            -Dc_args="-I$sdkIncludeFwd/include/obs -I$sdkIncludeFwd/include"
           ninja -C build-win64
 
       - name: Package OBS 30+ (64-bit Win10/11) Release Archive
@@ -329,7 +318,7 @@ jobs:
   # Target 2: Linux (x86_64) Native (Latest OBS Studio 30+)
   # =========================================================================
   build-linux:
-    name: "Linux (64-bit x86_64, OBS 30+)"
+    name: "Linux (64-bit x86_64, OBS 30+ Pure C)"
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -343,12 +332,12 @@ jobs:
             build-essential ninja-build python3-pip pkg-config \
             libobs-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
             libgstreamer-plugins-bad1.0-dev libgstrtspserver-1.0-dev \
-            libsoup-3.0-dev qt6-base-dev qtbase5-dev
+            libsoup-3.0-dev
           pip3 install --upgrade meson
 
       - name: Build with Meson
         run: |
-          meson setup build-linux --buildtype release -Dc_args="-I/usr/include/obs" -Dcpp_args="-I/usr/include/obs"
+          meson setup build-linux --buildtype release -Dc_args="-I/usr/include/obs"
           ninja -C build-linux
 
       - name: Package Linux Plugin
