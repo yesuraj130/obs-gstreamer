@@ -130,7 +130,13 @@ if not cc.has_header('obs-module.h', dependencies : obs_dep)
   endforeach
 endif
 
-extra_cpp_args = extra_c_args + ['-Wno-error']
+extra_cpp_args = extra_c_args
+cpp_comp = meson.get_compiler('cpp')
+if cpp_comp.get_id() != 'msvc' and cpp_comp.get_id() != 'clang-cl'
+  extra_cpp_args += ['-Wno-error']
+else
+  extra_cpp_args += ['/WX-']
+endif
 
 shlib_kwargs = {}
 if host_machine.system() == 'darwin'
