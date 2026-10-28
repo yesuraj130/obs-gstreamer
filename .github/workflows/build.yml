@@ -42,6 +42,13 @@ jobs:
         run: |
           pip install meson ninja
 
+      - name: Install Qt6 for OBS 32+ (Windows MSVC)
+        uses: jurplel/install-qt-action@v3
+        with:
+          version: '6.8.0'
+          arch: 'win64_msvc2022_64'
+          modules: 'qtbase'
+
       - name: Cache GStreamer MSVC SDK
         uses: actions/cache@v4
         with:
@@ -318,26 +325,26 @@ jobs:
   # Target 2: Linux (x86_64) Native (Latest OBS Studio 30+)
   # =========================================================================
   build-linux:
-    name: "Linux (64-bit x86_64, OBS 30+ Pure C)"
+    name: "Linux (64-bit x86_64, OBS 32+ Qt 6)"
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install dependencies (Latest OBS 30+ & GStreamer)
+      - name: Install dependencies (Latest OBS 32+ & GStreamer)
         run: |
           sudo add-apt-repository -y ppa:obsproject/obs-studio
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential ninja-build python3-pip pkg-config \
+            build-essential g++ ninja-build python3-pip pkg-config \
             libobs-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
             libgstreamer-plugins-bad1.0-dev libgstrtspserver-1.0-dev \
-            libsoup-3.0-dev
+            libsoup-3.0-dev qt6-base-dev
           pip3 install --upgrade meson
 
       - name: Build with Meson
         run: |
-          meson setup build-linux --buildtype release -Dc_args="-I/usr/include/obs"
+          meson setup build-linux --buildtype release -Dc_args="-I/usr/include/obs" -Dcpp_args="-I/usr/include/obs"
           ninja -C build-linux
 
       - name: Package Linux Plugin

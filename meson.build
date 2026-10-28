@@ -18,10 +18,11 @@
 # along with obs-gstreamer. If not, see <http://www.gnu.org/licenses/>.
 #
 
-project('obs-gstreamer', ['c'],
+project('obs-gstreamer', ['c', 'cpp'],
   default_options : [
     'prefix=~/.config/obs-studio/plugins/obs-gstreamer/bin/64bit',
-    'libdir='
+    'libdir=',
+    'cpp_std=c++17'
   ],
 )
 
@@ -81,7 +82,7 @@ sources = [
   'gstreamer-filter.c',
   'gstreamer-output.c',
   'gstreamer-webrtc.c',
-  'gstreamer-master-pipeline-dock.c',
+  'gstreamer-master-pipeline-dock.cpp',
   vcs_tag(
     command : ['git', 'rev-parse', '--short', 'HEAD'],
     input : 'version.c.in',
@@ -90,8 +91,11 @@ sources = [
   ),
 ]
 
+qt6_dep = dependency('qt6', modules : ['Core', 'Gui', 'Widgets'], required : true)
+
 deps = [
   obs_dep,
+  qt6_dep,
   dependency('gstreamer-1.0', version : '>=1.16.0'),
   dependency('gstreamer-video-1.0'),
   dependency('gstreamer-audio-1.0'),

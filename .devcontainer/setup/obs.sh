@@ -17,6 +17,7 @@ fi
 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
     build-essential \
     gcc \
+    g++ \
     gdb \
     valgrind \
     git \
@@ -25,4 +26,5 @@ sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
     ninja-build \
     libglib2.0-dev \
     libobs-dev \
-    obs-studio
+    obs-studio \
+    qt6-base-dev
