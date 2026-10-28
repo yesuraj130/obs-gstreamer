@@ -343,7 +343,7 @@ jobs:
             build-essential g++ ninja-build python3-pip pkg-config \
             libobs-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
             libgstreamer-plugins-bad1.0-dev libgstrtspserver-1.0-dev \
-            libsoup-3.0-dev qt6-base-dev qtbase5-dev
+            libsoup-3.0-dev qt6-base-dev
           pip3 install --upgrade meson
           # Strip rogue -std=gnu17 from libobs.pc which causes cc1plus command-line error on g++
           sudo sed -i 's/-std=gnu[0-9]*//g' /usr/lib/*/pkgconfig/libobs.pc /usr/lib/pkgconfig/libobs.pc /usr/share/pkgconfig/libobs.pc 2>/dev/null || true
@@ -352,6 +352,15 @@ jobs:
         run: |
           meson setup build-linux --buildtype release -Dc_args="-I/usr/include/obs" -Dcpp_args="-I/usr/include/obs -Wno-error"
           ninja -C build-linux
+
+      - name: Verify Plugin Dependencies
+        run: |
+          echo "=== Qt6 runtime and dev packages on runner ==="
+          dpkg -l | grep -E "qt6-base|libqt6core" || true
+          echo "=== ldd on obs-gstreamer.so ==="
+          ldd build-linux/obs-gstreamer.so
+          echo "=== Qt version symbols required in ELF header ==="
+          objdump -p build-linux/obs-gstreamer.so | grep -A 10 "required from libQt6Core" || true
 
       - name: Package Linux Plugin
         run: |

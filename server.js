@@ -106,7 +106,7 @@ function runFullSetup(callback) {
     dpkg --remove --force-all lightdm 2>/dev/null || true
     dpkg --configure -a || true
     apt-get update
-    apt-get install -y --no-install-recommends xfce4-session xfwm4 xfce4-panel xfdesktop4 xfce4-terminal tigervnc-standalone-server tigervnc-tools novnc websockify obs-studio libobs-dev meson ninja-build build-essential gstreamer1.0-tools libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad libgstreamer-plugins-bad1.0-dev libgstrtspserver-1.0-0 libgstrtspserver-1.0-dev gstreamer1.0-rtsp libsoup-3.0-dev qtbase5-dev libqt5svg5-dev
+    apt-get install -y --no-install-recommends xfce4-session xfwm4 xfce4-panel xfdesktop4 xfce4-terminal tigervnc-standalone-server tigervnc-tools novnc websockify obs-studio libobs-dev meson ninja-build build-essential gstreamer1.0-tools libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad libgstreamer-plugins-bad1.0-dev libgstrtspserver-1.0-0 libgstrtspserver-1.0-dev gstreamer1.0-rtsp libsoup-3.0-dev qt6-base-dev
 
     # Build obs-gstreamer plugin
     cd /app/applet

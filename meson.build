@@ -48,11 +48,11 @@ if host_machine.system() == 'darwin'
   name_suffix = 'so'
 endif
 
-qt6 = import('qt6', required : false)
-qt_dep = dependency('qt6', modules : ['Core', 'Gui', 'Widgets'], required : false)
-if not qt_dep.found()
-  qt5 = import('qt5', required : false)
-  qt_dep = dependency('qt5', modules : ['Core', 'Gui', 'Widgets'], required : false)
+dock_opt = get_option('dock')
+qt_dep = dependency('', required : false)
+if not dock_opt.disabled()
+  qt6 = import('qt6', required : false)
+  qt_dep = dependency('qt6', modules : ['Core', 'Gui', 'Widgets'], required : dock_opt.enabled())
 endif
 
 webrtc_opt = get_option('webrtc')
@@ -108,11 +108,14 @@ deps = [
   dependency('gstreamer-rtsp-server-1.0'),
 ]
 
-if qt_dep.found() and obs_frontend_dep.found()
+if not dock_opt.disabled() and qt_dep.found() and obs_frontend_dep.found()
   sources += ['gstreamer-master-pipeline-dock.cpp']
   deps += [qt_dep, obs_frontend_dep]
   extra_c_args += ['-DENABLE_DOCK=1']
 else
+  if dock_opt.enabled()
+    error('Qt dock UI requested (-Ddock=enabled) but Qt (Core/Gui/Widgets) or obs-frontend-api was not found.')
+  endif
   extra_c_args += ['-DENABLE_DOCK=0']
 endif
 

@@ -1,1 +1,2 @@
 option('webrtc', type : 'feature', value : 'auto', description : 'Build WebRTC (WHEP) server output (requires libsoup-3.0 and gstreamer-webrtc-1.0)')
+option('dock', type : 'feature', value : 'auto', description : 'Build Qt UI dock for OBS 30+/32+ (requires Qt6 and obs-frontend-api)')
