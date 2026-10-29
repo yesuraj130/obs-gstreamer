@@ -1010,7 +1010,7 @@ public:
 		/* Native OBS ToolBar for Destinations matching Scenes & Sources docks */
 		QToolBar *destToolbar = new QToolBar(this);
 		destToolbar->setObjectName("destToolbar");
-		destToolbar->setStyleSheet("QToolBar { background: transparent; border: none; }");
+		destToolbar->setStyleSheet("QToolBar { background: transparent; border-top: 1px solid #2b313d; padding-top: 4px; margin-top: 2px; }");
 		destToolbar->setIconSize(QSize(16, 16));
 
 		QAction *actAdd = destToolbar->addAction(QIcon("theme:Dark/plus.svg"), "Add Destination");
@@ -1051,7 +1051,7 @@ public:
 
 		/* Dialog Footer */
 		QHBoxLayout *footerLayout = new QHBoxLayout();
-		QPushButton *btnSave = new QPushButton("Save Changes", this);
+		QPushButton *btnSave = new QPushButton("Save", this);
 		QPushButton *btnClose = new QPushButton("Close", this);
 		footerLayout->addStretch();
 		footerLayout->addWidget(btnSave);
@@ -1123,12 +1123,6 @@ private:
 			QHBoxLayout *rowLayout = new QHBoxLayout(rowWidget);
 			rowLayout->setContentsMargins(8, 4, 8, 4);
 			rowLayout->setSpacing(10);
-
-			/* Status Indicator Dot - clean subtle dot matching OBS style */
-			QLabel *statusDot = new QLabel(dest->is_active ? "●" : "○", rowWidget);
-			statusDot->setFixedWidth(14);
-			statusDot->setStyleSheet("color: #cbd5e1; font-size: 13px;");
-			rowLayout->addWidget(statusDot);
 
 			/* Info Labels - standard neutral OBS colors, no bright tints */
 			QVBoxLayout *infoLayout = new QVBoxLayout();
@@ -1392,6 +1386,7 @@ public:
 		/* Bottom ToolBar matching built-in Scenes and Sources docks */
 		QToolBar *toolbar = new QToolBar(this);
 		toolbar->setObjectName("hubToolbar");
+		toolbar->setStyleSheet("QToolBar { background: transparent; border-top: 1px solid #2b313d; padding-top: 4px; margin-top: 2px; }");
 		toolbar->setIconSize(QSize(16, 16));
 
 		QAction *actAdd = toolbar->addAction(QIcon("theme:Dark/plus.svg"), "Add Master Hub");
@@ -1447,8 +1442,7 @@ public:
 				}
 			}
 
-			QString statusIcon = anyActive ? "● " : "○ ";
-			QString title = QString("%1%2").arg(statusIcon, QString::fromStdString(hub->name));
+			QString title = QString::fromStdString(hub->name);
 
 			QString srcStr = QString("Source: %1").arg(QString::fromStdString(hub->source_type));
 			if (hub->source_type == "Scene" && !hub->scene_name.empty())
@@ -1462,9 +1456,9 @@ public:
 			else if (methodStr.contains("Output Callback")) methodStr = "Output CB";
 			else if (methodStr.contains("Filter Callback")) methodStr = "Filter CB";
 
-			QString line2 = QString("     %1  |  %2  |  %3 (%4 kbps)")
+			QString line2 = QString("%1  |  %2  |  %3 (%4 kbps)")
 			                    .arg(srcStr, methodStr, QString::fromStdString(hub->gpu_encoder_type), QString::number(hub->bitrate_kbps));
-			QString line3 = QString("     Destinations: %1 running / %2 total  (Double-click to configure)")
+			QString line3 = QString("Destinations: %1 running / %2 total  (Double-click to configure)")
 			                    .arg(QString::number(runningCount), QString::number(hub->destinations.size()));
 
 			QListWidgetItem *item = new QListWidgetItem(title + "\n" + line2 + "\n" + line3);
