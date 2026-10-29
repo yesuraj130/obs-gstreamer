@@ -128,9 +128,35 @@
       </div>
     </div>
 
-    <!-- Embedded noVNC HTML5 Desktop Iframe -->
+    <!-- Embedded noVNC HTML5 Desktop Iframe + Startup Live Command Console -->
     <div class="flex-1 w-full h-full bg-black relative">
       <iframe id="vnc-iframe" src="/novnc/vnc.html?autoconnect=true&resize=remote&password=vncpassword" class="w-full h-full border-0 absolute inset-0" allow="fullscreen; clipboard-read; clipboard-write"></iframe>
+
+      <!-- Live Command Console shown while Desktop is Starting / VNC Not Available -->
+      <div id="vnc-startup-console" class="hidden absolute inset-0 z-30 bg-slate-950 flex flex-col p-3 sm:p-5 font-mono">
+        <div class="flex flex-wrap items-center justify-between gap-2 bg-slate-900 border border-slate-800 px-4 py-3 rounded-t-lg shrink-0">
+          <div class="flex items-center gap-2.5">
+            <span class="w-4 h-4 rounded-full border-2 border-indigo-400 border-t-transparent animate-spin shrink-0"></span>
+            <span class="text-xs sm:text-sm font-semibold text-white">Desktop Starting — Live Command Console</span>
+          </div>
+          <span id="vnc-current-cmd" class="text-[11px] text-cyan-300 bg-slate-950 px-2.5 py-1 rounded border border-slate-800 truncate max-w-full sm:max-w-md">
+            Initializing desktop environment...
+          </span>
+        </div>
+
+        <div class="bg-slate-900/60 border-x border-b border-slate-800 px-4 py-2.5 shrink-0">
+          <div class="text-[10px] uppercase tracking-wider text-slate-400 mb-1 flex items-center justify-between">
+            <span>Commands Running Now (PID / Elapsed / Command)</span>
+            <span class="text-amber-400">Auto-connects when VNC is ready</span>
+          </div>
+          <pre id="vnc-running-procs" class="text-[11px] text-emerald-300 whitespace-pre-wrap max-h-28 overflow-y-auto leading-relaxed">Checking active processes...</pre>
+        </div>
+
+        <div class="flex-1 bg-slate-950 border-x border-b border-slate-800 rounded-b-lg p-4 overflow-hidden flex flex-col min-h-0">
+          <div class="text-[10px] uppercase tracking-wider text-slate-500 mb-1.5 shrink-0">Live Setup &amp; Startup Log</div>
+          <pre id="vnc-console-logs" class="flex-1 text-xs text-slate-300 whitespace-pre-wrap overflow-y-auto leading-relaxed select-text">Waiting for command output...</pre>
+        </div>
+      </div>
     </div>
   </div>
 

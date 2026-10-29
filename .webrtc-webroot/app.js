@@ -200,10 +200,56 @@
 
   // Restart Full PC (Check/Install all tools, configure VNC, XFCE Desktop, Websockify, OBS 32 & GStreamer)
   var btnRestartPc = document.getElementById('btn-restart-pc');
+  var vncStartupConsole = document.getElementById('vnc-startup-console');
+  var vncCurrentCmd = document.getElementById('vnc-current-cmd');
+  var vncRunningProcs = document.getElementById('vnc-running-procs');
+  var vncConsoleLogs = document.getElementById('vnc-console-logs');
+  var wasDesktopStarting = false;
+
+  function showStartupConsole(data) {
+    wasDesktopStarting = true;
+    if (vncStartupConsole) {
+      vncStartupConsole.classList.remove('hidden');
+    }
+    if (data) {
+      if (vncCurrentCmd) {
+        vncCurrentCmd.textContent = data.currentCommand || 'Provisioning & starting desktop services...';
+      }
+      if (vncRunningProcs) {
+        var procs = data.runningProcesses || [];
+        vncRunningProcs.textContent = procs.length > 0
+          ? procs.join('\n')
+          : 'Waiting for next command...';
+      }
+      if (vncConsoleLogs && data.logs && data.logs.length > 0) {
+        vncConsoleLogs.textContent = data.logs.join('\n');
+        vncConsoleLogs.scrollTop = vncConsoleLogs.scrollHeight;
+      }
+    }
+  }
+
+  function hideStartupConsole() {
+    if (vncStartupConsole && !vncStartupConsole.classList.contains('hidden')) {
+      vncStartupConsole.classList.add('hidden');
+    }
+    if (wasDesktopStarting) {
+      wasDesktopStarting = false;
+      if (btnReloadIframe) {
+        btnReloadIframe.click();
+      }
+    }
+  }
+
   if (btnRestartPc) {
     btnRestartPc.addEventListener('click', function () {
-      vncStatusText.textContent = 'Checking Tools & Restarting PC...';
+      vncStatusText.textContent = 'Desktop Starting...';
+      navVncDot.className = 'w-2 h-2 rounded-full bg-amber-400 animate-pulse';
       btnRestartPc.disabled = true;
+      showStartupConsole({
+        currentCommand: 'Triggering Full PC check, tool setup & desktop restart...',
+        runningProcesses: ['Starting provisioning & desktop restart script...'],
+        logs: ['[' + new Date().toLocaleTimeString() + '] ==> Triggered Restart PC (verifying packages, OBS 32, plugin, VNC & XFCE)...']
+      });
       log('Checking/installing all required tools (noVNC, OBS 32, GStreamer, Desktop) & restarting PC...', 'info');
 
       fetch('/api/vnc/restart-pc', { method: 'POST' })
@@ -213,8 +259,7 @@
           log('All tools verified & Full PC restart completed', 'info');
           setTimeout(function () {
             checkVncStatus();
-            if (btnReloadIframe) btnReloadIframe.click();
-          }, 1500);
+          }, 800);
         })
         .catch(function (err) {
           btnRestartPc.disabled = false;
@@ -245,12 +290,15 @@
     fetch('/api/vnc/status')
       .then(function (res) { return res.json(); })
       .then(function (data) {
-        if (data && data.vncOnline && data.novncOnline) {
+        var vncReady = Boolean(data && data.vncOnline && data.novncOnline && !data.isSettingUp && !data.isRestarting);
+        if (vncReady) {
           navVncDot.className = 'w-2 h-2 rounded-full bg-emerald-400 animate-pulse';
           vncStatusText.textContent = data.obsRunning ? 'OBS 32 & VNC Active' : 'VNC Desktop Ready';
+          hideStartupConsole();
         } else {
-          navVncDot.className = 'w-2 h-2 rounded-full bg-amber-400';
+          navVncDot.className = 'w-2 h-2 rounded-full bg-amber-400 animate-pulse';
           vncStatusText.textContent = 'Desktop Starting...';
+          showStartupConsole(data);
         }
 
         if (externalVncAddr && data && data.tcpTunnel) {
@@ -269,7 +317,7 @@
       .catch(function () {});
   }
 
-  setInterval(checkVncStatus, 3000);
+  setInterval(checkVncStatus, 1500);
   checkVncStatus();
 
   // WebRTC Stream Status

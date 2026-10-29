@@ -14,12 +14,64 @@ const VNC_PORT = 5901;
 let setupProcess = null;
 let setupLogs = [];
 let isSettingUp = false;
+let currentRunningCmd = '';
 
 function addLog(msg) {
-  const line = `[${new Date().toLocaleTimeString()}] ${msg}`;
-  setupLogs.push(line);
-  if (setupLogs.length > 100) setupLogs.shift();
-  console.log(line);
+  if (!msg) return;
+  const lines = String(msg).split(/\r?\n/);
+  for (const raw of lines) {
+    const trimmed = raw.trimEnd();
+    if (!trimmed) continue;
+    const line = `[${new Date().toLocaleTimeString()}] ${trimmed}`;
+    setupLogs.push(line);
+    if (setupLogs.length > 250) setupLogs.shift();
+    console.log(line);
+  }
+}
+
+function runCommandWithLiveLogs(label, scriptContent, callback) {
+  addLog(`==> ${label}`);
+  currentRunningCmd = label;
+  const wrappedScript = `
+    PS4='+ $ '
+    set -x
+    ${scriptContent}
+  `;
+  const proc = spawn('bash', ['-c', wrappedScript], {
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+  setupProcess = proc;
+
+  const handleChunk = (chunk) => {
+    const text = chunk.toString();
+    const lines = text.split(/\r?\n/);
+    for (const l of lines) {
+      const clean = l.trim();
+      if (!clean) continue;
+      if (clean.startsWith('+ $ ')) {
+        currentRunningCmd = clean.slice(4);
+        addLog(`$ ${currentRunningCmd}`);
+      } else {
+        addLog(`  ${clean}`);
+      }
+    }
+  };
+
+  proc.stdout.on('data', handleChunk);
+  proc.stderr.on('data', handleChunk);
+
+  proc.on('close', (code) => {
+    if (setupProcess === proc) setupProcess = null;
+    currentRunningCmd = '';
+    const err = code !== 0 ? new Error(`${label} exited with code ${code}`) : null;
+    if (callback) callback(err);
+  });
+
+  proc.on('error', (err) => {
+    if (setupProcess === proc) setupProcess = null;
+    currentRunningCmd = '';
+    if (callback) callback(err);
+  });
 }
 
 let tcpTunnelInfo = {
@@ -120,17 +172,22 @@ function checkPort(port, host, callback) {
 let isRestarting = false;
 
 function ensureVNC(callback) {
-  if (isRestarting) {
+  if (isRestarting || isSettingUp) {
     if (callback) callback();
     return;
   }
-  exec('pgrep -x Xtigervnc >/dev/null && echo "1" || echo "0"', (err, stdout) => {
-    const vncOnline = stdout && stdout.trim() === '1';
-    if (vncOnline) {
-      ensureWebsockify(callback);
+  exec('which vncserver websockify startxfce4 >/dev/null 2>&1 && [ -x /opt/obs-studio-32/AppDir/AppRun ] && [ -f /app/applet/build/obs-gstreamer.so ] && echo "1" || echo "0"', (chkErr, chkOut) => {
+    if (!chkOut || chkOut.trim() !== '1') {
+      restartFullPC(callback);
       return;
     }
-    addLog('TigerVNC offline. Starting TigerVNC on :1...');
+    exec('pgrep -x Xtigervnc >/dev/null && echo "1" || echo "0"', (err, stdout) => {
+      const vncOnline = stdout && stdout.trim() === '1';
+      if (vncOnline) {
+        ensureWebsockify(callback);
+        return;
+      }
+      addLog('TigerVNC offline. Starting TigerVNC on :1...');
     const startVncScript = `
       mkdir -p /root/.vnc /root/.config/tigervnc
       echo '#!/bin/sh
@@ -150,10 +207,11 @@ exec startxfce4' > /root/.vnc/xstartup
       vncserver :1 -geometry 1280x800 -depth 24 -localhost no -PasswordFile /root/.vnc/passwd -SecurityTypes VncAuth -UseBlacklist=0 -AlwaysShared=1 >/tmp/vnc.log 2>&1 || \
       vncserver :1 -geometry 1280x800 -depth 24 -localhost no -UseBlacklist=0 -AlwaysShared=1 >/tmp/vnc.log 2>&1 || true
     `;
-    exec(startVncScript, (startErr) => {
-      if (startErr) addLog('VNC startup error: ' + startErr.message);
-      else addLog('TigerVNC started on :1');
-      ensureWebsockify(callback);
+      exec(startVncScript, (startErr) => {
+        if (startErr) addLog('VNC startup error: ' + startErr.message);
+        else addLog('TigerVNC started on :1');
+        ensureWebsockify(callback);
+      });
     });
   });
 }
@@ -181,13 +239,14 @@ function restartOBSOnly(callback) {
   isRestarting = true;
   const restartCmd = `
     pkill -9 -x obs 2>/dev/null || true
+    pkill -9 -x ld-linux-x86-64 2>/dev/null || true
     rm -rf /root/.config/obs-studio/.sentinel 2>/dev/null || true
     sleep 0.5
-    DISPLAY=:1 setsid obs >/tmp/obs.log 2>&1 < /dev/null &
+    DISPLAY=:1 setsid obs --disable-shutdown-check >/tmp/obs.log 2>&1 < /dev/null &
     sleep 2.5
     DISPLAY=:1 wmctrl -r "OBS" -b add,maximized_vert,maximized_horz 2>/dev/null || true
   `;
-  exec(restartCmd, (err) => {
+  runCommandWithLiveLogs('Restarting OBS Studio', restartCmd, (err) => {
     isRestarting = false;
     if (err) addLog('OBS restart error: ' + err.message);
     else addLog('OBS Studio restarted and active on desktop');
@@ -208,16 +267,21 @@ function restartFullPC(callback) {
     export DEBIAN_FRONTEND=noninteractive
 
     # 1. Check & install system packages (VNC, noVNC, XFCE, File Manager, Zip GUI, Browser, GStreamer, WebRTC ICE, OpenGL, Qt6, Build tools)
-    if ! which Xtigervnc websockify startxfce4 wmctrl xdotool xrandr thunar xarchiver firefox-esr meson ninja gst-launch-1.0 ssh dbus-launch git >/dev/null 2>&1 || \
+    dpkg --remove --force-all lightdm 2>/dev/null || true
+    dpkg --configure -a --force-confdef --force-confold </dev/null || true
+    [ -x /usr/bin/tigervncserver ] && [ ! -e /usr/bin/vncserver ] && ln -sf /usr/bin/tigervncserver /usr/bin/vncserver || true
+    [ -x /usr/bin/tigervncpasswd ] && [ ! -e /usr/bin/vncpasswd ] && ln -sf /usr/bin/tigervncpasswd /usr/bin/vncpasswd || true
+
+    if ! which vncserver Xtigervnc websockify startxfce4 wmctrl xdotool xrandr thunar xarchiver firefox-esr meson ninja gst-launch-1.0 ssh dbus-launch git >/dev/null 2>&1 || \
        ! gst-inspect-1.0 nicesrc >/dev/null 2>&1 || \
        ! gst-inspect-1.0 glupload >/dev/null 2>&1 || \
        [ ! -f /usr/include/obs/obs-module.h ] || \
        [ ! -f /usr/lib/x86_64-linux-gnu/libQt6Widgets.so ]; then
       echo "[Setup] Installing missing system packages..."
       dpkg --remove --force-all lightdm 2>/dev/null || true
-      dpkg --configure -a 2>/dev/null || true
+      dpkg --configure -a --force-confdef --force-confold </dev/null || true
       apt-get update
-      apt-get install -y --no-install-recommends \
+      apt-get install -y --no-install-recommends -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" \
         xfce4-session xfwm4 xfce4-panel xfdesktop4 xfce4-terminal dbus-x11 adwaita-icon-theme \
         thunar thunar-archive-plugin xarchiver zip unzip p7zip-full firefox-esr \
         tigervnc-standalone-server tigervnc-tools novnc websockify wmctrl xdotool x11-xserver-utils \
@@ -250,26 +314,54 @@ function restartFullPC(callback) {
     fi
 
     if [ -x /opt/obs-studio-32/AppDir/AppRun ]; then
-      ln -sf /opt/obs-studio-32/AppDir/AppRun /usr/bin/obs
-      if [ ! -L /opt/obs-studio-32/AppDir/lib/dri ] && [ -d /usr/lib/x86_64-linux-gnu/dri ]; then
-        mkdir -p /opt/obs-studio-32/AppDir/lib/.mesa-softpipe-bak
-        mv /opt/obs-studio-32/AppDir/lib/dri /opt/obs-studio-32/AppDir/lib/.mesa-softpipe-bak/ 2>/dev/null || true
-        mv /opt/obs-studio-32/AppDir/lib/libEGL_mesa* /opt/obs-studio-32/AppDir/lib/libGLX_mesa* /opt/obs-studio-32/AppDir/lib/libgbm* /opt/obs-studio-32/AppDir/lib/libglapi* /opt/obs-studio-32/AppDir/lib/libgallium* /opt/obs-studio-32/AppDir/lib/.mesa-softpipe-bak/ 2>/dev/null || true
-        ln -sf /usr/lib/x86_64-linux-gnu/dri /opt/obs-studio-32/AppDir/lib/dri
-        cp -P /usr/lib/x86_64-linux-gnu/libEGL_mesa* /usr/lib/x86_64-linux-gnu/libGLX_mesa* /usr/lib/x86_64-linux-gnu/libgbm* /usr/lib/x86_64-linux-gnu/libglapi* /usr/lib/x86_64-linux-gnu/libLLVM* /opt/obs-studio-32/AppDir/lib/ 2>/dev/null || true
+      for MESA_DIR in /opt/obs-studio-32/AppDir/lib /opt/obs-studio-32/AppDir/.junest/usr/lib; do
+        if [ -d "$MESA_DIR" ] && [ ! -L "$MESA_DIR/dri" ] && [ -d /usr/lib/x86_64-linux-gnu/dri ]; then
+          mkdir -p "$MESA_DIR/.mesa-softpipe-bak"
+          mv "$MESA_DIR/dri" "$MESA_DIR/.mesa-softpipe-bak/" 2>/dev/null || true
+          mv "$MESA_DIR"/libEGL_mesa* "$MESA_DIR"/libGLX_mesa* "$MESA_DIR"/libgbm* "$MESA_DIR"/libglapi* "$MESA_DIR"/libgallium* "$MESA_DIR/.mesa-softpipe-bak/" 2>/dev/null || true
+          ln -sf /usr/lib/x86_64-linux-gnu/dri "$MESA_DIR/dri"
+          cp -P /usr/lib/x86_64-linux-gnu/libEGL_mesa* /usr/lib/x86_64-linux-gnu/libGLX_mesa* /usr/lib/x86_64-linux-gnu/libgbm* /usr/lib/x86_64-linux-gnu/libglapi* /usr/lib/x86_64-linux-gnu/libLLVM* "$MESA_DIR/" 2>/dev/null || true
+        fi
+      done
+
+      if [ -d /opt/obs-studio-32/AppDir/.junest/usr/share/obs ]; then
+        rm -rf /usr/share/obs /usr/lib/obs-plugins 2>/dev/null || true
+        ln -sf /opt/obs-studio-32/AppDir/.junest/usr/share/obs /usr/share/obs
+        ln -sf /opt/obs-studio-32/AppDir/.junest/usr/lib/obs-plugins /usr/lib/obs-plugins
       fi
+
+      cat << 'WEOF' > /usr/local/bin/obs32-wrapper
+#!/bin/sh
+J="/opt/obs-studio-32/AppDir/.junest"
+if [ -x "$J/usr/bin/obs" ]; then
+  export PYTHONHOME="$J/usr"
+  export QT_PLUGIN_PATH="$J/usr/lib/qt6/plugins:$J/usr/lib/qt/plugins"
+  export OBS_PLUGINS_PATH="/root/.config/obs-studio/plugins:$J/usr/lib/obs-plugins"
+  export OBS_PLUGINS_DATA_PATH="$J/usr/share/obs/obs-plugins"
+  export LIBGL_DRIVERS_PATH="/usr/lib/x86_64-linux-gnu/dri"
+  exec "$J/usr/lib/ld-linux-x86-64.so.2" \
+    --library-path "$J/usr/lib:$J/usr/lib/libproxy:$J/usr/lib/pulseaudio:$J/usr/lib/obs-scripting:/usr/lib/x86_64-linux-gnu" \
+    "$J/usr/bin/obs" "$@"
+else
+  exec /opt/obs-studio-32/AppDir/AppRun "$@"
+fi
+WEOF
+      chmod +x /usr/local/bin/obs32-wrapper
+      ln -sf /usr/local/bin/obs32-wrapper /usr/bin/obs
     fi
 
     # 3. Check, compile & install obs-gstreamer plugin with Qt6 Dock
     cd /app/applet
     if [ ! -f /app/applet/build/obs-gstreamer.so ]; then
       echo "[Setup] Building obs-gstreamer plugin with Qt6 Dock..."
-      meson setup build --wipe -Ddock=enabled
+      rm -rf build
+      meson setup build -Ddock=enabled
       ninja -C build
     fi
 
     mkdir -p /root/.config/obs-studio/plugins/obs-gstreamer/bin/64bit
     cp -f /app/applet/build/obs-gstreamer.so /root/.config/obs-studio/plugins/obs-gstreamer/bin/64bit/obs-gstreamer.so 2>/dev/null || true
+    cp -f /app/applet/build/obs-gstreamer.so /usr/lib/x86_64-linux-gnu/obs-plugins/obs-gstreamer.so 2>/dev/null || true
     rm -f /opt/obs-studio-32/AppDir/lib/obs-plugins/obs-gstreamer.so 2>/dev/null || true
 
     # 4. Configure Desktop shortcuts & VNC startup/passwords
@@ -304,6 +396,7 @@ exec startxfce4' > /root/.vnc/xstartup
 
     # 5. Restart all desktop processes cleanly
     pkill -9 -x obs 2>/dev/null || true
+    pkill -9 -x ld-linux-x86-64 2>/dev/null || true
     pkill -9 -x thunar 2>/dev/null || true
     pkill -9 -x xarchiver 2>/dev/null || true
     pkill -9 -x firefox-esr 2>/dev/null || true
@@ -322,12 +415,12 @@ exec startxfce4' > /root/.vnc/xstartup
 
     setsid websockify --web=/usr/share/novnc/ 6080 localhost:5901 >/tmp/websockify.log 2>&1 < /dev/null &
     sleep 1.5
-    DISPLAY=:1 setsid obs >/tmp/obs.log 2>&1 < /dev/null &
+    DISPLAY=:1 setsid obs --disable-shutdown-check >/tmp/obs.log 2>&1 < /dev/null &
     sleep 2.5
     DISPLAY=:1 wmctrl -r "OBS" -b add,maximized_vert,maximized_horz 2>/dev/null || true
   `;
 
-  exec(fullProvisionAndRestartCmd, { maxBuffer: 1024 * 1024 * 10 }, (err) => {
+  runCommandWithLiveLogs('Full PC Provisioning & Desktop Restart', fullProvisionAndRestartCmd, (err) => {
     isRestarting = false;
     isSettingUp = false;
     if (err) addLog('Full PC check/setup/restart error: ' + err.message);
@@ -355,9 +448,9 @@ function startVNCAndOBS(callback) {
 
 function ensureOBS() {
   if (isRestarting || isSettingUp) return;
-  exec('pgrep -x obs >/dev/null && echo "1" || echo "0"', (err, stdout) => {
+  exec('(pgrep -x obs >/dev/null || pgrep -x ld-linux-x86-64 >/dev/null) && echo "1" || echo "0"', (err, stdout) => {
     if (stdout && stdout.trim() !== '1') {
-      exec('rm -rf /root/.config/obs-studio/.sentinel 2>/dev/null || true; DISPLAY=:1 setsid obs >/tmp/obs.log 2>&1 < /dev/null &', () => {});
+      exec('rm -rf /root/.config/obs-studio/.sentinel 2>/dev/null || true; DISPLAY=:1 setsid obs --disable-shutdown-check >/tmp/obs.log 2>&1 < /dev/null &', () => {});
     }
   });
 }
@@ -404,10 +497,10 @@ function setVNCResolution(resolution, callback) {
   });
 }
 
-// Ensure custom portrait modes on server boot; auto-provision if environment was reset
-exec('which Xtigervnc websockify >/dev/null 2>&1 && [ -x /opt/obs-studio-32/AppDir/AppRun ] && echo "1" || echo "0"', (err, stdout) => {
+// Ensure custom portrait modes on server boot; auto-provision if environment was reset or incomplete
+exec('which Xtigervnc vncserver websockify startxfce4 >/dev/null 2>&1 && [ -x /opt/obs-studio-32/AppDir/AppRun ] && [ -f /app/applet/build/obs-gstreamer.so ] && echo "1" || echo "0"', (err, stdout) => {
   if (stdout && stdout.trim() !== '1') {
-    addLog('Detected fresh/reset container on boot — running automatic provisioning...');
+    addLog('Detected fresh/reset or incomplete container on boot — running automatic provisioning...');
     restartFullPC();
   } else {
     ensureCustomModes();
@@ -485,25 +578,36 @@ const server = http.createServer((req, res) => {
       const vncOnline = vncOut && vncOut.trim() === '1';
       exec('pgrep -x websockify >/dev/null && echo "1" || echo "0"', (err2, wsOut) => {
         const novncOnline = wsOut && wsOut.trim() === '1';
-        exec('pgrep -x obs >/dev/null && echo "1" || echo "0"', (err3, stdout) => {
+        exec('(pgrep -x obs >/dev/null || pgrep -x ld-linux-x86-64 >/dev/null) && echo "1" || echo "0"', (err3, stdout) => {
           const obsRunning = stdout && stdout.trim() === '1';
           exec('which vncserver websockify obs >/dev/null && echo "1" || echo "0"', (err4, outInstalled) => {
             const isInstalled = outInstalled && outInstalled.trim() === '1';
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({
-              vncOnline,
-              novncOnline,
-              obsRunning,
-              isInstalled,
-              isSettingUp,
-              vncPort: VNC_PORT,
-              novncPort: NOVNC_PORT,
-              vncPassword: 'vncpassword',
-              tcpTunnel: tcpTunnelInfo,
-              currentResolution: currentResolutionMode,
-              logs: setupLogs.slice(-15),
-              timestamp: new Date().toISOString()
-            }));
+            exec('ps -eo pid,etimes,args --no-headers 2>/dev/null | grep -E "apt-get|dpkg|curl|AppImage|meson|ninja|cc |c\\+\\+|vncserver|Xtigervnc|websockify|startxfce4|obs" | grep -v -E "grep -E|/api/vnc/status|ps -eo|PS4="', (err5, psOut) => {
+              const runningProcesses = (psOut || '')
+                .split(/\r?\n/)
+                .map(s => s.trim())
+                .filter(Boolean)
+                .slice(-15);
+
+              res.writeHead(200, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({
+                vncOnline,
+                novncOnline,
+                obsRunning,
+                isInstalled,
+                isSettingUp,
+                isRestarting,
+                currentCommand: currentRunningCmd || (runningProcesses.length > 0 ? runningProcesses[runningProcesses.length - 1] : ''),
+                runningProcesses,
+                vncPort: VNC_PORT,
+                novncPort: NOVNC_PORT,
+                vncPassword: 'vncpassword',
+                tcpTunnel: tcpTunnelInfo,
+                currentResolution: currentResolutionMode,
+                logs: setupLogs.slice(-120),
+                timestamp: new Date().toISOString()
+              }));
+            });
           });
         });
       });
@@ -599,21 +703,46 @@ const server = http.createServer((req, res) => {
     });
 
     proxyReq.on('error', (err) => {
-      // Gracefully handle offline noVNC service without logging error alarms
+      // Gracefully handle offline noVNC service with live running commands console
       res.writeHead(503, {
         'Content-Type': 'text/html; charset=utf-8',
         'Retry-After': '2'
       });
       res.end(`
         <!DOCTYPE html>
-        <html style="background:#020617;color:#94a3b8;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100%;margin:0;">
-          <div style="text-align:center;padding:2rem;max-width:480px;background:#0f172a;border-radius:12px;border:1px solid #1e293b;box-shadow:0 20px 25px -5px rgba(0,0,0,0.5)">
-            <h3 style="color:#f8fafc;margin-top:0;">OBS Desktop Initializing...</h3>
-            <p style="font-size:14px;line-height:1.5;">The remote VNC desktop is starting up. This page will connect automatically in a few seconds.</p>
-            <div style="margin:1.5rem auto;width:32px;height:32px;border:3px solid #6366f1;border-top-color:transparent;border-radius:50%;animation:spin 1s linear infinite;"></div>
+        <html style="background:#020617;color:#e2e8f0;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;height:100%;margin:0;">
+          <body style="margin:0;height:100%;display:flex;flex-direction:column;background:#020617;padding:16px;box-sizing:border-box;">
+            <div style="display:flex;align-items:center;justify-content:space-between;background:#0f172a;border:1px solid #1e293b;padding:12px 16px;border-radius:8px 8px 0 0;">
+              <div style="display:flex;align-items:center;gap:10px;">
+                <div style="width:14px;height:14px;border:2px solid #6366f1;border-top-color:transparent;border-radius:50%;animation:spin 1s linear infinite;"></div>
+                <strong style="color:#f8fafc;font-size:13px;">Desktop Starting — Live Command Console</strong>
+              </div>
+              <span id="cmd-badge" style="font-size:11px;color:#38bdf8;background:#020617;padding:3px 8px;border-radius:4px;border:1px solid #1e293b;">Initializing...</span>
+            </div>
+            <div style="background:#090d16;border-left:1px solid #1e293b;border-right:1px solid #1e293b;padding:8px 16px;font-size:11px;color:#94a3b8;border-bottom:1px solid #1e293b;">
+              <div style="color:#64748b;font-size:10px;text-transform:uppercase;margin-bottom:4px;">Active Running Processes (PID / Elapsed / Command)</div>
+              <pre id="procs" style="margin:0;color:#a5f3fc;white-space:pre-wrap;max-height:90px;overflow-y:auto;">Checking running commands...</pre>
+            </div>
+            <pre id="logs" style="flex:1;margin:0;background:#020617;border:1px solid #1e293b;border-top:none;border-radius:0 0 8px 8px;padding:14px 16px;font-size:12px;line-height:1.5;color:#cbd5e1;overflow-y:auto;white-space:pre-wrap;"></pre>
             <style>@keyframes spin { to { transform: rotate(360deg); } }</style>
-            <script>setTimeout(function() { window.location.reload(); }, 3000);</script>
-          </div>
+            <script>
+              function poll() {
+                fetch('/api/vnc/status').then(r => r.json()).then(d => {
+                  if (d.vncOnline && d.novncOnline && !d.isSettingUp && !d.isRestarting) {
+                    window.location.reload();
+                    return;
+                  }
+                  document.getElementById('cmd-badge').textContent = d.currentCommand || 'Provisioning & starting desktop...';
+                  document.getElementById('procs').textContent = (d.runningProcesses && d.runningProcesses.length) ? d.runningProcesses.join('\\n') : 'Waiting for next command...';
+                  var logsEl = document.getElementById('logs');
+                  logsEl.textContent = (d.logs || []).join('\\n');
+                  logsEl.scrollTop = logsEl.scrollHeight;
+                }).catch(() => {});
+              }
+              setInterval(poll, 1200);
+              poll();
+            </script>
+          </body>
         </html>
       `);
     });
