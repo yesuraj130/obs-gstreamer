@@ -43,6 +43,8 @@ struct gst_master_pipeline
 	gs_stagesurf_t *stagesurf;
 
 	gint active_destinations;
+	uint64_t texture_push_count;
+	uint64_t encoded_sample_count;
 
 	gpointer subscribers_atomic;
 	GMutex subscriber_mutex;

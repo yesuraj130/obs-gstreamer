@@ -8,6 +8,7 @@
 #include <gst/app/gstappsrc.h>
 #include <gst/app/gstappsink.h>
 #include <gst/video/video.h>
+#include <inttypes.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -80,6 +81,13 @@ static GstFlowReturn video_new_sample_cb(GstAppSink *sink, gpointer user_data)
 	}
 
 	const bool is_keyframe = !GST_BUFFER_FLAG_IS_SET(buf, GST_BUFFER_FLAG_DELTA_UNIT);
+	uint64_t sample_number = ++hub->encoded_sample_count;
+	if (sample_number == 1 || sample_number % 300 == 0)
+	{
+		blog(LOG_INFO, "[obs-gstreamer-master] Encoded sample #%" PRIu64 ": %" G_GSIZE_FORMAT
+			" bytes, keyframe=%s",
+			sample_number, gst_buffer_get_size(buf), is_keyframe ? "yes" : "no");
+	}
 
 	GPtrArray *subs = (GPtrArray *)g_atomic_pointer_get(&hub->subscribers_atomic);
 	if (subs)
@@ -100,6 +108,7 @@ void gst_master_pipeline_push_texture(gst_master_pipeline_t *hub, void *gpu_hand
 	if (!hub || !gpu_handle || g_atomic_int_get(&hub->active_destinations) <= 0 || !hub->appsrc) return;
 
 	gs_texture_t *tex = (gs_texture_t *)gpu_handle;
+	uint64_t frame_number = ++hub->texture_push_count;
 	uint32_t tex_w = gs_texture_get_width(tex);
 	uint32_t tex_h = gs_texture_get_height(tex);
 	enum gs_color_format fmt = gs_texture_get_color_format(tex);
@@ -119,14 +128,25 @@ void gst_master_pipeline_push_texture(gst_master_pipeline_t *hub, void *gpu_hand
 		hub->stagesurf = gs_stagesurface_create(tex_w, tex_h, fmt);
 	}
 
-	if (!hub->stagesurf) return;
+	if (!hub->stagesurf)
+	{
+		if (frame_number == 1)
+			blog(LOG_ERROR, "[obs-gstreamer-master] Failed to create %ux%u staging surface for format=%d",
+				tex_w, tex_h, (int)fmt);
+		return;
+	}
 
 	gs_stage_texture(hub->stagesurf, tex);
 
 	uint8_t *src_data = NULL;
 	uint32_t src_linesize = 0;
 	if (!gs_stagesurface_map(hub->stagesurf, &src_data, &src_linesize))
+	{
+		if (frame_number == 1)
+			blog(LOG_ERROR, "[obs-gstreamer-master] Failed to map %ux%u staging surface",
+				tex_w, tex_h);
 		return;
+	}
 
 	uint32_t copy_w = tex_w < hub->width ? tex_w : hub->width;
 	uint32_t copy_h = tex_h < hub->height ? tex_h : hub->height;
@@ -134,41 +154,65 @@ void gst_master_pipeline_push_texture(gst_master_pipeline_t *hub, void *gpu_hand
 	size_t total_size = dst_stride * hub->height;
 
 	GstBuffer *in_buf = gst_buffer_new_allocate(NULL, total_size, NULL);
-	if (in_buf)
+	if (!in_buf)
 	{
-		GstMapInfo map;
-		if (gst_buffer_map(in_buf, &map, GST_MAP_WRITE))
+		if (frame_number == 1)
+			blog(LOG_ERROR, "[obs-gstreamer-master] Failed to allocate input buffer for texture frame");
+		gs_stagesurface_unmap(hub->stagesurf);
+		return;
+	}
+
+	GstMapInfo map;
+	if (!gst_buffer_map(in_buf, &map, GST_MAP_WRITE))
+	{
+		if (frame_number == 1)
+			blog(LOG_ERROR, "[obs-gstreamer-master] Failed to map input buffer for texture frame");
+		gst_buffer_unref(in_buf);
+		gs_stagesurface_unmap(hub->stagesurf);
+		return;
+	}
+
+	bool is_bgra = (fmt == GS_BGRA || fmt == GS_BGRA_UNORM || fmt == GS_BGRX);
+	for (uint32_t y = 0; y < copy_h; y++)
+	{
+		const uint8_t *src_row = src_data + (size_t)y * src_linesize;
+		uint8_t *dst_row = map.data + (size_t)y * dst_stride;
+		if (!is_bgra)
 		{
-			bool is_bgra = (fmt == GS_BGRA || fmt == GS_BGRA_UNORM || fmt == GS_BGRX);
-			for (uint32_t y = 0; y < copy_h; y++)
-			{
-				const uint8_t *src_row = src_data + (size_t)y * src_linesize;
-				uint8_t *dst_row = map.data + (size_t)y * dst_stride;
-				if (!is_bgra)
-				{
-					memcpy(dst_row, src_row, (size_t)copy_w * 4);
-				}
-				else
-				{
-					for (uint32_t x = 0; x < copy_w; x++)
-					{
-						dst_row[x * 4 + 0] = src_row[x * 4 + 2];
-						dst_row[x * 4 + 1] = src_row[x * 4 + 1];
-						dst_row[x * 4 + 2] = src_row[x * 4 + 0];
-						dst_row[x * 4 + 3] = src_row[x * 4 + 3];
-					}
-				}
-			}
-			gst_buffer_unmap(in_buf, &map);
+			memcpy(dst_row, src_row, (size_t)copy_w * 4);
 		}
+		else
+		{
+			for (uint32_t x = 0; x < copy_w; x++)
+			{
+				dst_row[x * 4 + 0] = src_row[x * 4 + 2];
+				dst_row[x * 4 + 1] = src_row[x * 4 + 1];
+				dst_row[x * 4 + 2] = src_row[x * 4 + 0];
+				dst_row[x * 4 + 3] = src_row[x * 4 + 3];
+			}
+		}
+	}
+	gst_buffer_unmap(in_buf, &map);
 
-		uint64_t duration = gst_util_uint64_scale_int(GST_SECOND, hub->fps_den, hub->fps_num);
-		GST_BUFFER_PTS(in_buf) = pts > 0 ? pts : (hub->frame_index * duration);
-		GST_BUFFER_DTS(in_buf) = GST_BUFFER_PTS(in_buf);
-		GST_BUFFER_DURATION(in_buf) = duration;
-		hub->frame_index++;
+	uint64_t duration = gst_util_uint64_scale_int(GST_SECOND, hub->fps_den, hub->fps_num);
+	GST_BUFFER_PTS(in_buf) = pts > 0 ? pts : (hub->frame_index * duration);
+	GST_BUFFER_DTS(in_buf) = GST_BUFFER_PTS(in_buf);
+	GST_BUFFER_DURATION(in_buf) = duration;
+	hub->frame_index++;
 
-		gst_app_src_push_buffer(GST_APP_SRC(hub->appsrc), in_buf);
+	GstFlowReturn flow = gst_app_src_push_buffer(GST_APP_SRC(hub->appsrc), in_buf);
+	if (flow != GST_FLOW_OK)
+	{
+		if (frame_number == 1 || frame_number % 300 == 0)
+			blog(LOG_ERROR, "[obs-gstreamer-master] Texture frame #%" PRIu64
+				" push to encoder failed: flow=%s",
+				frame_number, gst_flow_get_name(flow));
+	}
+	else if (frame_number == 1 || frame_number % 300 == 0)
+	{
+		blog(LOG_INFO, "[obs-gstreamer-master] Texture frame #%" PRIu64
+			" pushed to encoder (%ux%u texture, %ux%u submitted)",
+			frame_number, tex_w, tex_h, copy_w, copy_h);
 	}
 
 	gs_stagesurface_unmap(hub->stagesurf);

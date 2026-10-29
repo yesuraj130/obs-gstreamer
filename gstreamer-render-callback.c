@@ -19,6 +19,8 @@ struct gst_render_callback
 	gs_texrender_t *texrender;
 
 	bool hook_active;
+	bool main_texture_null_logged;
+	bool main_texture_logged;
 };
 
 static void render_callback_handler(void *param, uint32_t cx, uint32_t cy)
@@ -33,7 +35,17 @@ static void render_callback_handler(void *param, uint32_t cx, uint32_t cy)
 		gs_texture_t *tex = obs_get_main_texture();
 		if (tex)
 		{
+			if (!cb->main_texture_logged)
+			{
+				blog(LOG_INFO, "[obs-gstreamer-render-callback] Main output texture available: %ux%u, format=%d",
+					gs_texture_get_width(tex), gs_texture_get_height(tex),
+					(int)gs_texture_get_color_format(tex));
+				cb->main_texture_logged = true;
+			}
 			gst_master_pipeline_push_texture(cb->pipeline, tex, os_gettime_ns());
+		} else if (!cb->main_texture_null_logged) {
+			blog(LOG_WARNING, "[obs-gstreamer-render-callback] Main output texture is not available");
+			cb->main_texture_null_logged = true;
 		}
 		return;
 	}
