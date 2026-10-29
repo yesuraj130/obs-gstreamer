@@ -80,6 +80,11 @@ static void render_callback_handler(void *param, uint32_t cx, uint32_t cy)
 	}
 }
 
+static void render_callback_main_rendered_handler(void *param)
+{
+	render_callback_handler(param, 0, 0);
+}
+
 static void pipeline_state_change(bool active, void *user_data)
 {
 	gst_render_callback_t *cb = (gst_render_callback_t *)user_data;
@@ -87,13 +92,19 @@ static void pipeline_state_change(bool active, void *user_data)
 
 	if (active && !cb->hook_active)
 	{
-		obs_add_main_render_callback(render_callback_handler, cb);
+		if (cb->source_type == GST_SOURCE_MAIN_OUTPUT)
+			obs_add_main_rendered_callback(render_callback_main_rendered_handler, cb);
+		else
+			obs_add_main_render_callback(render_callback_handler, cb);
 		cb->hook_active = true;
 		blog(LOG_INFO, "[obs-gstreamer-render-callback] Pipeline active: attached render callback");
 	}
 	else if (!active && cb->hook_active)
 	{
-		obs_remove_main_render_callback(render_callback_handler, cb);
+		if (cb->source_type == GST_SOURCE_MAIN_OUTPUT)
+			obs_remove_main_rendered_callback(render_callback_main_rendered_handler, cb);
+		else
+			obs_remove_main_render_callback(render_callback_handler, cb);
 		cb->hook_active = false;
 		blog(LOG_INFO, "[obs-gstreamer-render-callback] Pipeline idle: detached render callback (0%% GPU)");
 	}
@@ -170,7 +181,10 @@ void gst_render_callback_destroy(gst_render_callback_t *cb)
 
 	if (cb->hook_active)
 	{
-		obs_remove_main_render_callback(render_callback_handler, cb);
+		if (cb->source_type == GST_SOURCE_MAIN_OUTPUT)
+			obs_remove_main_rendered_callback(render_callback_main_rendered_handler, cb);
+		else
+			obs_remove_main_render_callback(render_callback_handler, cb);
 		cb->hook_active = false;
 	}
 

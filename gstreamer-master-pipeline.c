@@ -173,6 +173,16 @@ void gst_master_pipeline_push_texture(gst_master_pipeline_t *hub, void *gpu_hand
 	}
 
 	bool is_bgra = (fmt == GS_BGRA || fmt == GS_BGRA_UNORM || fmt == GS_BGRX);
+	if ((frame_number == 1 || frame_number % 300 == 0) && copy_w > 0 && copy_h > 0)
+	{
+		uint32_t sample_x = copy_w / 2;
+		uint32_t sample_y = copy_h / 2;
+		const uint8_t *sample = src_data + (size_t)sample_y * src_linesize + (size_t)sample_x * 4;
+		blog(LOG_INFO, "[obs-gstreamer-master] Texture frame #%" PRIu64
+			" readback center pixel (raw)=%u,%u,%u,%u",
+			frame_number, sample[0], sample[1], sample[2], sample[3]);
+	}
+
 	for (uint32_t y = 0; y < copy_h; y++)
 	{
 		const uint8_t *src_row = src_data + (size_t)y * src_linesize;
