@@ -198,6 +198,41 @@
       });
   });
 
+  // Rebuild Plugin, install in OBS, and restart OBS
+  var btnRebuildPlugin = document.getElementById('btn-rebuild-plugin');
+  if (btnRebuildPlugin) {
+    btnRebuildPlugin.addEventListener('click', function () {
+      vncStatusText.textContent = 'Rebuilding Plugin...';
+      navVncDot.className = 'w-2 h-2 rounded-full bg-cyan-400 animate-pulse';
+      btnRebuildPlugin.disabled = true;
+      showStartupConsole({
+        currentCommand: 'Compiling obs-gstreamer C/C++ plugin...',
+        runningProcesses: ['Building plugin with Ninja/Meson...'],
+        logs: ['[' + new Date().toLocaleTimeString() + '] ==> Rebuilding obs-gstreamer plugin, installing in OBS, and restarting OBS...']
+      });
+      log('Triggering rebuild of obs-gstreamer plugin, installation, and OBS restart...', 'info');
+
+      fetch('/api/vnc/rebuild-plugin', { method: 'POST' })
+        .then(function (res) { return res.json(); })
+        .then(function (data) {
+          btnRebuildPlugin.disabled = false;
+          if (data && data.success) {
+            log('Plugin rebuilt, installed, and OBS restarted successfully', 'info');
+          } else {
+            log('Rebuild failed: ' + (data ? data.message : 'Unknown error'), 'error');
+          }
+          setTimeout(function () {
+            checkVncStatus();
+          }, 1000);
+        })
+        .catch(function (err) {
+          btnRebuildPlugin.disabled = false;
+          log('Rebuild plugin request error: ' + err.message, 'error');
+        });
+    });
+  }
+
+
   // Restart Full PC (Check/Install all tools, configure VNC, XFCE Desktop, Websockify, OBS 32 & GStreamer)
   var btnRestartPc = document.getElementById('btn-restart-pc');
   var vncStartupConsole = document.getElementById('vnc-startup-console');

@@ -254,6 +254,41 @@ function restartOBSOnly(callback) {
   });
 }
 
+function rebuildPluginAndRestartOBS(callback) {
+  if (isSettingUp) {
+    if (callback) callback(new Error('Setup in progress, please wait...'));
+    return;
+  }
+  addLog('Rebuilding obs-gstreamer plugin, installing in OBS, and restarting OBS...');
+  isRestarting = true;
+  const cmd = `
+    pkill -9 -x obs 2>/dev/null || true
+    pkill -9 -x ld-linux-x86-64 2>/dev/null || true
+    rm -rf /root/.config/obs-studio/.sentinel 2>/dev/null || true
+    cd /app/applet
+    if [ -d build ]; then
+      ninja -C build || (rm -rf build && meson setup build -Ddock=enabled && ninja -C build)
+    else
+      meson setup build -Ddock=enabled && ninja -C build
+    fi
+    mkdir -p /root/.config/obs-studio/plugins/obs-gstreamer/bin/64bit
+    cp -f /app/applet/build/obs-gstreamer.so /root/.config/obs-studio/plugins/obs-gstreamer/bin/64bit/obs-gstreamer.so 2>/dev/null || true
+    cp -f /app/applet/build/obs-gstreamer.so /usr/lib/x86_64-linux-gnu/obs-plugins/obs-gstreamer.so 2>/dev/null || true
+    rm -f /opt/obs-studio-32/AppDir/lib/obs-plugins/obs-gstreamer.so 2>/dev/null || true
+    sleep 0.5
+    DISPLAY=:1 setsid obs --disable-shutdown-check >/tmp/obs.log 2>&1 < /dev/null &
+    sleep 2.5
+    DISPLAY=:1 wmctrl -r "OBS" -b add,maximized_vert,maximized_horz 2>/dev/null || true
+  `;
+  runCommandWithLiveLogs('Rebuilding Plugin & Restarting OBS', cmd, (err) => {
+    isRestarting = false;
+    if (err) addLog('Rebuild plugin error: ' + err.message);
+    else addLog('Plugin rebuilt, installed, and OBS Studio restarted successfully');
+    if (callback) callback(err);
+  });
+}
+
+
 function restartFullPC(callback) {
   if (isSettingUp) {
     if (callback) callback(null, 'Setup/Restart already in progress');
@@ -655,6 +690,19 @@ const server = http.createServer((req, res) => {
     });
     return;
   }
+
+  // API Rebuild Plugin & Restart OBS trigger
+  if (req.url === '/api/vnc/rebuild-plugin' && req.method === 'POST') {
+    rebuildPluginAndRestartOBS((err) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        success: !err,
+        message: err ? err.message : 'Plugin rebuilt, installed, and OBS restarted'
+      }));
+    });
+    return;
+  }
+
 
   // API Full PC Restart trigger (VNC + Desktop + OBS)
   if (req.url === '/api/vnc/restart-pc' && req.method === 'POST') {
