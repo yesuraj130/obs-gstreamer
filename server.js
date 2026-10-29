@@ -364,6 +364,15 @@ WEOF
     cp -f /app/applet/build/obs-gstreamer.so /usr/lib/x86_64-linux-gnu/obs-plugins/obs-gstreamer.so 2>/dev/null || true
     rm -f /opt/obs-studio-32/AppDir/lib/obs-plugins/obs-gstreamer.so 2>/dev/null || true
 
+    # Restore OBS scene sources & configuration template if fresh install
+    if [ -d /root/.config/obs-studio-template ]; then
+      if [ ! -f /root/.config/obs-studio/basic/scenes/Untitled.json ]; then
+        echo "[Setup] Restoring default OBS scenes and sources template..."
+        mkdir -p /root/.config/obs-studio
+        cp -rf /root/.config/obs-studio-template/* /root/.config/obs-studio/ 2>/dev/null || true
+      fi
+    fi
+
     # 4. Configure Desktop shortcuts & VNC startup/passwords
     mkdir -p /root/Desktop
     cp -f /usr/share/applications/thunar.desktop /root/Desktop/ 2>/dev/null || true

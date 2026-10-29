@@ -60,6 +60,9 @@ bool obs_frontend_add_dock_by_id(const char *id, const char *title, void *dock) 
 #include <QtWidgets/QPlainTextEdit>
 #include <QtWidgets/QTabWidget>
 #include <QtWidgets/QFormLayout>
+#include <QtWidgets/QDockWidget>
+#include <QtWidgets/QMainWindow>
+#include <QtCore/QTimer>
 
 #include <vector>
 #include <string>
@@ -1303,6 +1306,33 @@ static void on_frontend_event(enum obs_frontend_event event, void *private_data)
 
 		if (g_dock_widget) {
 			g_dock_widget->refreshTable();
+			g_dock_widget->setVisible(true);
+			g_dock_widget->show();
+
+			QTimer::singleShot(250, []() {
+				if (g_dock_widget) {
+					g_dock_widget->setVisible(true);
+					g_dock_widget->show();
+
+					QMainWindow *main_win = qobject_cast<QMainWindow *>((QObject *)obs_frontend_get_main_window());
+					QWidget *p = g_dock_widget->parentWidget();
+					while (p) {
+						p->setVisible(true);
+						p->show();
+						if (auto *dw = qobject_cast<QDockWidget*>(p)) {
+							dw->setVisible(true);
+							dw->show();
+							if (main_win && dw->isFloating()) {
+								main_win->addDockWidget(Qt::RightDockWidgetArea, dw);
+								dw->setFloating(false);
+							}
+							dw->raise();
+							break;
+						}
+						p = p->parentWidget();
+					}
+				}
+			});
 		}
 
 		export_dock_status_json();

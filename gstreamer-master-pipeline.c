@@ -189,17 +189,10 @@ void gst_master_pipeline_push_raw_video(gst_master_pipeline_t *hub, struct video
 	if (gst_buffer_map(buf, &map, GST_MAP_WRITE))
 	{
 		uint8_t *dst = map.data;
-		if (frame->linesize[0] == dst_stride)
+		size_t copy_bytes = frame->linesize[0] < dst_stride ? frame->linesize[0] : dst_stride;
+		for (uint32_t y = 0; y < hub->height; y++)
 		{
-			memcpy(dst, frame->data[0], total_size);
-		}
-		else
-		{
-			size_t copy_bytes = frame->linesize[0] < dst_stride ? frame->linesize[0] : dst_stride;
-			for (uint32_t y = 0; y < hub->height; y++)
-			{
-				memcpy(dst + (size_t)y * dst_stride, frame->data[0] + (size_t)y * frame->linesize[0], copy_bytes);
-			}
+			memcpy(dst + (size_t)y * dst_stride, frame->data[0] + (size_t)y * frame->linesize[0], copy_bytes);
 		}
 		gst_buffer_unmap(buf, &map);
 	}

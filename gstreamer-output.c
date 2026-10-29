@@ -662,10 +662,91 @@ void gstreamer_output_encoded_packet(void *p, struct encoder_packet *packet)
 	gst_object_unref(video);
 }
 
+static void copy_obs_video_data_to_gst_buffer(GstBuffer *buf, struct video_data *frame, enum video_format format, uint32_t width, uint32_t height)
+{
+	GstMapInfo map;
+	if (!gst_buffer_map(buf, &map, GST_MAP_WRITE)) return;
+
+	uint8_t *dst = map.data;
+	size_t dst_offset = 0;
+
+	switch (format) {
+	case VIDEO_FORMAT_I420: {
+		size_t y_stride = width;
+		for (uint32_t y = 0; y < height && frame->data[0]; y++) {
+			memcpy(dst + dst_offset, frame->data[0] + y * frame->linesize[0], y_stride);
+			dst_offset += y_stride;
+		}
+		size_t u_stride = width / 2;
+		uint32_t u_height = height / 2;
+		for (uint32_t y = 0; y < u_height && frame->data[1]; y++) {
+			memcpy(dst + dst_offset, frame->data[1] + y * frame->linesize[1], u_stride);
+			dst_offset += u_stride;
+		}
+		size_t v_stride = width / 2;
+		uint32_t v_height = height / 2;
+		for (uint32_t y = 0; y < v_height && frame->data[2]; y++) {
+			memcpy(dst + dst_offset, frame->data[2] + y * frame->linesize[2], v_stride);
+			dst_offset += v_stride;
+		}
+		break;
+	}
+	case VIDEO_FORMAT_NV12: {
+		size_t y_stride = width;
+		for (uint32_t y = 0; y < height && frame->data[0]; y++) {
+			memcpy(dst + dst_offset, frame->data[0] + y * frame->linesize[0], y_stride);
+			dst_offset += y_stride;
+		}
+		size_t uv_stride = width;
+		uint32_t uv_height = height / 2;
+		for (uint32_t y = 0; y < uv_height && frame->data[1]; y++) {
+			memcpy(dst + dst_offset, frame->data[1] + y * frame->linesize[1], uv_stride);
+			dst_offset += uv_stride;
+		}
+		break;
+	}
+	case VIDEO_FORMAT_YVYU:
+	case VIDEO_FORMAT_YUY2:
+	case VIDEO_FORMAT_UYVY: {
+		size_t row_bytes = width * 2;
+		for (uint32_t y = 0; y < height && frame->data[0]; y++) {
+			memcpy(dst + dst_offset, frame->data[0] + y * frame->linesize[0], row_bytes);
+			dst_offset += row_bytes;
+		}
+		break;
+	}
+	case VIDEO_FORMAT_RGBA:
+	case VIDEO_FORMAT_BGRA:
+	case VIDEO_FORMAT_BGRX: {
+		size_t row_bytes = width * 4;
+		for (uint32_t y = 0; y < height && frame->data[0]; y++) {
+			memcpy(dst + dst_offset, frame->data[0] + y * frame->linesize[0], row_bytes);
+			dst_offset += row_bytes;
+		}
+		break;
+	}
+	default: {
+		size_t max_copy = map.size;
+		if (frame->data[0] && frame->linesize[0] > 0) {
+			size_t row_bytes = frame->linesize[0] < width * 4 ? frame->linesize[0] : width * 4;
+			for (uint32_t y = 0; y < height && dst_offset < max_copy; y++) {
+				size_t copy_now = (dst_offset + row_bytes <= max_copy) ? row_bytes : (max_copy - dst_offset);
+				if (copy_now == 0) break;
+				memcpy(dst + dst_offset, frame->data[0] + y * frame->linesize[0], copy_now);
+				dst_offset += copy_now;
+			}
+		}
+		break;
+	}
+	}
+
+	gst_buffer_unmap(buf, &map);
+}
+
 void gstreamer_output_raw_video(void *p, struct video_data *frame)
 {
 	struct gstreamer_output_data *data = (struct gstreamer_output_data *)p;
-	if (!data)
+	if (!data || !frame || !frame->data[0])
 		return;
 
 	g_mutex_lock(&data->lock);
@@ -677,13 +758,13 @@ void gstreamer_output_raw_video(void *p, struct video_data *frame)
 
 	data->raw_video_frames++;
 
-	// Allocate buffer and copy OBS frame data cleanly
 	GstBuffer *buffer = gst_buffer_new_allocate(NULL, data->buffer_size, NULL);
 	if (!buffer) {
 		gst_object_unref(video);
 		return;
 	}
-	gst_buffer_fill(buffer, 0, frame->data[0], data->buffer_size);
+
+	copy_obs_video_data_to_gst_buffer(buffer, frame, data->ovi.output_format, data->ovi.output_width, data->ovi.output_height);
 
 	GST_BUFFER_PTS(buffer) = frame->timestamp;
 	GST_BUFFER_DTS(buffer) = frame->timestamp;
