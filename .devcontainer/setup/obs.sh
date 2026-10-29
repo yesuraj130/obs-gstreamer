@@ -29,6 +29,20 @@ sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
     obs-studio \
     qt6-base-dev
 
+# Ensure libobs 32 libraries and headers are active
+if [ -d /opt/obs-studio-32/AppDir/.junest/usr/lib ]; then
+    echo "Updating system libobs to OBS 32..."
+    sudo cp /opt/obs-studio-32/AppDir/.junest/usr/lib/libobs.so.30 /usr/lib/x86_64-linux-gnu/ 2>/dev/null || true
+    sudo cp /opt/obs-studio-32/AppDir/.junest/usr/lib/libobs-frontend-api.so.30 /usr/lib/x86_64-linux-gnu/ 2>/dev/null || true
+    sudo cp /opt/obs-studio-32/AppDir/.junest/usr/lib/libobs-opengl.so.30 /usr/lib/x86_64-linux-gnu/ 2>/dev/null || true
+    sudo cp /opt/obs-studio-32/AppDir/.junest/usr/lib/libobs-scripting.so.30 /usr/lib/x86_64-linux-gnu/ 2>/dev/null || true
+    sudo ln -sf libobs.so.30 /usr/lib/x86_64-linux-gnu/libobs.so
+    sudo ln -sf libobs.so.30 /usr/lib/x86_64-linux-gnu/libobs.so.0
+    sudo ln -sf libobs-frontend-api.so.30 /usr/lib/x86_64-linux-gnu/libobs-frontend-api.so
+    sudo ln -sf libobs-frontend-api.so.30 /usr/lib/x86_64-linux-gnu/libobs-frontend-api.so.0
+    sudo ldconfig
+fi
+
 # Install Move Transition plugin (obs-move-transition by Exeldro)
 if [ ! -f /opt/obs-studio-32/AppDir/.junest/usr/lib/obs-plugins/move-transition.so ]; then
     echo "Installing Move Transition plugin..."
