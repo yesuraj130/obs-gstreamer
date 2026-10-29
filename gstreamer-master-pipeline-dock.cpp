@@ -1626,8 +1626,12 @@ static void on_frontend_save_load(obs_data_t *save_data, bool saving, void *priv
 	(void)private_data;
 	if (saving) {
 		save_dock_config(save_data);
+		blog(LOG_INFO, "[obs-gstreamer-dock] Saved %zu Master Hub(s) to OBS scene collection",
+			g_master_hubs.size());
 	} else {
 		load_dock_config(save_data);
+		blog(LOG_INFO, "[obs-gstreamer-dock] Restored %zu Master Hub(s) from OBS scene collection",
+			g_master_hubs.size());
 		export_dock_status_json();
 		if (g_dock_widget)
 			g_dock_widget->refreshTable();
