@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "node server.js",
     "start": "node server.js",
-    "build": "echo 'Build OK'",
+    "build": "ninja -C build install",
     "lint": "node --check server.js"
   },
   "dependencies": {}

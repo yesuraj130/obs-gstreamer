@@ -62,6 +62,8 @@ bool obs_frontend_add_dock_by_id(const char *id, const char *title, void *dock) 
 #include <QtWidgets/QFormLayout>
 #include <QtWidgets/QDockWidget>
 #include <QtWidgets/QMainWindow>
+#include <QtWidgets/QScrollArea>
+#include <QtWidgets/QStackedWidget>
 #include <QtCore/QTimer>
 
 #include <vector>
@@ -619,6 +621,104 @@ static bool start_destination(GstMasterHub *hub, GstDestination *dest)
 }
 
 /* --------------------------------------------------------------------------
+/* --------------------------------------------------------------------------
+ * Helper Widget: Collapsible Section
+ * -------------------------------------------------------------------------- */
+class CollapsibleSection : public QWidget {
+public:
+	CollapsibleSection(const QString &title, bool startsExpanded = true, QWidget *parent = nullptr)
+		: QWidget(parent), m_title(title), m_isExpanded(startsExpanded)
+	{
+		QVBoxLayout *root = new QVBoxLayout(this);
+		root->setContentsMargins(0, 0, 0, 0);
+		root->setSpacing(0);
+
+		m_headerBtn = new QPushButton(this);
+		m_headerBtn->setCheckable(true);
+		m_headerBtn->setChecked(startsExpanded);
+		m_headerBtn->setCursor(Qt::PointingHandCursor);
+		m_headerBtn->setStyleSheet(
+			"QPushButton {"
+			"  text-align: left;"
+			"  padding: 8px 12px;"
+			"  font-weight: bold;"
+			"  font-size: 12px;"
+			"  color: #e2e8f0;"
+			"  background-color: #20232c;"
+			"  border: 1px solid #353a47;"
+			"  border-radius: 4px;"
+			"}"
+			"QPushButton:hover {"
+			"  background-color: #282c38;"
+			"  border-color: #4f5669;"
+			"  color: #ffffff;"
+			"}"
+			"QPushButton:checked {"
+			"  border-bottom-left-radius: 0px;"
+			"  border-bottom-right-radius: 0px;"
+			"}"
+		);
+		updateHeader();
+
+		m_contentWidget = new QWidget(this);
+		m_contentWidget->setObjectName("CollapsibleContent");
+		m_contentWidget->setStyleSheet(
+			"QWidget#CollapsibleContent {"
+			"  background-color: #161820;"
+			"  border: 1px solid #353a47;"
+			"  border-top: none;"
+			"  border-bottom-left-radius: 4px;"
+			"  border-bottom-right-radius: 4px;"
+			"}"
+		);
+		m_contentWidget->setVisible(startsExpanded);
+
+		root->addWidget(m_headerBtn);
+		root->addWidget(m_contentWidget);
+
+		connect(m_headerBtn, &QPushButton::clicked, [this](bool) {
+			toggle();
+		});
+	}
+
+	void setContentLayout(QLayout *layout)
+	{
+		m_contentWidget->setLayout(layout);
+	}
+
+	void toggle()
+	{
+		m_isExpanded = !m_isExpanded;
+		m_contentWidget->setVisible(m_isExpanded);
+		m_headerBtn->setChecked(m_isExpanded);
+		updateHeader();
+	}
+
+	void setExpanded(bool exp)
+	{
+		m_isExpanded = exp;
+		m_contentWidget->setVisible(exp);
+		m_headerBtn->setChecked(exp);
+		updateHeader();
+	}
+
+	bool isExpanded() const { return m_isExpanded; }
+	QWidget *contentWidget() const { return m_contentWidget; }
+
+private:
+	void updateHeader()
+	{
+		QString arrow = m_isExpanded ? "▾  " : "▸  ";
+		m_headerBtn->setText(arrow + m_title);
+	}
+
+	QString m_title;
+	bool m_isExpanded;
+	QPushButton *m_headerBtn;
+	QWidget *m_contentWidget;
+};
+
+/* --------------------------------------------------------------------------
  * Dialog: Edit Individual Destination Properties
  * -------------------------------------------------------------------------- */
 class GstDestinationDetailDialog : public QDialog {
@@ -627,10 +727,15 @@ public:
 		: QDialog(parent), m_dest(dest)
 	{
 		setWindowTitle(QString("Edit Destination: %1").arg(QString::fromStdString(dest->name)));
-		resize(520, 420);
+		resize(500, 320);
 
 		QVBoxLayout *layout = new QVBoxLayout(this);
+		layout->setContentsMargins(14, 14, 14, 14);
+		layout->setSpacing(10);
+
 		QFormLayout *form = new QFormLayout();
+		form->setSpacing(8);
+		form->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
 
 		m_nameEdit = new QLineEdit(QString::fromStdString(dest->name), this);
 		form->addRow("Destination Name:", m_nameEdit);
@@ -647,37 +752,51 @@ public:
 		m_autostartCheck->setChecked(dest->autostart);
 		form->addRow("Autostart:", m_autostartCheck);
 
+		/* Stacked Widget for Type-Specific Settings to eliminate empty space */
+		m_typeStack = new QStackedWidget(this);
+
 		/* RTSP Section */
 		m_rtspGroup = new QGroupBox("RTSP Server Settings", this);
 		QFormLayout *rtspForm = new QFormLayout(m_rtspGroup);
+		rtspForm->setSpacing(8);
+		rtspForm->setContentsMargins(10, 8, 10, 8);
+		rtspForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
 		m_rtspPortEdit = new QLineEdit(QString::fromStdString(dest->rtsp_port), this);
 		m_rtspMountEdit = new QLineEdit(QString::fromStdString(dest->rtsp_mount), this);
 		m_rtspPipeEdit = new QLineEdit(QString::fromStdString(dest->rtsp_pipeline), this);
 		rtspForm->addRow("RTSP Port:", m_rtspPortEdit);
 		rtspForm->addRow("Mount Path:", m_rtspMountEdit);
 		rtspForm->addRow("Payloader Pipeline:", m_rtspPipeEdit);
+		m_typeStack->addWidget(m_rtspGroup);
 
 		/* WebRTC Section */
 		m_webrtcGroup = new QGroupBox("WebRTC WHEP Settings", this);
 		QFormLayout *webrtcForm = new QFormLayout(m_webrtcGroup);
+		webrtcForm->setSpacing(8);
+		webrtcForm->setContentsMargins(10, 8, 10, 8);
+		webrtcForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
 		m_webrtcPortEdit = new QLineEdit(QString::fromStdString(dest->webrtc_port), this);
 		m_webrtcStunEdit = new QLineEdit(QString::fromStdString(dest->webrtc_stun), this);
 		m_webrtcRootEdit = new QLineEdit(QString::fromStdString(dest->webrtc_web_root), this);
 		webrtcForm->addRow("WHEP Port:", m_webrtcPortEdit);
 		webrtcForm->addRow("STUN Server:", m_webrtcStunEdit);
 		webrtcForm->addRow("Web Root Path:", m_webrtcRootEdit);
+		m_typeStack->addWidget(m_webrtcGroup);
 
-		/* Custom Pipeline Section */
+		/* Custom Pipeline Section - fills full width and height with no empty top/bottom space */
 		m_customGroup = new QGroupBox("Custom GStreamer Sink Settings", this);
-		QFormLayout *customForm = new QFormLayout(m_customGroup);
+		QVBoxLayout *customLayout = new QVBoxLayout(m_customGroup);
+		customLayout->setSpacing(6);
+		customLayout->setContentsMargins(10, 8, 10, 8);
+		QLabel *customPipeLabel = new QLabel("GStreamer Pipeline:", m_customGroup);
 		m_customPipeEdit = new QPlainTextEdit(QString::fromStdString(dest->custom_pipeline), this);
-		m_customPipeEdit->setMaximumHeight(80);
-		customForm->addRow("GStreamer Pipeline:", m_customPipeEdit);
+		m_customPipeEdit->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+		customLayout->addWidget(customPipeLabel);
+		customLayout->addWidget(m_customPipeEdit, 1);
+		m_typeStack->addWidget(m_customGroup);
 
 		layout->addLayout(form);
-		layout->addWidget(m_rtspGroup);
-		layout->addWidget(m_webrtcGroup);
-		layout->addWidget(m_customGroup);
+		layout->addWidget(m_typeStack, 1);
 
 		connect(m_typeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &GstDestinationDetailDialog::onTypeChanged);
 		onTypeChanged();
@@ -698,9 +817,12 @@ private:
 	void onTypeChanged()
 	{
 		DestinationType t = (DestinationType)m_typeCombo->currentData().toInt();
-		m_rtspGroup->setVisible(t == DEST_TYPE_RTSP);
-		m_webrtcGroup->setVisible(t == DEST_TYPE_WEBRTC);
-		m_customGroup->setVisible(t == DEST_TYPE_CUSTOM);
+		if (t == DEST_TYPE_RTSP)
+			m_typeStack->setCurrentWidget(m_rtspGroup);
+		else if (t == DEST_TYPE_WEBRTC)
+			m_typeStack->setCurrentWidget(m_webrtcGroup);
+		else if (t == DEST_TYPE_CUSTOM)
+			m_typeStack->setCurrentWidget(m_customGroup);
 	}
 
 	void saveAndClose()
@@ -726,6 +848,7 @@ private:
 	QLineEdit *m_nameEdit;
 	QComboBox *m_typeCombo;
 	QCheckBox *m_autostartCheck;
+	QStackedWidget *m_typeStack;
 
 	QGroupBox *m_rtspGroup;
 	QLineEdit *m_rtspPortEdit;
@@ -750,28 +873,56 @@ public:
 		: QDialog(parent), m_hub(hub)
 	{
 		setWindowTitle(QString("Edit Master Hub: %1").arg(QString::fromStdString(hub->name)));
-		resize(680, 600);
+		resize(680, 640);
 
 		QVBoxLayout *rootLayout = new QVBoxLayout(this);
+		rootLayout->setContentsMargins(12, 12, 12, 12);
 		rootLayout->setSpacing(8);
 
-		/* Master Hardware Encoder Settings */
-		QGroupBox *masterGroup = new QGroupBox("Master Pipeline & Hardware Encoder", this);
-		QFormLayout *formLayout = new QFormLayout(masterGroup);
-		formLayout->setLabelAlignment(Qt::AlignLeft);
-		formLayout->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
+		/* 1. Master Name (On top, NOT included in any collapsible) */
+		QHBoxLayout *topLayout = new QHBoxLayout();
+		topLayout->setSpacing(10);
+		topLayout->setContentsMargins(2, 2, 2, 4);
 
+		QLabel *nameLabel = new QLabel("Master Name:", this);
+		nameLabel->setStyleSheet("font-weight: bold; font-size: 13px; color: #ffffff;");
 		m_nameEdit = new QLineEdit(QString::fromStdString(hub->name), this);
-		formLayout->addRow("Master Name:", m_nameEdit);
+		m_nameEdit->setStyleSheet(
+			"QLineEdit { background-color: #1a1c24; border: 1px solid #3c4150; border-radius: 4px; padding: 6px 10px; color: #ffffff; font-size: 13px; font-weight: bold; }"
+			"QLineEdit:focus { border: 1px solid #588bf6; }"
+		);
+		topLayout->addWidget(nameLabel);
+		topLayout->addWidget(m_nameEdit, 1);
+		rootLayout->addLayout(topLayout);
+
+		/* Scroll Area for 3 Collapsible Sections */
+		QScrollArea *scrollArea = new QScrollArea(this);
+		scrollArea->setWidgetResizable(true);
+		scrollArea->setFrameShape(QFrame::NoFrame);
+		scrollArea->setStyleSheet("QScrollArea { background: transparent; } QWidget#ScrollContainer { background: transparent; }");
+
+		QWidget *scrollContainer = new QWidget();
+		scrollContainer->setObjectName("ScrollContainer");
+		QVBoxLayout *scrollLayout = new QVBoxLayout(scrollContainer);
+		scrollLayout->setContentsMargins(0, 0, 4, 0);
+		scrollLayout->setSpacing(10);
+
+		/* 2. First Collapsible: Source (what to capture, capture method, etc.) */
+		m_secSource = new CollapsibleSection("Source (Capture Settings)", true, this);
+		QWidget *sourceWidget = new QWidget();
+		QFormLayout *sourceForm = new QFormLayout(sourceWidget);
+		sourceForm->setContentsMargins(12, 12, 12, 12);
+		sourceForm->setSpacing(8);
+		sourceForm->setLabelAlignment(Qt::AlignLeft);
+		sourceForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
 
 		m_sourceTypeCombo = new QComboBox(this);
 		m_sourceTypeCombo->addItem("Program Output");
 		m_sourceTypeCombo->addItem("Scene");
 		m_sourceTypeCombo->addItem("Source");
 		m_sourceTypeCombo->setCurrentText(QString::fromStdString(hub->source_type));
-		formLayout->addRow("Capture Source:", m_sourceTypeCombo);
+		sourceForm->addRow("Capture Source:", m_sourceTypeCombo);
 
-		/* Capture Method Dropdown (4 Callbacks) */
 		m_captureMethodCombo = new QComboBox(this);
 		m_captureMethodCombo->addItem("Render Callback (GPU Direct Texture)");
 		m_captureMethodCombo->addItem("Encoder Callback (GPU Hardware Texture Encoder)");
@@ -780,13 +931,27 @@ public:
 		int methodIdx = m_captureMethodCombo->findText(QString::fromStdString(hub->capture_method));
 		if (methodIdx >= 0)
 			m_captureMethodCombo->setCurrentIndex(methodIdx);
-		formLayout->addRow("Capture Method:", m_captureMethodCombo);
+		sourceForm->addRow("Capture Method:", m_captureMethodCombo);
 
-		/* Target Scene/Source Dropdown (Conditional - hidden for Program Output) */
 		m_targetLabel = new QLabel("Target Name:", this);
 		m_targetCombo = new QComboBox(this);
 		m_targetCombo->setEditable(false);
-		formLayout->addRow(m_targetLabel, m_targetCombo);
+		sourceForm->addRow(m_targetLabel, m_targetCombo);
+
+		m_secSource->setContentLayout(sourceForm);
+		scrollLayout->addWidget(m_secSource);
+
+		connect(m_sourceTypeCombo, &QComboBox::currentTextChanged, this, &GstMasterDetailDialog::populateTargetCombo);
+		populateTargetCombo(m_sourceTypeCombo->currentText());
+
+		/* 3. Second Collapsible: Encoder (hardware encoder, pipeline, bitrate, etc.) */
+		m_secEncoder = new CollapsibleSection("Encoder (Pipeline and Compression)", true, this);
+		QWidget *encoderWidget = new QWidget();
+		QFormLayout *encoderForm = new QFormLayout(encoderWidget);
+		encoderForm->setContentsMargins(12, 12, 12, 12);
+		encoderForm->setSpacing(8);
+		encoderForm->setLabelAlignment(Qt::AlignLeft);
+		encoderForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
 
 		m_encoderCombo = new QComboBox(this);
 		m_encoderCombo->addItem("Auto Detect GPU", "auto");
@@ -796,53 +961,53 @@ public:
 		m_encoderCombo->addItem("Software (x264enc)", "x264enc");
 		int encIdx = m_encoderCombo->findData(QString::fromStdString(hub->gpu_encoder_type));
 		if (encIdx >= 0) m_encoderCombo->setCurrentIndex(encIdx);
-		formLayout->addRow("Hardware Encoder:", m_encoderCombo);
+		encoderForm->addRow("Hardware Encoder:", m_encoderCombo);
 
 		m_bitrateSpin = new QSpinBox(this);
 		m_bitrateSpin->setRange(500, 50000);
 		m_bitrateSpin->setSingleStep(500);
 		m_bitrateSpin->setValue(hub->bitrate_kbps);
 		m_bitrateSpin->setSuffix(" kbps");
-		formLayout->addRow("Master Bitrate:", m_bitrateSpin);
+		encoderForm->addRow("Master Bitrate:", m_bitrateSpin);
 
 		m_keyintSpin = new QSpinBox(this);
 		m_keyintSpin->setRange(1, 10);
 		m_keyintSpin->setValue(hub->keyint_sec);
 		m_keyintSpin->setSuffix(" sec");
-		formLayout->addRow("Keyframe Interval:", m_keyintSpin);
+		encoderForm->addRow("Keyframe Interval:", m_keyintSpin);
 
 		m_customPipeEdit = new QPlainTextEdit(QString::fromStdString(hub->master_pipeline), this);
 		m_customPipeEdit->setPlaceholderText("Optional: Custom GStreamer Master Pipeline string (leave empty for auto GPU encoder)");
 		m_customPipeEdit->setMaximumHeight(45);
-		formLayout->addRow("Custom Pipeline:", m_customPipeEdit);
+		encoderForm->addRow("Custom Pipeline:", m_customPipeEdit);
 
-		rootLayout->addWidget(masterGroup);
+		m_secEncoder->setContentLayout(encoderForm);
+		scrollLayout->addWidget(m_secEncoder);
 
-		connect(m_sourceTypeCombo, &QComboBox::currentTextChanged, this, &GstMasterDetailDialog::populateTargetCombo);
-		populateTargetCombo(m_sourceTypeCombo->currentText());
-
-		/* Multiple Destinations Manager (List Box) */
-		QGroupBox *destGroup = new QGroupBox("Destinations (RTSP, WebRTC, Custom Sinks)", this);
-		QVBoxLayout *destLayout = new QVBoxLayout(destGroup);
+		/* 4. Third Collapsible: Output (destinations list & action buttons) */
+		m_secOutput = new CollapsibleSection("Output (Destinations and Streaming Sinks)", true, this);
+		QWidget *outputWidget = new QWidget();
+		QVBoxLayout *outputLayout = new QVBoxLayout(outputWidget);
+		outputLayout->setContentsMargins(12, 12, 12, 12);
+		outputLayout->setSpacing(8);
 
 		m_destList = new QListWidget(this);
 		m_destList->setSelectionMode(QAbstractItemView::SingleSelection);
+		m_destList->setMinimumHeight(150);
 		m_destList->setStyleSheet(
 			"QListWidget { background-color: #141519; border: 1px solid #2c2d38; border-radius: 4px; outline: 0; padding: 2px; }"
-			"QListWidget::item { padding: 6px 8px; margin: 2px; border-radius: 4px; border: 2px solid transparent; color: #d0d4e0; }"
-			"QListWidget::item:hover:!selected { background-color: #242630; color: #ffffff; }"
-			"QListWidget::item:selected { background-color: #2b5bc7; color: #ffffff; border: 2px solid #588bf6; border-radius: 4px; }"
-			"QListWidget::item:selected:focus { background-color: #2b5bc7; color: #ffffff; border: 2px solid #ffffff; border-radius: 4px; }"
+			"QListWidget::item { padding: 3px 5px; margin: 1px; border-radius: 4px; border: 1px solid transparent; color: #d0d4e0; }"
+			"QListWidget::item:hover:!selected { background-color: #202430; }"
+			"QListWidget::item:selected { background-color: #2b5bc7; border: 1px solid #588bf6; border-radius: 4px; }"
+			"QListWidget::item:selected:focus { background-color: #2b5bc7; border: 1px solid rgba(255, 255, 255, 0.75); border-radius: 4px; }"
 		);
-		destLayout->addWidget(m_destList);
+		outputLayout->addWidget(m_destList);
 
-		/* OBS-style Destination Action Toolbar */
 		QHBoxLayout *btnLayout = new QHBoxLayout();
 		QPushButton *btnAddRtsp = new QPushButton("+ Add RTSP", this);
 		QPushButton *btnAddWebRTC = new QPushButton("+ Add WebRTC", this);
 		QPushButton *btnAddCustom = new QPushButton("+ Add Custom Sink", this);
 		QPushButton *btnRemove = new QPushButton("- Remove", this);
-		QPushButton *btnToggleDest = new QPushButton("Start / Stop", this);
 		QPushButton *btnEditDest = new QPushButton("Properties", this);
 
 		btnLayout->addWidget(btnAddRtsp);
@@ -850,21 +1015,23 @@ public:
 		btnLayout->addWidget(btnAddCustom);
 		btnLayout->addWidget(btnRemove);
 		btnLayout->addStretch();
-		btnLayout->addWidget(btnToggleDest);
 		btnLayout->addWidget(btnEditDest);
-		destLayout->addLayout(btnLayout);
+		outputLayout->addLayout(btnLayout);
 
 		connect(btnAddRtsp, &QPushButton::clicked, this, &GstMasterDetailDialog::addRtspDestination);
 		connect(btnAddWebRTC, &QPushButton::clicked, this, &GstMasterDetailDialog::addWebRTCDestination);
 		connect(btnAddCustom, &QPushButton::clicked, this, &GstMasterDetailDialog::addCustomDestination);
 		connect(btnRemove, &QPushButton::clicked, this, &GstMasterDetailDialog::removeSelectedDestination);
-		connect(btnToggleDest, &QPushButton::clicked, this, &GstMasterDetailDialog::toggleSelectedDestination);
 		connect(btnEditDest, &QPushButton::clicked, this, &GstMasterDetailDialog::editSelectedDestination);
 
-		/* Double-Click on Destination item -> opens Destination Detail Dialog */
 		connect(m_destList, &QListWidget::itemDoubleClicked, this, &GstMasterDetailDialog::onDestDoubleClicked);
 
-		rootLayout->addWidget(destGroup);
+		m_secOutput->setContentLayout(outputLayout);
+		scrollLayout->addWidget(m_secOutput);
+		scrollLayout->addStretch(1);
+
+		scrollArea->setWidget(scrollContainer);
+		rootLayout->addWidget(scrollArea, 1);
 
 		/* Dialog Footer */
 		QHBoxLayout *footerLayout = new QHBoxLayout();
@@ -920,9 +1087,9 @@ private:
 		for (size_t i = 0; i < m_hub->destinations.size(); i++) {
 			const auto &dest = m_hub->destinations[i];
 
-			QString statusIcon = dest->is_active ? "● " : "○ ";
-			QString typeBadge = (dest->type == DEST_TYPE_RTSP) ? "[RTSP]" :
-			                    (dest->type == DEST_TYPE_WEBRTC) ? "[WebRTC]" : "[Custom]";
+			QString typeBadge = (dest->type == DEST_TYPE_RTSP) ? "RTSP" :
+			                    (dest->type == DEST_TYPE_WEBRTC) ? "WebRTC" : "Custom";
+
 			QString targetStr;
 			if (dest->type == DEST_TYPE_RTSP)
 				targetStr = QString(":%1%2").arg(QString::fromStdString(dest->rtsp_port), QString::fromStdString(dest->rtsp_mount));
@@ -934,16 +1101,110 @@ private:
 			QString statusStr = dest->is_active ? "Running" : "Stopped";
 			QString autoStr = dest->autostart ? " • Autostart" : "";
 
-			QString title = QString("%1%2 %3").arg(statusIcon, typeBadge, QString::fromStdString(dest->name));
-			QString sub = QString("     Target: %1  |  Status: %2%3").arg(targetStr, statusStr, autoStr);
+			QWidget *rowWidget = new QWidget();
+			rowWidget->setObjectName("DestRowWidget");
+			rowWidget->setStyleSheet("QWidget#DestRowWidget { background: transparent; }");
+			QHBoxLayout *rowLayout = new QHBoxLayout(rowWidget);
+			rowLayout->setContentsMargins(8, 4, 8, 4);
+			rowLayout->setSpacing(10);
 
-			QListWidgetItem *item = new QListWidgetItem(title + "\n" + sub);
-			if (dest->is_active) {
-				item->setForeground(QBrush(QColor(50, 205, 80)));
-			} else {
-				item->setForeground(QBrush(QColor(185, 190, 200)));
-			}
-			m_destList->addItem(item);
+			/* Status Indicator Dot - clean subtle dot matching OBS style */
+			QLabel *statusDot = new QLabel(dest->is_active ? "●" : "○", rowWidget);
+			statusDot->setFixedWidth(14);
+			statusDot->setStyleSheet("color: #cbd5e1; font-size: 13px;");
+			rowLayout->addWidget(statusDot);
+
+			/* Info Labels - standard neutral OBS colors, no bright tints */
+			QVBoxLayout *infoLayout = new QVBoxLayout();
+			infoLayout->setSpacing(2);
+			infoLayout->setContentsMargins(0, 0, 0, 0);
+
+			QHBoxLayout *titleLayout = new QHBoxLayout();
+			titleLayout->setSpacing(6);
+			titleLayout->setContentsMargins(0, 0, 0, 0);
+
+			QLabel *badgeLabel = new QLabel(QString("[%1]").arg(typeBadge), rowWidget);
+			badgeLabel->setStyleSheet("color: #cbd5e1; font-weight: bold; font-size: 11px;");
+			titleLayout->addWidget(badgeLabel);
+
+			QLabel *nameLabel = new QLabel(QString::fromStdString(dest->name), rowWidget);
+			nameLabel->setStyleSheet("color: #ffffff; font-weight: 600; font-size: 12px;");
+			titleLayout->addWidget(nameLabel);
+			titleLayout->addStretch(1);
+			infoLayout->addLayout(titleLayout);
+
+			QLabel *descLabel = new QLabel(QString("Target: %1  |  Status: %2%3").arg(targetStr, statusStr, autoStr), rowWidget);
+			descLabel->setStyleSheet("color: #94a3b8; font-size: 11px;");
+			infoLayout->addWidget(descLabel);
+
+			rowLayout->addLayout(infoLayout, 1);
+
+			/* Separate Start and Stop buttons inside list item - solid OBS default button style (not transparent) */
+			QHBoxLayout *actionLayout = new QHBoxLayout();
+			actionLayout->setSpacing(6);
+			actionLayout->setContentsMargins(0, 0, 0, 0);
+
+			const QString obsBtnStyle =
+				"QPushButton {"
+				"  background-color: #2b313d;"
+				"  border: 1px solid #3c4354;"
+				"  border-radius: 4px;"
+				"  color: #e2e8f0;"
+				"  font-size: 11px;"
+				"  font-weight: 500;"
+				"  padding: 3px 10px;"
+				"}"
+				"QPushButton:hover:!disabled {"
+				"  background-color: #383f4f;"
+				"  border-color: #4f586d;"
+				"  color: #ffffff;"
+				"}"
+				"QPushButton:pressed {"
+				"  background-color: #1e222b;"
+				"}"
+				"QPushButton:disabled {"
+				"  background-color: #21252e;"
+				"  border: 1px solid #2b313d;"
+				"  color: #636b7b;"
+				"}";
+
+			QPushButton *btnStart = new QPushButton("Start", rowWidget);
+			btnStart->setFixedHeight(24);
+			btnStart->setMinimumWidth(52);
+			btnStart->setStyleSheet(obsBtnStyle);
+			btnStart->setEnabled(!dest->is_active);
+
+			QPushButton *btnStop = new QPushButton("Stop", rowWidget);
+			btnStop->setFixedHeight(24);
+			btnStop->setMinimumWidth(52);
+			btnStop->setStyleSheet(obsBtnStyle);
+			btnStop->setEnabled(dest->is_active);
+
+			connect(btnStart, &QPushButton::clicked, [this, i]() {
+				m_destList->setCurrentRow((int)i);
+				if (i < m_hub->destinations.size()) {
+					start_destination(m_hub.get(), m_hub->destinations[i].get());
+					save_dock_config();
+					refreshDestList();
+				}
+			});
+
+			connect(btnStop, &QPushButton::clicked, [this, i]() {
+				m_destList->setCurrentRow((int)i);
+				if (i < m_hub->destinations.size()) {
+					stop_destination(m_hub.get(), m_hub->destinations[i].get());
+					save_dock_config();
+					refreshDestList();
+				}
+			});
+
+			actionLayout->addWidget(btnStart);
+			actionLayout->addWidget(btnStop);
+			rowLayout->addLayout(actionLayout);
+
+			QListWidgetItem *item = new QListWidgetItem(m_destList);
+			item->setSizeHint(QSize(0, 48));
+			m_destList->setItemWidget(item, rowWidget);
 		}
 
 		if (selectedRow >= 0 && selectedRow < m_destList->count()) {
@@ -1067,6 +1328,10 @@ private:
 	QSpinBox *m_keyintSpin;
 	QPlainTextEdit *m_customPipeEdit;
 	QListWidget *m_destList;
+
+	CollapsibleSection *m_secSource;
+	CollapsibleSection *m_secEncoder;
+	CollapsibleSection *m_secOutput;
 };
 
 /* --------------------------------------------------------------------------
@@ -1086,10 +1351,10 @@ public:
 		m_hubList->setSelectionMode(QAbstractItemView::SingleSelection);
 		m_hubList->setStyleSheet(
 			"QListWidget { background-color: #141519; border: 1px solid #2c2d38; border-radius: 4px; outline: 0; padding: 2px; }"
-			"QListWidget::item { padding: 6px 8px; margin: 2px; border-radius: 4px; border: 2px solid transparent; color: #d0d4e0; }"
+			"QListWidget::item { padding: 6px 8px; margin: 1px; border-radius: 4px; border: 1px solid transparent; color: #d0d4e0; }"
 			"QListWidget::item:hover:!selected { background-color: #242630; color: #ffffff; }"
-			"QListWidget::item:selected { background-color: #2b5bc7; color: #ffffff; border: 2px solid #588bf6; border-radius: 4px; }"
-			"QListWidget::item:selected:focus { background-color: #2b5bc7; color: #ffffff; border: 2px solid #ffffff; border-radius: 4px; }"
+			"QListWidget::item:selected { background-color: #2b5bc7; color: #ffffff; border: 1px solid #588bf6; border-radius: 4px; }"
+			"QListWidget::item:selected:focus { background-color: #2b5bc7; color: #ffffff; border: 1px solid rgba(255, 255, 255, 0.75); border-radius: 4px; }"
 		);
 		layout->addWidget(m_hubList);
 
