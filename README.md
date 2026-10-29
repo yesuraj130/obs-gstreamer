@@ -90,6 +90,12 @@ Linux webcam example with watchdog (automatically restarts the pipeline if the w
 If you don't understand what is happening in these lines please check the
 GStreamer documentation as mentioned above!
 
+## Master Hub dock settings
+
+The GStreamer Master Hub dock stores its hubs and destinations in OBS-managed
+scene-collection data. Each scene collection therefore has its own Master Hub
+configuration, which OBS saves and restores with that collection.
+
 
 Build
 ---

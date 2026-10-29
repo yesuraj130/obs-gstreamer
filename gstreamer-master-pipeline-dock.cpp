@@ -5,7 +5,7 @@
  * - Main Window: Listed in OBS "Docks" menu, displays all configured Master Hubs.
  * - Child Window (Double-click / Configure): Opens detailed editor for master encoder & destinations.
  * - Destination Editor Dialog: Edit individual RTSP, WebRTC, or Custom pipeline properties.
- * - JSON Persistence: Automatically saves & restores Master Hub settings across OBS sessions.
+ * - Scene Collection Persistence: Saves & restores Master Hub settings through OBS.
  * - Live Status Export: Writes JSON telemetry to /tmp/obs_gstreamer_hubs.json for Web UI monitoring.
  */
 
@@ -24,9 +24,6 @@
 #include "gstreamer-helper.h"
 
 #include <QtCore/qglobal.h>
-#if QT_VERSION < QT_VERSION_CHECK(6, 4, 0)
-#error "obs-gstreamer requires Qt 6.4.0 or newer"
-#endif
 
 extern "C" {
 bool obs_frontend_add_dock_by_id(const char *id, const char *title, void *dock) __attribute__((weak));
@@ -36,7 +33,6 @@ bool obs_frontend_add_dock_by_id(const char *id, const char *title, void *dock) 
 #include <QtCore/QJsonObject>
 #include <QtCore/QJsonArray>
 #include <QtCore/QFile>
-#include <QtCore/QDir>
 #include <QtCore/QDateTime>
 
 #include <QtGui/QColor>
@@ -191,17 +187,11 @@ static std::vector<std::shared_ptr<GstMasterHub>> g_master_hubs;
 
 class GstMasterDockWidget;
 static GstMasterDockWidget *g_dock_widget = nullptr;
+static void stop_destination(GstMasterHub *hub, GstDestination *dest);
 
 /* --------------------------------------------------------------------------
  * Persistence & Telemetry Helpers
  * -------------------------------------------------------------------------- */
-static QString get_config_file_path()
-{
-	QString dirPath = "/root/.config/obs-studio/plugin_config/obs-gstreamer";
-	QDir().mkpath(dirPath);
-	return dirPath + "/master_hubs.json";
-}
-
 static void export_dock_status_json()
 {
 	QJsonArray hubsArray;
@@ -246,109 +236,133 @@ static void export_dock_status_json()
 	}
 }
 
-static void save_dock_config()
+static std::string read_data_string(obs_data_t *data, const char *key, const char *fallback = "")
 {
-	QJsonArray hubsArray;
-	for (const auto &hub : g_master_hubs) {
-		QJsonObject hubObj;
-		hubObj["name"] = QString::fromStdString(hub->name);
-		hubObj["source_type"] = QString::fromStdString(hub->source_type);
-		hubObj["source_name"] = QString::fromStdString(hub->source_name);
-		hubObj["scene_name"] = QString::fromStdString(hub->scene_name);
-		hubObj["capture_method"] = QString::fromStdString(hub->capture_method);
-		hubObj["gpu_encoder_type"] = QString::fromStdString(hub->gpu_encoder_type);
-		hubObj["bitrate_kbps"] = hub->bitrate_kbps;
-		hubObj["keyint_sec"] = hub->keyint_sec;
-		hubObj["master_pipeline"] = QString::fromStdString(hub->master_pipeline);
-
-		QJsonArray destsArray;
-		for (const auto &d : hub->destinations) {
-			QJsonObject dObj;
-			dObj["name"] = QString::fromStdString(d->name);
-			dObj["type"] = (int)d->type;
-			dObj["enabled"] = d->enabled;
-			dObj["autostart"] = d->autostart;
-			dObj["rtsp_port"] = QString::fromStdString(d->rtsp_port);
-			dObj["rtsp_mount"] = QString::fromStdString(d->rtsp_mount);
-			dObj["rtsp_pipeline"] = QString::fromStdString(d->rtsp_pipeline);
-			dObj["webrtc_port"] = QString::fromStdString(d->webrtc_port);
-			dObj["webrtc_stun"] = QString::fromStdString(d->webrtc_stun);
-			dObj["webrtc_web_root"] = QString::fromStdString(d->webrtc_web_root);
-			dObj["custom_pipeline"] = QString::fromStdString(d->custom_pipeline);
-			destsArray.append(dObj);
-		}
-		hubObj["destinations"] = destsArray;
-		hubsArray.append(hubObj);
-	}
-
-	QJsonObject rootObj;
-	rootObj["master_hubs"] = hubsArray;
-
-	QFile file(get_config_file_path());
-	if (file.open(QIODevice::WriteOnly)) {
-		file.write(QJsonDocument(rootObj).toJson(QJsonDocument::Indented));
-		file.close();
-	}
-
-	export_dock_status_json();
+	const char *value = obs_data_get_string(data, key);
+	return value ? value : fallback;
 }
 
-static void load_dock_config()
+static void save_dock_config(obs_data_t *save_data)
 {
-	QFile file(get_config_file_path());
-	if (!file.open(QIODevice::ReadOnly))
-		return;
+	obs_data_array_t *hubsArray = obs_data_array_create();
+	for (const auto &hub : g_master_hubs) {
+		obs_data_t *hubObj = obs_data_create();
+		obs_data_set_string(hubObj, "name", hub->name.c_str());
+		obs_data_set_string(hubObj, "source_type", hub->source_type.c_str());
+		obs_data_set_string(hubObj, "source_name", hub->source_name.c_str());
+		obs_data_set_string(hubObj, "scene_name", hub->scene_name.c_str());
+		obs_data_set_string(hubObj, "capture_method", hub->capture_method.c_str());
+		obs_data_set_string(hubObj, "gpu_encoder_type", hub->gpu_encoder_type.c_str());
+		obs_data_set_int(hubObj, "bitrate_kbps", hub->bitrate_kbps);
+		obs_data_set_int(hubObj, "keyint_sec", hub->keyint_sec);
+		obs_data_set_string(hubObj, "master_pipeline", hub->master_pipeline.c_str());
 
-	QByteArray data = file.readAll();
-	file.close();
+		obs_data_array_t *destsArray = obs_data_array_create();
+		for (const auto &d : hub->destinations) {
+			obs_data_t *dObj = obs_data_create();
+			obs_data_set_string(dObj, "name", d->name.c_str());
+			obs_data_set_int(dObj, "type", (int)d->type);
+			obs_data_set_bool(dObj, "enabled", d->enabled);
+			obs_data_set_bool(dObj, "autostart", d->autostart);
+			obs_data_set_string(dObj, "rtsp_port", d->rtsp_port.c_str());
+			obs_data_set_string(dObj, "rtsp_mount", d->rtsp_mount.c_str());
+			obs_data_set_string(dObj, "rtsp_pipeline", d->rtsp_pipeline.c_str());
+			obs_data_set_string(dObj, "webrtc_port", d->webrtc_port.c_str());
+			obs_data_set_string(dObj, "webrtc_stun", d->webrtc_stun.c_str());
+			obs_data_set_string(dObj, "webrtc_web_root", d->webrtc_web_root.c_str());
+			obs_data_set_string(dObj, "custom_pipeline", d->custom_pipeline.c_str());
+			obs_data_array_push_back(destsArray, dObj);
+			obs_data_release(dObj);
+		}
+		obs_data_set_array(hubObj, "destinations", destsArray);
+		obs_data_array_push_back(hubsArray, hubObj);
+		obs_data_array_release(destsArray);
+		obs_data_release(hubObj);
+	}
 
-	QJsonDocument doc = QJsonDocument::fromJson(data);
-	if (!doc.isObject())
-		return;
+	obs_data_t *dock_data = obs_data_create();
+	obs_data_set_array(dock_data, "master_hubs", hubsArray);
+	obs_data_set_obj(save_data, "gstreamer-master-pipeline-dock", dock_data);
+	obs_data_release(dock_data);
+	obs_data_array_release(hubsArray);
+}
 
-	QJsonObject rootObj = doc.object();
-	QJsonArray hubsArray = rootObj["master_hubs"].toArray();
-	if (hubsArray.isEmpty())
-		return;
-
+static void load_dock_config(obs_data_t *save_data)
+{
+	for (auto &hub : g_master_hubs) {
+		for (auto &dest : hub->destinations)
+			stop_destination(hub.get(), dest.get());
+	}
 	g_master_hubs.clear();
 
-	for (const auto &val : hubsArray) {
-		QJsonObject hubObj = val.toObject();
+	obs_data_t *dock_data = obs_data_get_obj(save_data, "gstreamer-master-pipeline-dock");
+	if (!dock_data)
+		return;
+
+	obs_data_array_t *hubsArray = obs_data_get_array(dock_data, "master_hubs");
+	obs_data_release(dock_data);
+	if (!hubsArray)
+		return;
+
+	const size_t hub_count = obs_data_array_count(hubsArray);
+	for (size_t i = 0; i < hub_count; i++) {
+		obs_data_t *hubObj = obs_data_array_item(hubsArray, i);
+		if (!hubObj)
+			continue;
 		auto hub = std::make_shared<GstMasterHub>();
-		hub->name = hubObj["name"].toString("Master Hub").toStdString();
-		hub->source_type = hubObj["source_type"].toString("Program Output").toStdString();
-		hub->source_name = hubObj["source_name"].toString("").toStdString();
-		hub->scene_name = hubObj["scene_name"].toString("").toStdString();
-		hub->capture_method = hubObj["capture_method"].toString("Render Callback (GPU Direct Texture)").toStdString();
-		hub->gpu_encoder_type = hubObj["gpu_encoder_type"].toString("auto").toStdString();
-		hub->bitrate_kbps = hubObj["bitrate_kbps"].toInt(4000);
-		hub->keyint_sec = hubObj["keyint_sec"].toInt(1);
-		hub->master_pipeline = hubObj["master_pipeline"].toString("").toStdString();
+		hub->name = read_data_string(hubObj, "name", "Master Hub");
+		if (hub->name.empty())
+			hub->name = "Master Hub";
+		hub->source_type = read_data_string(hubObj, "source_type", "Program Output");
+		hub->source_name = read_data_string(hubObj, "source_name");
+		hub->scene_name = read_data_string(hubObj, "scene_name");
+		hub->capture_method = read_data_string(hubObj, "capture_method", "Render Callback (GPU Direct Texture)");
+		hub->gpu_encoder_type = read_data_string(hubObj, "gpu_encoder_type", "auto");
+		hub->bitrate_kbps = obs_data_has_user_value(hubObj, "bitrate_kbps")
+			? (int)obs_data_get_int(hubObj, "bitrate_kbps")
+			: 4000;
+		hub->keyint_sec = obs_data_has_user_value(hubObj, "keyint_sec")
+			? (int)obs_data_get_int(hubObj, "keyint_sec")
+			: 1;
+		hub->master_pipeline = read_data_string(hubObj, "master_pipeline");
 
-		QJsonArray destsArray = hubObj["destinations"].toArray();
-		for (const auto &dVal : destsArray) {
-			QJsonObject dObj = dVal.toObject();
-			auto dest = std::make_shared<GstDestination>();
-			dest->name = dObj["name"].toString("Destination").toStdString();
-			dest->type = (DestinationType)dObj["type"].toInt(0);
-			dest->enabled = dObj["enabled"].toBool(true);
-			dest->autostart = dObj["autostart"].toBool(false);
-			dest->rtsp_port = dObj["rtsp_port"].toString("8554").toStdString();
-			dest->rtsp_mount = dObj["rtsp_mount"].toString("/live").toStdString();
-			dest->rtsp_pipeline = dObj["rtsp_pipeline"].toString(DEFAULT_RTSP_PIPELINE).toStdString();
-			dest->webrtc_port = dObj["webrtc_port"].toString("8888").toStdString();
-			dest->webrtc_stun = dObj["webrtc_stun"].toString("").toStdString();
-			dest->webrtc_web_root = dObj["webrtc_web_root"].toString("").toStdString();
-			dest->custom_pipeline = dObj["custom_pipeline"].toString("autovideosink sync=false").toStdString();
+		obs_data_array_t *destsArray = obs_data_get_array(hubObj, "destinations");
+		if (destsArray) {
+			const size_t dest_count = obs_data_array_count(destsArray);
+			for (size_t j = 0; j < dest_count; j++) {
+				obs_data_t *dObj = obs_data_array_item(destsArray, j);
+				if (!dObj)
+					continue;
+				auto dest = std::make_shared<GstDestination>();
+				dest->name = read_data_string(dObj, "name", "Destination");
+				if (dest->name.empty())
+					dest->name = "Destination";
+				const int type = (int)obs_data_get_int(dObj, "type");
+				dest->type = (type >= DEST_TYPE_RTSP && type <= DEST_TYPE_CUSTOM)
+					? (DestinationType)type
+					: DEST_TYPE_RTSP;
+				dest->enabled = obs_data_has_user_value(dObj, "enabled")
+					? obs_data_get_bool(dObj, "enabled")
+					: true;
+				dest->autostart = obs_data_get_bool(dObj, "autostart");
+				dest->rtsp_port = read_data_string(dObj, "rtsp_port", "8554");
+				dest->rtsp_mount = read_data_string(dObj, "rtsp_mount", "/live");
+				dest->rtsp_pipeline = read_data_string(dObj, "rtsp_pipeline", DEFAULT_RTSP_PIPELINE);
+				dest->webrtc_port = read_data_string(dObj, "webrtc_port", "8888");
+				dest->webrtc_stun = read_data_string(dObj, "webrtc_stun");
+				dest->webrtc_web_root = read_data_string(dObj, "webrtc_web_root");
+				dest->custom_pipeline = read_data_string(dObj, "custom_pipeline", "autovideosink sync=false");
 
-			hub->destinations.push_back(dest);
+				hub->destinations.push_back(dest);
+				obs_data_release(dObj);
+			}
+			obs_data_array_release(destsArray);
 		}
 
 		g_master_hubs.push_back(hub);
+		obs_data_release(hubObj);
 	}
-
-	export_dock_status_json();
+	obs_data_array_release(hubsArray);
 }
 
 /* --------------------------------------------------------------------------
@@ -1194,7 +1208,7 @@ private:
 				m_destList->setCurrentRow((int)i);
 				if (i < m_hub->destinations.size()) {
 					start_destination(m_hub.get(), m_hub->destinations[i].get());
-					save_dock_config();
+					export_dock_status_json();
 					refreshDestList();
 				}
 			});
@@ -1203,7 +1217,7 @@ private:
 				m_destList->setCurrentRow((int)i);
 				if (i < m_hub->destinations.size()) {
 					stop_destination(m_hub.get(), m_hub->destinations[i].get());
-					save_dock_config();
+					export_dock_status_json();
 					refreshDestList();
 				}
 			});
@@ -1241,7 +1255,7 @@ private:
 		if (idx < 0 || idx >= (int)m_hub->destinations.size()) return;
 		GstDestinationDetailDialog dlg(m_hub->destinations[idx], this);
 		if (dlg.exec() == QDialog::Accepted) {
-			save_dock_config();
+			export_dock_status_json();
 			refreshDestList();
 		}
 	}
@@ -1256,7 +1270,7 @@ private:
 		} else {
 			start_destination(m_hub.get(), dest.get());
 		}
-		save_dock_config();
+		export_dock_status_json();
 		refreshDestList();
 	}
 
@@ -1269,7 +1283,7 @@ private:
 		dest->rtsp_mount = "/live" + std::to_string(m_hub->destinations.size() + 1);
 		dest->rtsp_pipeline = DEFAULT_RTSP_PIPELINE;
 		m_hub->destinations.push_back(dest);
-		save_dock_config();
+		export_dock_status_json();
 		refreshDestList();
 
 		int newRow = (int)m_hub->destinations.size() - 1;
@@ -1277,12 +1291,12 @@ private:
 
 		GstDestinationDetailDialog dlg(dest, this);
 		if (dlg.exec() == QDialog::Accepted) {
-			save_dock_config();
+			export_dock_status_json();
 			refreshDestList();
 			m_destList->setCurrentRow(newRow);
 		} else {
 			m_hub->destinations.pop_back();
-			save_dock_config();
+			export_dock_status_json();
 			refreshDestList();
 			if (!m_hub->destinations.empty()) {
 				m_destList->setCurrentRow(std::min(newRow, (int)m_hub->destinations.size() - 1));
@@ -1295,7 +1309,7 @@ private:
 		int row = m_destList->currentRow();
 		if (row > 0 && row < (int)m_hub->destinations.size()) {
 			std::swap(m_hub->destinations[row], m_hub->destinations[row - 1]);
-			save_dock_config();
+			export_dock_status_json();
 			refreshDestList();
 			m_destList->setCurrentRow(row - 1);
 		}
@@ -1306,7 +1320,7 @@ private:
 		int row = m_destList->currentRow();
 		if (row >= 0 && row < (int)m_hub->destinations.size() - 1) {
 			std::swap(m_hub->destinations[row], m_hub->destinations[row + 1]);
-			save_dock_config();
+			export_dock_status_json();
 			refreshDestList();
 			m_destList->setCurrentRow(row + 1);
 		}
@@ -1318,7 +1332,7 @@ private:
 		if (row >= 0 && row < (int)m_hub->destinations.size()) {
 			stop_destination(m_hub.get(), m_hub->destinations[row].get());
 			m_hub->destinations.erase(m_hub->destinations.begin() + row);
-			save_dock_config();
+			export_dock_status_json();
 			refreshDestList();
 		}
 	}
@@ -1338,7 +1352,7 @@ private:
 		m_hub->keyint_sec = m_keyintSpin->value();
 		m_hub->master_pipeline = m_customPipeEdit->toPlainText().toStdString();
 
-		save_dock_config();
+		export_dock_status_json();
 		accept();
 	}
 
@@ -1494,7 +1508,7 @@ private:
 		if (row < 0 || row >= (int)g_master_hubs.size()) return;
 		GstMasterDetailDialog dlg(g_master_hubs[row], this);
 		dlg.exec();
-		save_dock_config();
+		export_dock_status_json();
 		refreshList();
 	}
 
@@ -1509,7 +1523,7 @@ private:
 		hub->destinations.push_back(defaultRtsp);
 
 		g_master_hubs.push_back(hub);
-		save_dock_config();
+		export_dock_status_json();
 		refreshList();
 		m_hubList->setCurrentRow((int)g_master_hubs.size() - 1);
 	}
@@ -1523,7 +1537,7 @@ private:
 				stop_destination(g_master_hubs[row].get(), dest.get());
 			}
 			g_master_hubs.erase(g_master_hubs.begin() + row);
-			save_dock_config();
+			export_dock_status_json();
 			refreshList();
 		}
 	}
@@ -1533,7 +1547,7 @@ private:
 		int row = m_hubList->currentRow();
 		if (row > 0 && row < (int)g_master_hubs.size()) {
 			std::swap(g_master_hubs[row], g_master_hubs[row - 1]);
-			save_dock_config();
+			export_dock_status_json();
 			refreshList();
 			m_hubList->setCurrentRow(row - 1);
 		}
@@ -1544,7 +1558,7 @@ private:
 		int row = m_hubList->currentRow();
 		if (row >= 0 && row < (int)g_master_hubs.size() - 1) {
 			std::swap(g_master_hubs[row], g_master_hubs[row + 1]);
-			save_dock_config();
+			export_dock_status_json();
 			refreshList();
 			m_hubList->setCurrentRow(row + 1);
 		}
@@ -1562,6 +1576,22 @@ static void on_frontend_event(enum obs_frontend_event event, void *private_data)
 {
 	(void)private_data;
 	if (event == OBS_FRONTEND_EVENT_FINISHED_LOADING) {
+		if (g_master_hubs.empty()) {
+			auto defaultHub = std::make_shared<GstMasterHub>();
+			defaultHub->name = "Program Master Hub";
+			auto defaultRtsp = std::make_shared<GstDestination>();
+			defaultRtsp->name = "Default RTSP";
+			defaultHub->destinations.push_back(defaultRtsp);
+
+			auto defaultWebRTC = std::make_shared<GstDestination>();
+			defaultWebRTC->type = DEST_TYPE_WEBRTC;
+			defaultWebRTC->name = "Default WebRTC";
+			defaultWebRTC->webrtc_port = "8888";
+			defaultHub->destinations.push_back(defaultWebRTC);
+
+			g_master_hubs.push_back(defaultHub);
+		}
+
 		/* Check for autostart destinations once frontend finished loading */
 		for (auto &hub : g_master_hubs) {
 			for (auto &dest : hub->destinations) {
@@ -1591,29 +1621,21 @@ static void on_frontend_event(enum obs_frontend_event event, void *private_data)
 	}
 }
 
+static void on_frontend_save_load(obs_data_t *save_data, bool saving, void *private_data)
+{
+	(void)private_data;
+	if (saving) {
+		save_dock_config(save_data);
+	} else {
+		load_dock_config(save_data);
+		export_dock_status_json();
+		if (g_dock_widget)
+			g_dock_widget->refreshTable();
+	}
+}
+
 void gstreamer_dock_register(void)
 {
-	/* Load persistent Master Hub configuration */
-	load_dock_config();
-
-	/* Add default Master Hub if empty */
-	if (g_master_hubs.empty()) {
-		auto defaultHub = std::make_shared<GstMasterHub>();
-		defaultHub->name = "Program Master Hub";
-		auto defaultRtsp = std::make_shared<GstDestination>();
-		defaultRtsp->name = "Default RTSP";
-		defaultHub->destinations.push_back(defaultRtsp);
-
-		auto defaultWebRTC = std::make_shared<GstDestination>();
-		defaultWebRTC->type = DEST_TYPE_WEBRTC;
-		defaultWebRTC->name = "Default WebRTC";
-		defaultWebRTC->webrtc_port = "8888";
-		defaultHub->destinations.push_back(defaultWebRTC);
-
-		g_master_hubs.push_back(defaultHub);
-		save_dock_config();
-	}
-
 	/* Register dock into OBS Studio early during obs_module_load so OBS UI layout restoration knows about it */
 	if (!g_dock_widget && obs_frontend_add_dock_by_id) {
 		g_dock_widget = new GstMasterDockWidget();
@@ -1637,6 +1659,7 @@ void gstreamer_dock_register(void)
 		blog(LOG_INFO, "[obs-gstreamer-dock] Registered GStreamer Master Hub dock early during module load");
 	}
 
+	obs_frontend_add_save_callback(on_frontend_save_load, nullptr);
 	obs_frontend_add_event_callback(on_frontend_event, nullptr);
 }
 
@@ -1649,8 +1672,9 @@ void gstreamer_dock_unregister(void)
 		}
 	}
 
-	save_dock_config();
 	g_master_hubs.clear();
+	obs_frontend_remove_save_callback(on_frontend_save_load, nullptr);
+	obs_frontend_remove_event_callback(on_frontend_event, nullptr);
 
 	if (g_dock_widget) {
 		g_dock_widget = nullptr;
