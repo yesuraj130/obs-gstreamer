@@ -251,6 +251,13 @@ function restartFullPC(callback) {
 
     if [ -x /opt/obs-studio-32/AppDir/AppRun ]; then
       ln -sf /opt/obs-studio-32/AppDir/AppRun /usr/bin/obs
+      if [ ! -L /opt/obs-studio-32/AppDir/lib/dri ] && [ -d /usr/lib/x86_64-linux-gnu/dri ]; then
+        mkdir -p /opt/obs-studio-32/AppDir/lib/.mesa-softpipe-bak
+        mv /opt/obs-studio-32/AppDir/lib/dri /opt/obs-studio-32/AppDir/lib/.mesa-softpipe-bak/ 2>/dev/null || true
+        mv /opt/obs-studio-32/AppDir/lib/libEGL_mesa* /opt/obs-studio-32/AppDir/lib/libGLX_mesa* /opt/obs-studio-32/AppDir/lib/libgbm* /opt/obs-studio-32/AppDir/lib/libglapi* /opt/obs-studio-32/AppDir/lib/libgallium* /opt/obs-studio-32/AppDir/lib/.mesa-softpipe-bak/ 2>/dev/null || true
+        ln -sf /usr/lib/x86_64-linux-gnu/dri /opt/obs-studio-32/AppDir/lib/dri
+        cp -P /usr/lib/x86_64-linux-gnu/libEGL_mesa* /usr/lib/x86_64-linux-gnu/libGLX_mesa* /usr/lib/x86_64-linux-gnu/libgbm* /usr/lib/x86_64-linux-gnu/libglapi* /usr/lib/x86_64-linux-gnu/libLLVM* /opt/obs-studio-32/AppDir/lib/ 2>/dev/null || true
+      fi
     fi
 
     # 3. Check, compile & install obs-gstreamer plugin with Qt6 Dock

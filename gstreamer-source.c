@@ -39,6 +39,7 @@ struct gstreamer_source_data
 	bool clear_on_end;
 	
 	GstCaps *last_video_caps; // Cached Video Format State (Calculated ONLY on caps change)
+	GstVideoInfo v_info;
 	size_t video_offset[3];
 	struct obs_source_frame cached_frame; // Pre-filled video frame template
 	
@@ -144,7 +145,7 @@ static GstBusSyncReply bus_sync_handler(GstBus *bus, GstMessage *message, gpoint
 			return GST_BUS_DROP;
 		}
 
-		default: blog(LOG_INFO, "[obs-gstreamer-source] %s [%s]: Unknown message of type %s received.", get_gstreamer_source_name(data->gstreamer_source), src_name, gst_message_type_get_name(GST_MESSAGE_TYPE(message))); break;
+		default: break;
 	}
 
 	return GST_BUS_DROP;
@@ -177,6 +178,7 @@ static bool update_video_format_cache(struct gstreamer_source_data *data, GstCap
 		data->cached_frame.format = VIDEO_FORMAT_NONE;
 		return false;
 	}
+	data->v_info = v_info;
 
 	// Pre-fill the persistent cached frame template (zero-initialized without memset)
 	data->cached_frame = (struct obs_source_frame){ 0 };
@@ -763,11 +765,11 @@ void gstreamer_source_get_defaults(obs_data_t *settings)
 	obs_data_set_default_string(settings, "pipeline", "videotestsrc is-live=true ! video/x-raw, framerate=25/1, width=1280, height=720 ! video. audiotestsrc wave=ticks is-live=true ! audio/x-raw, channels=2, rate=44100 ! audio.");
 	obs_data_set_default_bool(settings, "override_internal_pipeline", false);
 	obs_data_set_default_string(settings, "internal_pipeline", DEFAULT_INTERNAL_PIPELINE);
-	obs_data_set_default_bool(settings, "use_timestamps_video", true);
-	obs_data_set_default_bool(settings, "use_timestamps_audio", true);
+	obs_data_set_default_bool(settings, "use_timestamps_video", false);
+	obs_data_set_default_bool(settings, "use_timestamps_audio", false);
 	obs_data_set_default_bool(settings, "sync_appsink_video", false);
 	obs_data_set_default_bool(settings, "sync_appsink_audio", false);
-	obs_data_set_default_bool(settings, "no_buffer", false);
+	obs_data_set_default_bool(settings, "no_buffer", true);
 	obs_data_set_default_int(settings, "latency", 0);
 	obs_data_set_default_bool(settings, "stop_on_hide", true);
 	obs_data_set_default_bool(settings, "clear_on_end", false);
@@ -778,9 +780,9 @@ void gstreamer_source_video_get_defaults(obs_data_t *settings)
 	obs_data_set_default_string(settings, "pipeline", "videotestsrc is-live=true ! video/x-raw, framerate=25/1, width=1280, height=720 ! video.");
 	obs_data_set_default_bool(settings, "override_internal_pipeline", false);
 	obs_data_set_default_string(settings, "internal_pipeline", DEFAULT_INTERNAL_VIDEO_PIPELINE);
-	obs_data_set_default_bool(settings, "use_timestamps_video", true);
+	obs_data_set_default_bool(settings, "use_timestamps_video", false);
 	obs_data_set_default_bool(settings, "sync_appsink_video", false);
-	obs_data_set_default_bool(settings, "no_buffer", false);
+	obs_data_set_default_bool(settings, "no_buffer", true);
 	obs_data_set_default_int(settings, "latency", 0);
 	obs_data_set_default_bool(settings, "stop_on_hide", true);
 	obs_data_set_default_bool(settings, "clear_on_end", false);

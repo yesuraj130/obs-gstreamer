@@ -63,17 +63,21 @@ static void filter_cb_video_render(void *p, gs_effect_t *effect)
 
 	if (width > 0 && height > 0 && data->texrender)
 	{
-		gs_texrender_begin(data->texrender, width, height);
-		struct vec4 clear_color;
-		vec4_set(&clear_color, 0.0f, 0.0f, 0.0f, 0.0f);
-		gs_clear(GS_CLEAR_COLOR, &clear_color, 0.0f, 0);
-		obs_source_video_render(target);
-		gs_texrender_end(data->texrender);
-
-		gs_texture_t *tex = gs_texrender_get_texture(data->texrender);
-		if (tex)
+		gs_texrender_reset(data->texrender);
+		if (gs_texrender_begin(data->texrender, width, height))
 		{
-			gst_master_pipeline_push_texture(data->pipeline, tex, os_gettime_ns());
+			struct vec4 clear_color;
+			vec4_set(&clear_color, 0.0f, 0.0f, 0.0f, 0.0f);
+			gs_clear(GS_CLEAR_COLOR, &clear_color, 0.0f, 0);
+			gs_ortho(0.0f, (float)width, 0.0f, (float)height, -100.0f, 100.0f);
+			obs_source_video_render(target);
+			gs_texrender_end(data->texrender);
+
+			gs_texture_t *tex = gs_texrender_get_texture(data->texrender);
+			if (tex)
+			{
+				gst_master_pipeline_push_texture(data->pipeline, tex, os_gettime_ns());
+			}
 		}
 	}
 

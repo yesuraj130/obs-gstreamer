@@ -67,7 +67,7 @@ bool obs_frontend_add_dock_by_id(const char *id, const char *title, void *dock) 
 
 #define DEFAULT_MASTER_PIPELINE \
 	"appsrc name=hub_appsrc is-live=true format=GST_FORMAT_TIME do-timestamp=true " \
-	"caps=\"video/x-raw, format=RGBA, width=%u, height=%u, framerate=%u/%u\" ! " \
+	"caps=\"video/x-raw, format=RGBx, width=%u, height=%u, framerate=%u/%u\" ! " \
 	"videoconvert ! video/x-raw, format=I420 ! x264enc tune=zerolatency speed-preset=ultrafast bframes=0 key-int-max=30 bitrate=4000 ! " \
 	"h264parse config-interval=-1 ! video/x-h264, stream-format=byte-stream, alignment=au ! " \
 	"appsink name=hub_appsink sync=false drop=true max-buffers=1"

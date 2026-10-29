@@ -40,7 +40,7 @@ static GstElement *create_master_encoder_pipeline(gst_master_pipeline_t *hub, co
 
 		pipe_desc = g_strdup_printf(
 			"appsrc name=hub_appsrc is-live=true format=GST_FORMAT_TIME do-timestamp=true "
-			"caps=\"video/x-raw, width=%u, height=%u, format=RGBA, framerate=%u/%u\" ! "
+			"caps=\"video/x-raw, width=%u, height=%u, format=RGBx, framerate=%u/%u\" ! "
 			"%s ! h264parse config-interval=-1 ! video/x-h264, stream-format=byte-stream, alignment=au ! "
 			"appsink name=hub_appsink sync=false drop=true max-buffers=1",
 			hub->width, hub->height, hub->fps_num, hub->fps_den,

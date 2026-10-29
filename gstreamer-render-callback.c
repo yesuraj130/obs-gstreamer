@@ -40,7 +40,14 @@ static void render_callback_handler(void *param, uint32_t cx, uint32_t cy)
 
 	if (!cb->texrender) return;
 
-	gs_texrender_begin(cb->texrender, cb->width, cb->height);
+	gs_texrender_reset(cb->texrender);
+	if (!gs_texrender_begin(cb->texrender, cb->width, cb->height))
+		return;
+
+	struct vec4 clear_color;
+	vec4_zero(&clear_color);
+	gs_clear(GS_CLEAR_COLOR, &clear_color, 0.0f, 0);
+	gs_ortho(0.0f, (float)cb->width, 0.0f, (float)cb->height, -100.0f, 100.0f);
 	gs_enable_blending(false);
 
 	if (cb->source_type == GST_SOURCE_SOURCE && cb->source)
@@ -94,23 +101,25 @@ gst_render_callback_t *gst_render_callback_create(gst_source_type_t type, const 
 	cb->width = ovi.base_width ? ovi.base_width : 1920;
 	cb->height = ovi.base_height ? ovi.base_height : 1080;
 
-	cb->source = gst_resolve_target_source(type, scene_name, item_name);
-
-	if (!cb->source && type != GST_SOURCE_MAIN_OUTPUT)
+	if (type != GST_SOURCE_MAIN_OUTPUT)
 	{
-		blog(LOG_ERROR, "[obs-gstreamer-render-callback] Failed to resolve target OBS source");
-		bfree(cb);
-		return NULL;
-	}
-
-	if (type == GST_SOURCE_SOURCE && cb->source)
-	{
-		uint32_t sw = obs_source_get_width(cb->source);
-		uint32_t sh = obs_source_get_height(cb->source);
-		if (sw > 0 && sh > 0)
+		cb->source = gst_resolve_target_source(type, scene_name, item_name);
+		if (!cb->source)
 		{
-			cb->width = sw;
-			cb->height = sh;
+			blog(LOG_ERROR, "[obs-gstreamer-render-callback] Failed to resolve target OBS source");
+			bfree(cb);
+			return NULL;
+		}
+
+		if (type == GST_SOURCE_SOURCE)
+		{
+			uint32_t sw = obs_source_get_width(cb->source);
+			uint32_t sh = obs_source_get_height(cb->source);
+			if (sw > 0 && sh > 0)
+			{
+				cb->width = sw;
+				cb->height = sh;
+			}
 		}
 	}
 
@@ -122,7 +131,7 @@ gst_render_callback_t *gst_render_callback_create(gst_source_type_t type, const 
 		return NULL;
 	}
 
-	if (cb->source)
+	if (cb->source && type == GST_SOURCE_SCENE)
 	{
 		cb->view = obs_view_create();
 		obs_view_set_source(cb->view, 0, cb->source);
