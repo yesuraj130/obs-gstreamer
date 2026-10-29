@@ -64,6 +64,10 @@ bool obs_frontend_add_dock_by_id(const char *id, const char *title, void *dock) 
 #include <QtWidgets/QMainWindow>
 #include <QtWidgets/QScrollArea>
 #include <QtWidgets/QStackedWidget>
+#include <QtWidgets/QToolBar>
+#include <QtWidgets/QToolButton>
+#include <QtGui/QAction>
+#include <QtGui/QIcon>
 #include <QtCore/QTimer>
 
 #include <vector>
@@ -988,41 +992,53 @@ public:
 		m_secOutput = new CollapsibleSection("Output (Destinations and Streaming Sinks)", true, this);
 		QWidget *outputWidget = new QWidget();
 		QVBoxLayout *outputLayout = new QVBoxLayout(outputWidget);
-		outputLayout->setContentsMargins(12, 12, 12, 12);
-		outputLayout->setSpacing(8);
+		outputLayout->setContentsMargins(8, 8, 8, 6);
+		outputLayout->setSpacing(6);
 
 		m_destList = new QListWidget(this);
 		m_destList->setSelectionMode(QAbstractItemView::SingleSelection);
 		m_destList->setMinimumHeight(150);
 		m_destList->setStyleSheet(
-			"QListWidget { background-color: #141519; border: 1px solid #2c2d38; border-radius: 4px; outline: 0; padding: 2px; }"
+			"QListWidget, QListWidget::viewport { background: transparent; border: none; outline: 0; padding: 2px; }"
 			"QListWidget::item { padding: 3px 5px; margin: 1px; border-radius: 4px; border: 1px solid transparent; color: #d0d4e0; }"
-			"QListWidget::item:hover:!selected { background-color: #202430; }"
+			"QListWidget::item:hover:!selected { background-color: rgba(255, 255, 255, 0.06); }"
 			"QListWidget::item:selected { background-color: #2b5bc7; border: 1px solid #588bf6; border-radius: 4px; }"
 			"QListWidget::item:selected:focus { background-color: #2b5bc7; border: 1px solid rgba(255, 255, 255, 0.75); border-radius: 4px; }"
 		);
 		outputLayout->addWidget(m_destList);
 
-		QHBoxLayout *btnLayout = new QHBoxLayout();
-		QPushButton *btnAddRtsp = new QPushButton("+ Add RTSP", this);
-		QPushButton *btnAddWebRTC = new QPushButton("+ Add WebRTC", this);
-		QPushButton *btnAddCustom = new QPushButton("+ Add Custom Sink", this);
-		QPushButton *btnRemove = new QPushButton("- Remove", this);
-		QPushButton *btnEditDest = new QPushButton("Properties", this);
+		/* Native OBS ToolBar for Destinations matching Scenes & Sources docks */
+		QToolBar *destToolbar = new QToolBar(this);
+		destToolbar->setObjectName("destToolbar");
+		destToolbar->setStyleSheet("QToolBar { background: transparent; border: none; }");
+		destToolbar->setIconSize(QSize(16, 16));
 
-		btnLayout->addWidget(btnAddRtsp);
-		btnLayout->addWidget(btnAddWebRTC);
-		btnLayout->addWidget(btnAddCustom);
-		btnLayout->addWidget(btnRemove);
-		btnLayout->addStretch();
-		btnLayout->addWidget(btnEditDest);
-		outputLayout->addLayout(btnLayout);
+		QAction *actAdd = destToolbar->addAction(QIcon("theme:Dark/plus.svg"), "Add Destination");
+		actAdd->setProperty("class", "icon-plus");
 
-		connect(btnAddRtsp, &QPushButton::clicked, this, &GstMasterDetailDialog::addRtspDestination);
-		connect(btnAddWebRTC, &QPushButton::clicked, this, &GstMasterDetailDialog::addWebRTCDestination);
-		connect(btnAddCustom, &QPushButton::clicked, this, &GstMasterDetailDialog::addCustomDestination);
-		connect(btnRemove, &QPushButton::clicked, this, &GstMasterDetailDialog::removeSelectedDestination);
-		connect(btnEditDest, &QPushButton::clicked, this, &GstMasterDetailDialog::editSelectedDestination);
+		QAction *actRemove = destToolbar->addAction(QIcon("theme:Dark/trash.svg"), "Remove Destination");
+		actRemove->setProperty("class", "icon-trash");
+
+		destToolbar->addSeparator();
+
+		QAction *actProps = destToolbar->addAction(QIcon("theme:Dark/settings/general.svg"), "Destination Properties");
+		actProps->setProperty("class", "icon-gear");
+
+		destToolbar->addSeparator();
+
+		QAction *actUp = destToolbar->addAction(QIcon("theme:Dark/up.svg"), "Move Up");
+		actUp->setProperty("class", "icon-up");
+
+		QAction *actDown = destToolbar->addAction(QIcon("theme:Dark/down.svg"), "Move Down");
+		actDown->setProperty("class", "icon-down");
+
+		outputLayout->addWidget(destToolbar);
+
+		connect(actAdd, &QAction::triggered, this, &GstMasterDetailDialog::onAddDestinationClicked);
+		connect(actRemove, &QAction::triggered, this, &GstMasterDetailDialog::removeSelectedDestination);
+		connect(actProps, &QAction::triggered, this, &GstMasterDetailDialog::editSelectedDestination);
+		connect(actUp, &QAction::triggered, this, &GstMasterDetailDialog::moveUpSelectedDestination);
+		connect(actDown, &QAction::triggered, this, &GstMasterDetailDialog::moveDownSelectedDestination);
 
 		connect(m_destList, &QListWidget::itemDoubleClicked, this, &GstMasterDetailDialog::onDestDoubleClicked);
 
@@ -1250,41 +1266,56 @@ private:
 		refreshDestList();
 	}
 
-	void addRtspDestination()
+	void onAddDestinationClicked()
 	{
 		auto dest = std::make_shared<GstDestination>();
 		dest->type = DEST_TYPE_RTSP;
 		dest->name = "RTSP Stream " + std::to_string(m_hub->destinations.size() + 1);
 		dest->rtsp_port = std::to_string(8554 + m_hub->destinations.size());
 		dest->rtsp_mount = "/live" + std::to_string(m_hub->destinations.size() + 1);
+		dest->rtsp_pipeline = DEFAULT_RTSP_PIPELINE;
 		m_hub->destinations.push_back(dest);
 		save_dock_config();
 		refreshDestList();
-		m_destList->setCurrentRow((int)m_hub->destinations.size() - 1);
+
+		int newRow = (int)m_hub->destinations.size() - 1;
+		m_destList->setCurrentRow(newRow);
+
+		GstDestinationDetailDialog dlg(dest, this);
+		if (dlg.exec() == QDialog::Accepted) {
+			save_dock_config();
+			refreshDestList();
+			m_destList->setCurrentRow(newRow);
+		} else {
+			m_hub->destinations.pop_back();
+			save_dock_config();
+			refreshDestList();
+			if (!m_hub->destinations.empty()) {
+				m_destList->setCurrentRow(std::min(newRow, (int)m_hub->destinations.size() - 1));
+			}
+		}
 	}
 
-	void addWebRTCDestination()
+	void moveUpSelectedDestination()
 	{
-		auto dest = std::make_shared<GstDestination>();
-		dest->type = DEST_TYPE_WEBRTC;
-		dest->name = "WebRTC Stream " + std::to_string(m_hub->destinations.size() + 1);
-		dest->webrtc_port = std::to_string(8888 + m_hub->destinations.size());
-		m_hub->destinations.push_back(dest);
-		save_dock_config();
-		refreshDestList();
-		m_destList->setCurrentRow((int)m_hub->destinations.size() - 1);
+		int row = m_destList->currentRow();
+		if (row > 0 && row < (int)m_hub->destinations.size()) {
+			std::swap(m_hub->destinations[row], m_hub->destinations[row - 1]);
+			save_dock_config();
+			refreshDestList();
+			m_destList->setCurrentRow(row - 1);
+		}
 	}
 
-	void addCustomDestination()
+	void moveDownSelectedDestination()
 	{
-		auto dest = std::make_shared<GstDestination>();
-		dest->type = DEST_TYPE_CUSTOM;
-		dest->name = "Custom Sink " + std::to_string(m_hub->destinations.size() + 1);
-		dest->custom_pipeline = "autovideosink sync=false";
-		m_hub->destinations.push_back(dest);
-		save_dock_config();
-		refreshDestList();
-		m_destList->setCurrentRow((int)m_hub->destinations.size() - 1);
+		int row = m_destList->currentRow();
+		if (row >= 0 && row < (int)m_hub->destinations.size() - 1) {
+			std::swap(m_hub->destinations[row], m_hub->destinations[row + 1]);
+			save_dock_config();
+			refreshDestList();
+			m_destList->setCurrentRow(row + 1);
+		}
 	}
 
 	void removeSelectedDestination()
@@ -1346,42 +1377,49 @@ public:
 		layout->setContentsMargins(4, 4, 4, 4);
 		layout->setSpacing(4);
 
-		/* Main List Box of Masters */
+		/* Main List Box of Masters - transparent background matching dock surface */
 		m_hubList = new QListWidget(this);
 		m_hubList->setSelectionMode(QAbstractItemView::SingleSelection);
 		m_hubList->setStyleSheet(
-			"QListWidget { background-color: #141519; border: 1px solid #2c2d38; border-radius: 4px; outline: 0; padding: 2px; }"
+			"QListWidget, QListWidget::viewport { background: transparent; border: none; outline: 0; padding: 2px; }"
 			"QListWidget::item { padding: 6px 8px; margin: 1px; border-radius: 4px; border: 1px solid transparent; color: #d0d4e0; }"
-			"QListWidget::item:hover:!selected { background-color: #242630; color: #ffffff; }"
+			"QListWidget::item:hover:!selected { background-color: rgba(255, 255, 255, 0.06); color: #ffffff; }"
 			"QListWidget::item:selected { background-color: #2b5bc7; color: #ffffff; border: 1px solid #588bf6; border-radius: 4px; }"
 			"QListWidget::item:selected:focus { background-color: #2b5bc7; color: #ffffff; border: 1px solid rgba(255, 255, 255, 0.75); border-radius: 4px; }"
 		);
 		layout->addWidget(m_hubList);
 
-		/* Bottom OBS-style Action Toolbar */
-		QHBoxLayout *botBar = new QHBoxLayout();
-		QPushButton *btnAddMaster = new QPushButton("+ Add Master", this);
-		QPushButton *btnDeleteMaster = new QPushButton("- Remove", this);
-		QPushButton *btnConfigMaster = new QPushButton("Configure", this);
-		QPushButton *btnToggleAll = new QPushButton("Start / Stop All", this);
-		QPushButton *btnSaveConfig = new QPushButton("Save", this);
+		/* Bottom ToolBar matching built-in Scenes and Sources docks */
+		QToolBar *toolbar = new QToolBar(this);
+		toolbar->setObjectName("hubToolbar");
+		toolbar->setIconSize(QSize(16, 16));
 
-		botBar->addWidget(btnAddMaster);
-		botBar->addWidget(btnDeleteMaster);
-		botBar->addStretch();
-		botBar->addWidget(btnConfigMaster);
-		botBar->addWidget(btnToggleAll);
-		botBar->addWidget(btnSaveConfig);
-		layout->addLayout(botBar);
+		QAction *actAdd = toolbar->addAction(QIcon("theme:Dark/plus.svg"), "Add Master Hub");
+		actAdd->setProperty("class", "icon-plus");
 
-		connect(btnAddMaster, &QPushButton::clicked, this, &GstMasterDockWidget::onAddMasterClicked);
-		connect(btnDeleteMaster, &QPushButton::clicked, this, &GstMasterDockWidget::onDeleteMasterClicked);
-		connect(btnConfigMaster, &QPushButton::clicked, this, &GstMasterDockWidget::onConfigureClicked);
-		connect(btnToggleAll, &QPushButton::clicked, this, &GstMasterDockWidget::onToggleAllClicked);
-		connect(btnSaveConfig, &QPushButton::clicked, [this]() {
-			save_dock_config();
-			QMessageBox::information(this, "Master Hubs", "Master Hub configuration saved successfully.");
-		});
+		QAction *actRemove = toolbar->addAction(QIcon("theme:Dark/trash.svg"), "Remove Master Hub");
+		actRemove->setProperty("class", "icon-trash");
+
+		toolbar->addSeparator();
+
+		QAction *actConfig = toolbar->addAction(QIcon("theme:Dark/settings/general.svg"), "Configure Master Hub");
+		actConfig->setProperty("class", "icon-gear");
+
+		toolbar->addSeparator();
+
+		QAction *actUp = toolbar->addAction(QIcon("theme:Dark/up.svg"), "Move Up");
+		actUp->setProperty("class", "icon-up");
+
+		QAction *actDown = toolbar->addAction(QIcon("theme:Dark/down.svg"), "Move Down");
+		actDown->setProperty("class", "icon-down");
+
+		connect(actAdd, &QAction::triggered, this, &GstMasterDockWidget::onAddMasterClicked);
+		connect(actRemove, &QAction::triggered, this, &GstMasterDockWidget::onDeleteMasterClicked);
+		connect(actConfig, &QAction::triggered, this, &GstMasterDockWidget::onConfigureClicked);
+		connect(actUp, &QAction::triggered, this, &GstMasterDockWidget::onMoveUpClicked);
+		connect(actDown, &QAction::triggered, this, &GstMasterDockWidget::onMoveDownClicked);
+
+		layout->addWidget(toolbar);
 
 		/* Double-Click on Master Item -> Opens Child Configuration Dialog */
 		connect(m_hubList, &QListWidget::itemDoubleClicked, [this](QListWidgetItem *item) {
@@ -1496,36 +1534,26 @@ private:
 		}
 	}
 
-	void onToggleAllClicked()
+	void onMoveUpClicked()
 	{
 		int row = m_hubList->currentRow();
-		if (row < 0 || row >= (int)g_master_hubs.size()) return;
-		auto &hub = g_master_hubs[row];
-
-		bool anyActive = false;
-		for (const auto &d : hub->destinations) {
-			if (d->is_active) {
-				anyActive = true;
-				break;
-			}
+		if (row > 0 && row < (int)g_master_hubs.size()) {
+			std::swap(g_master_hubs[row], g_master_hubs[row - 1]);
+			save_dock_config();
+			refreshList();
+			m_hubList->setCurrentRow(row - 1);
 		}
+	}
 
-		if (anyActive) {
-			/* Stop all */
-			for (auto &d : hub->destinations) {
-				stop_destination(hub.get(), d.get());
-			}
-		} else {
-			/* Start all enabled */
-			for (auto &d : hub->destinations) {
-				if (d->enabled) {
-					start_destination(hub.get(), d.get());
-				}
-			}
+	void onMoveDownClicked()
+	{
+		int row = m_hubList->currentRow();
+		if (row >= 0 && row < (int)g_master_hubs.size() - 1) {
+			std::swap(g_master_hubs[row], g_master_hubs[row + 1]);
+			save_dock_config();
+			refreshList();
+			m_hubList->setCurrentRow(row + 1);
 		}
-
-		save_dock_config();
-		refreshList();
 	}
 
 	QListWidget *m_hubList;
