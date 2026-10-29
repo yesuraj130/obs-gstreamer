@@ -176,18 +176,13 @@ function ensureVNC(callback) {
     if (callback) callback();
     return;
   }
-  exec('which vncserver websockify startxfce4 >/dev/null 2>&1 && [ -x /opt/obs-studio-32/AppDir/AppRun ] && [ -f /app/applet/build/obs-gstreamer.so ] && echo "1" || echo "0"', (chkErr, chkOut) => {
-    if (!chkOut || chkOut.trim() !== '1') {
-      restartFullPC(callback);
+  exec('pgrep -x Xtigervnc >/dev/null && echo "1" || echo "0"', (err, stdout) => {
+    const vncOnline = stdout && stdout.trim() === '1';
+    if (vncOnline) {
+      ensureWebsockify(callback);
       return;
     }
-    exec('pgrep -x Xtigervnc >/dev/null && echo "1" || echo "0"', (err, stdout) => {
-      const vncOnline = stdout && stdout.trim() === '1';
-      if (vncOnline) {
-        ensureWebsockify(callback);
-        return;
-      }
-      addLog('TigerVNC offline. Starting TigerVNC on :1...');
+    addLog('TigerVNC offline. Starting TigerVNC on :1...');
     const startVncScript = `
       mkdir -p /root/.vnc /root/.config/tigervnc
       echo '#!/bin/sh
@@ -207,14 +202,14 @@ exec startxfce4' > /root/.vnc/xstartup
       vncserver :1 -geometry 1280x800 -depth 24 -localhost no -PasswordFile /root/.vnc/passwd -SecurityTypes VncAuth -UseBlacklist=0 -AlwaysShared=1 >/tmp/vnc.log 2>&1 || \
       vncserver :1 -geometry 1280x800 -depth 24 -localhost no -UseBlacklist=0 -AlwaysShared=1 >/tmp/vnc.log 2>&1 || true
     `;
-      exec(startVncScript, (startErr) => {
-        if (startErr) addLog('VNC startup error: ' + startErr.message);
-        else addLog('TigerVNC started on :1');
-        ensureWebsockify(callback);
-      });
+    exec(startVncScript, (startErr) => {
+      if (startErr) addLog('VNC startup error: ' + startErr.message);
+      else addLog('TigerVNC started on :1');
+      ensureWebsockify(callback);
     });
   });
 }
+
 
 function ensureWebsockify(callback) {
   exec('pgrep -x websockify >/dev/null && echo "1" || echo "0"', (err, stdout) => {
