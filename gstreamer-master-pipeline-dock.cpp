@@ -828,10 +828,11 @@ public:
 		m_destList = new QListWidget(this);
 		m_destList->setSelectionMode(QAbstractItemView::SingleSelection);
 		m_destList->setStyleSheet(
-			"QListWidget { background-color: #1e1e24; border: 1px solid #363640; border-radius: 4px; padding: 2px; }"
-			"QListWidget::item { border-bottom: 1px solid #2a2a34; padding: 6px 8px; border-radius: 3px; }"
-			"QListWidget::item:selected { background-color: #3b4252; color: #eceff4; }"
-			"QListWidget::item:hover:!selected { background-color: #2b303c; }"
+			"QListWidget { background-color: #141519; border: 1px solid #2c2d38; border-radius: 4px; outline: 0; padding: 2px; }"
+			"QListWidget::item { padding: 6px 8px; margin: 2px; border-radius: 4px; border: 2px solid transparent; color: #d0d4e0; }"
+			"QListWidget::item:hover:!selected { background-color: #242630; color: #ffffff; }"
+			"QListWidget::item:selected { background-color: #2b5bc7; color: #ffffff; border: 2px solid #588bf6; border-radius: 4px; }"
+			"QListWidget::item:selected:focus { background-color: #2b5bc7; color: #ffffff; border: 2px solid #ffffff; border-radius: 4px; }"
 		);
 		destLayout->addWidget(m_destList);
 
@@ -1080,21 +1081,15 @@ public:
 		layout->setContentsMargins(4, 4, 4, 4);
 		layout->setSpacing(4);
 
-		/* Header */
-		QHBoxLayout *topBar = new QHBoxLayout();
-		QLabel *titleLabel = new QLabel("<b>Master Pipeline Hubs</b>", this);
-		topBar->addWidget(titleLabel);
-		topBar->addStretch();
-		layout->addLayout(topBar);
-
 		/* Main List Box of Masters */
 		m_hubList = new QListWidget(this);
 		m_hubList->setSelectionMode(QAbstractItemView::SingleSelection);
 		m_hubList->setStyleSheet(
-			"QListWidget { background-color: #1a1a20; border: 1px solid #363640; border-radius: 4px; padding: 2px; }"
-			"QListWidget::item { border-bottom: 1px solid #282834; padding: 8px 10px; border-radius: 3px; }"
-			"QListWidget::item:selected { background-color: #3b4252; color: #eceff4; }"
-			"QListWidget::item:hover:!selected { background-color: #262a34; }"
+			"QListWidget { background-color: #141519; border: 1px solid #2c2d38; border-radius: 4px; outline: 0; padding: 2px; }"
+			"QListWidget::item { padding: 6px 8px; margin: 2px; border-radius: 4px; border: 2px solid transparent; color: #d0d4e0; }"
+			"QListWidget::item:hover:!selected { background-color: #242630; color: #ffffff; }"
+			"QListWidget::item:selected { background-color: #2b5bc7; color: #ffffff; border: 2px solid #588bf6; border-radius: 4px; }"
+			"QListWidget::item:selected:focus { background-color: #2b5bc7; color: #ffffff; border: 2px solid #ffffff; border-radius: 4px; }"
 		);
 		layout->addWidget(m_hubList);
 
@@ -1280,20 +1275,7 @@ static void on_frontend_event(enum obs_frontend_event event, void *private_data)
 {
 	(void)private_data;
 	if (event == OBS_FRONTEND_EVENT_FINISHED_LOADING) {
-		/* Create the Main Dock Widget once frontend window is initialized */
-		if (!g_dock_widget) {
-			g_dock_widget = new GstMasterDockWidget();
-			g_dock_widget->refreshTable();
-
-			/* Register dock into OBS Studio Docks menu */
-			obs_frontend_add_dock_by_id(
-				"gstreamer_master_pipeline_dock",
-				"GStreamer Master Hub",
-				(void *)g_dock_widget
-			);
-		}
-
-		/* Check for autostart destinations */
+		/* Check for autostart destinations once frontend finished loading */
 		for (auto &hub : g_master_hubs) {
 			for (auto &dest : hub->destinations) {
 				if (dest->enabled && dest->autostart && !dest->is_active) {
@@ -1306,37 +1288,19 @@ static void on_frontend_event(enum obs_frontend_event event, void *private_data)
 
 		if (g_dock_widget) {
 			g_dock_widget->refreshTable();
-			g_dock_widget->setVisible(true);
-			g_dock_widget->show();
 
-			QTimer::singleShot(250, []() {
-				if (g_dock_widget) {
-					g_dock_widget->setVisible(true);
-					g_dock_widget->show();
-
-					QMainWindow *main_win = qobject_cast<QMainWindow *>((QObject *)obs_frontend_get_main_window());
-					QWidget *p = g_dock_widget->parentWidget();
-					while (p) {
-						p->setVisible(true);
-						p->show();
-						if (auto *dw = qobject_cast<QDockWidget*>(p)) {
-							dw->setVisible(true);
-							dw->show();
-							if (main_win && dw->isFloating()) {
-								main_win->addDockWidget(Qt::RightDockWidgetArea, dw);
-								dw->setFloating(false);
-							}
-							dw->raise();
-							break;
-						}
-						p = p->parentWidget();
-					}
+			/* Strip close button ('X') from QDockWidget wrapper so it behaves like built-in OBS docks */
+			QWidget *p = g_dock_widget->parentWidget();
+			while (p) {
+				if (auto *dw = qobject_cast<QDockWidget*>(p)) {
+					dw->setFeatures(QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetFloatable);
+					break;
 				}
-			});
+				p = p->parentWidget();
+			}
 		}
 
 		export_dock_status_json();
-		blog(LOG_INFO, "[obs-gstreamer-dock] Registered GStreamer Master Hub dock");
 	}
 }
 
@@ -1361,6 +1325,29 @@ void gstreamer_dock_register(void)
 
 		g_master_hubs.push_back(defaultHub);
 		save_dock_config();
+	}
+
+	/* Register dock into OBS Studio early during obs_module_load so OBS UI layout restoration knows about it */
+	if (!g_dock_widget && obs_frontend_add_dock_by_id) {
+		g_dock_widget = new GstMasterDockWidget();
+		g_dock_widget->refreshTable();
+
+		obs_frontend_add_dock_by_id(
+			"gstreamer_master_pipeline_dock",
+			"GStreamer Master Hub",
+			(void *)g_dock_widget
+		);
+
+		QWidget *p = g_dock_widget->parentWidget();
+		while (p) {
+			if (auto *dw = qobject_cast<QDockWidget*>(p)) {
+				dw->setFeatures(QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetFloatable);
+				break;
+			}
+			p = p->parentWidget();
+		}
+
+		blog(LOG_INFO, "[obs-gstreamer-dock] Registered GStreamer Master Hub dock early during module load");
 	}
 
 	obs_frontend_add_event_callback(on_frontend_event, nullptr);
