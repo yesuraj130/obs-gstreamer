@@ -146,7 +146,7 @@ gst_render_callback_t *gst_render_callback_create(gst_source_type_t type, const 
 		}
 	}
 
-	cb->pipeline = gst_master_pipeline_create(custom_master_pipe, encoder_type, bitrate_kbps, keyint_sec, cb->width, cb->height, fps_num, fps_den, pipeline_state_change, cb);
+	cb->pipeline = gst_master_pipeline_create(custom_master_pipe, encoder_type, bitrate_kbps, keyint_sec, cb->width, cb->height, fps_num, fps_den, true, pipeline_state_change, cb);
 	if (!cb->pipeline)
 	{
 		if (cb->source) obs_source_release(cb->source);

@@ -123,6 +123,14 @@ deps = [
   dependency('gstreamer-rtsp-server-1.0'),
 ]
 
+gst_d3d11_dep = dependency('gstreamer-d3d11-1.0', required : false)
+if host_machine.system() == 'windows' and gst_d3d11_dep.found()
+  deps += [gst_d3d11_dep]
+  extra_c_args += ['-DHAVE_GST_D3D11=1', '-DCOBJMACROS']
+else
+  extra_c_args += ['-DHAVE_GST_D3D11=0']
+endif
+
 if not dock_opt.disabled() and qt_dep.found() and obs_frontend_dep.found()
   sources += ['gstreamer-master-pipeline-dock.cpp']
   deps += [qt_dep, obs_frontend_dep]

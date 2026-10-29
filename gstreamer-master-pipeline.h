@@ -10,6 +10,14 @@
 #include <gst/gst.h>
 #include <obs.h>
 
+#ifndef HAVE_GST_D3D11
+#define HAVE_GST_D3D11 0
+#endif
+
+#if HAVE_GST_D3D11
+#include <gst/d3d11/gstd3d11device.h>
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -41,6 +49,10 @@ struct gst_master_pipeline
 	GstElement *appsrc;
 	GstElement *appsink;
 	gs_stagesurf_t *stagesurf;
+	bool gpu_input;
+#if HAVE_GST_D3D11
+	GstD3D11Device *d3d11_device;
+#endif
 
 	gint active_destinations;
 	uint64_t texture_push_count;
@@ -54,7 +66,7 @@ struct gst_master_pipeline
 	GMutex state_mutex;
 };
 
-gst_master_pipeline_t *gst_master_pipeline_create(const char *custom_master_pipe, const char *encoder_type, int bitrate_kbps, int keyint_sec, uint32_t width, uint32_t height, uint32_t fps_num, uint32_t fps_den, gst_master_state_cb state_cb, gpointer user_data);
+gst_master_pipeline_t *gst_master_pipeline_create(const char *custom_master_pipe, const char *encoder_type, int bitrate_kbps, int keyint_sec, uint32_t width, uint32_t height, uint32_t fps_num, uint32_t fps_den, bool gpu_input, gst_master_state_cb state_cb, gpointer user_data);
 void gst_master_pipeline_destroy(gst_master_pipeline_t *hub);
 
 /* Frame push methods */
