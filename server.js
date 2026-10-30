@@ -302,7 +302,7 @@ function restartFullPC(callback) {
     [ -x /usr/bin/tigervncserver ] && [ ! -e /usr/bin/vncserver ] && ln -sf /usr/bin/tigervncserver /usr/bin/vncserver || true
     [ -x /usr/bin/tigervncpasswd ] && [ ! -e /usr/bin/vncpasswd ] && ln -sf /usr/bin/tigervncpasswd /usr/bin/vncpasswd || true
 
-    if ! which vncserver Xtigervnc websockify startxfce4 wmctrl xdotool xrandr thunar xarchiver firefox-esr meson ninja gst-launch-1.0 ssh dbus-launch git >/dev/null 2>&1 || \
+    if ! which vncserver Xtigervnc websockify startxfce4 wmctrl xdotool xrandr thunar xarchiver google-chrome meson ninja gst-launch-1.0 ssh dbus-launch git >/dev/null 2>&1 || \
        ! gst-inspect-1.0 nicesrc >/dev/null 2>&1 || \
        ! gst-inspect-1.0 glupload >/dev/null 2>&1 || \
        [ ! -f /usr/include/obs/obs-module.h ] || \
@@ -313,7 +313,7 @@ function restartFullPC(callback) {
       apt-get update
       apt-get install -y --no-install-recommends -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" \
         xfce4-session xfwm4 xfce4-panel xfdesktop4 xfce4-terminal dbus-x11 adwaita-icon-theme \
-        thunar thunar-archive-plugin xarchiver zip unzip p7zip-full firefox-esr \
+        thunar thunar-archive-plugin xarchiver zip unzip p7zip-full \
         tigervnc-standalone-server tigervnc-tools novnc websockify wmctrl xdotool x11-xserver-utils \
         openssh-client procps psmisc git curl ca-certificates pulseaudio \
         obs-studio libobs-dev meson ninja-build build-essential pkg-config \
@@ -325,6 +325,9 @@ function restartFullPC(callback) {
         gstreamer1.0-pulseaudio gstreamer1.0-alsa \
         libgstrtspserver-1.0-0 libgstrtspserver-1.0-dev gstreamer1.0-rtsp \
         libsoup-3.0-dev qt6-base-dev
+      if ! which google-chrome >/dev/null 2>&1; then
+        bash /app/applet/.devcontainer/setup/browser.sh 2>/dev/null || true
+      fi
     fi
 
     # 2. Check & install OBS Studio 32.2.2 AppImage
@@ -407,7 +410,9 @@ WEOF
     mkdir -p /root/Desktop
     cp -f /usr/share/applications/thunar.desktop /root/Desktop/ 2>/dev/null || true
     cp -f /usr/share/applications/xarchiver.desktop /root/Desktop/ 2>/dev/null || true
-    cp -f /usr/share/applications/firefox-esr.desktop /root/Desktop/ 2>/dev/null || true
+    rm -f /root/Desktop/firefox-esr.desktop 2>/dev/null || true
+    cp -f /usr/share/applications/google-chrome.desktop /root/Desktop/ 2>/dev/null || true
+    cp -f ~/.local/share/applications/web-browser.desktop /root/Desktop/ 2>/dev/null || true
     cat << 'EOF' > /root/Desktop/obs.desktop
 [Desktop Entry]
 Version=1.0
@@ -439,6 +444,8 @@ exec startxfce4' > /root/.vnc/xstartup
     pkill -9 -x thunar 2>/dev/null || true
     pkill -9 -x xarchiver 2>/dev/null || true
     pkill -9 -x firefox-esr 2>/dev/null || true
+    pkill -9 -x chrome 2>/dev/null || true
+    pkill -9 -x google-chrome 2>/dev/null || true
     pkill -9 -x websockify 2>/dev/null || true
     pkill -9 -x xfce4-session 2>/dev/null || true
     pkill -9 -x xfwm4 2>/dev/null || true
