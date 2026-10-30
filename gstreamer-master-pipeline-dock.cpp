@@ -972,10 +972,36 @@ public:
 		encoderForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
 
 		m_encoderCombo = new QComboBox(this);
-		m_encoderCombo->addItem("Auto Detect GPU", "auto");
-		m_encoderCombo->addItem("NVIDIA NVENC (nvh264enc)", "nvh264enc");
-		m_encoderCombo->addItem("Intel QuickSync (qsvh264enc)", "qsvh264enc");
-		m_encoderCombo->addItem("VAAPI GPU (vaapih264enc)", "vaapih264enc");
+		const char *autoEnc = gst_master_pipeline_select_encoder("auto", true);
+		m_encoderCombo->addItem(
+			QString("Auto Detect GPU (%1)").arg(autoEnc ? autoEnc : "auto"),
+			"auto");
+		if (gst_master_pipeline_element_available("nvd3d11h264enc") ||
+		    gst_master_pipeline_element_available("nvh264enc") ||
+		    gst_master_pipeline_element_available("nvcudah264enc"))
+			m_encoderCombo->addItem("NVIDIA NVENC (Detected)", "nvh264enc");
+		else
+			m_encoderCombo->addItem("NVIDIA NVENC (nvh264enc)", "nvh264enc");
+
+		if (gst_master_pipeline_element_available("qsvh264enc"))
+			m_encoderCombo->addItem("Intel QuickSync (Detected)", "qsvh264enc");
+		else
+			m_encoderCombo->addItem("Intel QuickSync (qsvh264enc)", "qsvh264enc");
+
+		if (gst_master_pipeline_element_available("amfh264enc"))
+			m_encoderCombo->addItem("AMD AMF (Detected)", "amfh264enc");
+		else
+			m_encoderCombo->addItem("AMD AMF (amfh264enc)", "amfh264enc");
+
+		if (gst_master_pipeline_element_available("vah264enc") ||
+		    gst_master_pipeline_element_available("vaapih264enc"))
+			m_encoderCombo->addItem("VAAPI GPU (Detected)", "vaapih264enc");
+		else
+			m_encoderCombo->addItem("VAAPI GPU (vaapih264enc)", "vaapih264enc");
+
+		if (gst_master_pipeline_element_available("mfh264enc"))
+			m_encoderCombo->addItem("MediaFoundation H.264 (Detected)", "mfh264enc");
+
 		m_encoderCombo->addItem("Software (x264enc)", "x264enc");
 		int encIdx = m_encoderCombo->findData(QString::fromStdString(hub->gpu_encoder_type));
 		if (encIdx >= 0) m_encoderCombo->setCurrentIndex(encIdx);

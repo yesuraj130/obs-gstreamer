@@ -1,0 +1,470 @@
+name: Verify Zero-Copy GPU Texture Pipeline (Windows D3D11 & Linux OpenGL)
+
+on:
+  push:
+    branches: [ "**" ]
+  pull_request:
+    branches: [ "**" ]
+  workflow_dispatch:
+
+jobs:
+  # =========================================================================
+  # 1. Linux OpenGL Zero-Copy Verification (OBS 32 + GstGLMemory)
+  # =========================================================================
+  test-linux-gl-zero-copy:
+    name: "Test Linux OpenGL Zero-Copy (OBS 32 + GstGLMemory)"
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install OBS Studio 32+ & GStreamer OpenGL dependencies
+        run: |
+          sudo add-apt-repository -y ppa:obsproject/obs-studio
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential g++ ninja-build python3-pip pkg-config \
+            obs-studio libobs-dev \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+            libgstreamer-plugins-bad1.0-dev libgstrtspserver-1.0-dev \
+            gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+            gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly \
+            gstreamer1.0-gl libegl1-mesa-dev libx11-dev \
+            libsoup-3.0-dev qt6-base-dev xvfb
+          pip3 install --upgrade meson --break-system-packages || pip3 install --upgrade meson
+          sudo sed -i 's/-std=gnu[0-9]*//g' /usr/lib/*/pkgconfig/libobs.pc /usr/lib/pkgconfig/libobs.pc /usr/share/pkgconfig/libobs.pc 2>/dev/null || true
+
+      - name: Build obs-gstreamer.so and verify libgstgl linkage
+        run: |
+          meson setup build-linux --buildtype release -Dc_args="-I/usr/include/obs" -Dcpp_args="-I/usr/include/obs -Wno-error"
+          ninja -C build-linux
+          ldd build-linux/obs-gstreamer.so | grep -E "libgstgl-1.0"
+
+      - name: Run Live OBS Program Output OpenGL Zero-Copy Test
+        run: |
+          cat << 'EOF' > /tmp/test_gl_zero_copy.c
+          #include <stdio.h>
+          #include <stdlib.h>
+          #include <string.h>
+          #include <assert.h>
+          #include <gst/gst.h>
+          #include <obs.h>
+          #include "gstreamer-master-pipeline.h"
+          #include "gstreamer-render-callback.h"
+
+          static volatile gint g_received_frames = 0;
+
+          static void on_encoded_frame(GstBuffer *buf, bool is_keyframe, gpointer user_data)
+          {
+              (void)is_keyframe;
+              (void)user_data;
+              if (buf && gst_buffer_get_size(buf) > 0)
+                  g_atomic_int_inc(&g_received_frames);
+          }
+
+          int main(int argc, char **argv)
+          {
+              gst_init(&argc, &argv);
+
+              if (!obs_startup("en-US", NULL, NULL)) {
+                  fprintf(stderr, "obs_startup failed\n");
+                  return 1;
+              }
+
+              struct obs_video_info ovi;
+              memset(&ovi, 0, sizeof(ovi));
+              ovi.adapter = 0;
+              ovi.graphics_module = "libobs-opengl.so";
+              ovi.fps_num = 30;
+              ovi.fps_den = 1;
+              ovi.base_width = 1280;
+              ovi.base_height = 720;
+              ovi.output_width = 1280;
+              ovi.output_height = 720;
+              ovi.output_format = VIDEO_FORMAT_NV12;
+              ovi.colorspace = VIDEO_CS_709;
+              ovi.range = VIDEO_RANGE_PARTIAL;
+              ovi.gpu_conversion = true;
+              ovi.scale_type = OBS_SCALE_BILINEAR;
+
+              int rc = obs_reset_video(&ovi);
+              if (rc != OBS_VIDEO_SUCCESS) {
+                  fprintf(stderr, "obs_reset_video failed: %d\n", rc);
+                  return 1;
+              }
+
+              gst_render_callback_t *rcb = gst_render_callback_create(
+                  GST_SOURCE_MAIN_OUTPUT, NULL, "auto", 2000, 1, NULL, NULL);
+              assert(rcb != NULL);
+
+              gst_master_pipeline_t *hub = gst_render_callback_get_hub(rcb);
+              assert(hub != NULL);
+              assert(hub->gpu_input == true);
+              assert(hub->stagesurf == NULL);
+
+              gst_pipeline_subscriber_t *sub = gst_master_pipeline_subscribe(
+                  hub, on_encoded_frame, NULL, "ci_gl_zero_copy_subscriber");
+              assert(sub != NULL);
+
+              for (int i = 0; i < 60 && g_atomic_int_get(&g_received_frames) < 5; i++) {
+                  obs_enter_graphics();
+                  obs_render_main_texture();
+                  obs_leave_graphics();
+                  g_usleep(33000);
+              }
+
+              printf("Linux GL Zero-Copy: gpu_input=%d, stagesurf=%p, pushed=%lu, encoded=%lu, received=%d\n",
+                  (int)hub->gpu_input, (void *)hub->stagesurf,
+                  (unsigned long)hub->texture_push_count,
+                  (unsigned long)hub->encoded_sample_count,
+                  g_atomic_int_get(&g_received_frames));
+
+              assert(hub->gpu_input == true);
+              assert(hub->stagesurf == NULL);
+              assert(hub->texture_push_count > 0);
+              assert(hub->encoded_sample_count > 0);
+              assert(g_atomic_int_get(&g_received_frames) > 0);
+
+              gst_master_pipeline_unsubscribe(hub, sub);
+              gst_render_callback_destroy(rcb);
+              obs_shutdown();
+              return 0;
+          }
+          EOF
+
+          gcc -O2 -Wall -Wextra /tmp/test_gl_zero_copy.c \
+            gstreamer-render-callback.c gstreamer-master-pipeline.c \
+            -I. -I/usr/include/obs \
+            $(pkg-config --cflags --libs gstreamer-1.0 gstreamer-video-1.0 gstreamer-app-1.0 gstreamer-gl-1.0 gstreamer-gl-egl-1.0 gstreamer-gl-x11-1.0 x11) \
+            -lobs -lEGL \
+            -DHAVE_GST_D3D11=0 -DHAVE_GST_GL=1 -DHAVE_GST_GL_EGL=1 -DHAVE_GST_GL_X11=1 -DGST_USE_UNSTABLE_API \
+            -o /tmp/test_gl_zero_copy
+
+          xvfb-run -a -s "-screen 0 1280x720x24" /tmp/test_gl_zero_copy
+          rm -f /tmp/test_gl_zero_copy /tmp/test_gl_zero_copy.c
+
+  # =========================================================================
+  # 2. Windows Direct3D 11 Zero-Copy Verification (OBS 32 + GstD3D11Memory)
+  # =========================================================================
+  test-win64-d3d11-zero-copy:
+    name: "Test Windows D3D11 Zero-Copy (OBS 32 + GstD3D11Memory)"
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Purge Strawberry Perl from PATH
+        shell: pwsh
+        run: |
+          $cleanPath = ($env:PATH.Split(';') | Where-Object { $_ -and $_ -notlike '*Strawberry*' }) -join ';'
+          "PATH=$cleanPath" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Setup MSVC developer environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Install Meson and Ninja
+        shell: pwsh
+        run: |
+          pip install meson ninja
+
+      - name: Install Qt 6 (MSVC 64-bit)
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.6.3'
+          arch: 'win64_msvc2019_64'
+          cache: true
+
+      - name: Cache GStreamer MSVC SDK
+        uses: actions/cache@v4
+        with:
+          path: C:\gstreamer\1.0\msvc_x86_64
+          key: gstreamer-msvc-x86_64-v1.28.7-${{ hashFiles('**/build.yml') }}
+          restore-keys: |
+            gstreamer-msvc-x86_64-
+
+      - name: Fetch and install GStreamer MSVC 64-bit SDK
+        shell: pwsh
+        run: |
+          $gstRootTarget = "C:\gstreamer\1.0\msvc_x86_64"
+          if (-not (Test-Path "$gstRootTarget\lib\pkgconfig\gstreamer-1.0.pc")) {
+            $ver = "1.28.7"
+            $gst_base = "https://gstreamer.freedesktop.org/data/pkg/windows/$ver/msvc"
+            $exe_url = "$gst_base/gstreamer-1.0-msvc-x86_64-$ver.exe"
+            & curl.exe -fL --retry 3 --retry-delay 2 -o "gst-installer.exe" "$exe_url"
+            $installerPath = (Get-Item "gst-installer.exe").FullName
+            $p = Start-Process -FilePath $installerPath -ArgumentList "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /TYPE=devel /DIR=`"$gstRootTarget`" /LOG=`"gst-install.log`"" -Wait -PassThru
+            if ($p.ExitCode -ne 0) { exit 1 }
+          }
+          "GSTREAMER_ROOT=$gstRootTarget" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "$gstRootTarget\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Fetch and prepare OBS Studio 32.2.2 (x64) SDK
+        shell: pwsh
+        run: |
+          $obs_version = "32.2.2"
+          New-Item -ItemType Directory -Force -Path "obs-sdk\include\obs" | Out-Null
+          New-Item -ItemType Directory -Force -Path "obs-sdk\lib\pkgconfig" | Out-Null
+
+          & curl.exe -fL --retry 3 --retry-delay 2 -o "obs-bin.zip" "https://github.com/obsproject/obs-studio/releases/download/$obs_version/OBS-Studio-$obs_version-Windows-x64.zip"
+          Expand-Archive -Path "obs-bin.zip" -DestinationPath "obs-bin"
+
+          & curl.exe -fL --retry 3 --retry-delay 2 -o "obs-src.zip" "https://github.com/obsproject/obs-studio/archive/refs/tags/$obs_version.zip"
+          Expand-Archive -Path "obs-src.zip" -DestinationPath "obs-src"
+
+          Copy-Item -Recurse -Force "obs-src\obs-studio-$obs_version\libobs\*" "obs-sdk\include\obs\"
+          if (Test-Path "obs-src\obs-studio-$obs_version\frontend\api") {
+            Copy-Item -Recurse -Force "obs-src\obs-studio-$obs_version\frontend\api\*" "obs-sdk\include\obs\"
+          }
+
+          @(
+            '#pragma once',
+            '#ifndef OBS_INSTALL_PREFIX',
+            '#define OBS_INSTALL_PREFIX ""',
+            '#endif',
+            '#ifndef OBS_DATA_PATH',
+            '#define OBS_DATA_PATH "data"',
+            '#endif',
+            '#ifndef OBS_PLUGIN_PATH',
+            '#define OBS_PLUGIN_PATH "obs-plugins/64bit"',
+            '#endif',
+            '#ifndef OBS_PLUGIN_DESTINATION',
+            '#define OBS_PLUGIN_DESTINATION "obs-plugins/64bit"',
+            '#endif',
+            '#ifndef OBS_RELEASE_CANDIDATE',
+            '#define OBS_RELEASE_CANDIDATE 0',
+            '#endif',
+            '#ifndef OBS_BETA',
+            '#define OBS_BETA 0',
+            '#endif'
+          ) | Out-File -FilePath "obs-sdk\include\obs\obsconfig.h" -Encoding ascii
+
+          "EXPORTS" | Out-File -FilePath "obs.def" -Encoding ascii
+          dumpbin /exports "obs-bin\bin\64bit\obs.dll" | Select-String -Pattern '^\s+\d+\s+[0-9A-Fa-f]+\s+[0-9A-Fa-f]+\s+(\S+)' | ForEach-Object { $_.Matches[0].Groups[1].Value } | Out-File -FilePath "obs.def" -Append -Encoding ascii
+          lib /def:obs.def /machine:x64 /out:"obs-sdk\lib\obs.lib"
+
+          "EXPORTS" | Out-File -FilePath "obs-frontend-api.def" -Encoding ascii
+          dumpbin /exports "obs-bin\bin\64bit\obs-frontend-api.dll" | Select-String -Pattern '^\s+\d+\s+[0-9A-Fa-f]+\s+[0-9A-Fa-f]+\s+(\S+)' | ForEach-Object { $_.Matches[0].Groups[1].Value } | Out-File -FilePath "obs-frontend-api.def" -Append -Encoding ascii
+          lib /def:obs-frontend-api.def /machine:x64 /out:"obs-sdk\lib\obs-frontend-api.lib"
+
+          $sdkPath = (Get-Item "obs-sdk").FullName.Replace("\", "/")
+          @(
+            "prefix=$sdkPath",
+            "libdir=`${prefix}/lib",
+            "includedir=`${prefix}/include",
+            "",
+            "Name: libobs",
+            "Description: OBS Studio library",
+            "Version: $obs_version",
+            "Libs: -L`${libdir} -lobs",
+            "Cflags: -I`${includedir}/obs -I`${includedir}"
+          ) | Out-File -FilePath "obs-sdk\lib\pkgconfig\libobs.pc" -Encoding ascii
+
+          @(
+            "prefix=$sdkPath",
+            "libdir=`${prefix}/lib",
+            "includedir=`${prefix}/include",
+            "",
+            "Name: obs-frontend-api",
+            "Description: OBS Studio Frontend API library",
+            "Version: $obs_version",
+            "Libs: -L`${libdir} -lobs-frontend-api",
+            "Cflags: -I`${includedir}/obs -I`${includedir}"
+          ) | Out-File -FilePath "obs-sdk\lib\pkgconfig\obs-frontend-api.pc" -Encoding ascii
+
+          if ($env:QTDIR) {
+            $qtPathFwd = $env:QTDIR.Replace("\", "/")
+            @(
+              "prefix=$qtPathFwd",
+              "libdir=`${prefix}/lib",
+              "includedir=`${prefix}/include",
+              "",
+              "Name: qt6",
+              "Description: Qt 6 suite for Windows",
+              "Version: 6.6.3",
+              "Libs: -L`${libdir} -lQt6Core -lQt6Gui -lQt6Widgets",
+              "Cflags: -I`${includedir} -I`${includedir}/QtCore -I`${includedir}/QtGui -I`${includedir}/QtWidgets"
+            ) | Out-File -FilePath "obs-sdk\lib\pkgconfig\qt6.pc" -Encoding ascii
+          }
+
+      - name: Compile obs-gstreamer.dll and run real Direct3D 11 Zero-Copy Texture Test
+        shell: pwsh
+        run: |
+          $gstRoot = $env:GSTREAMER_ROOT
+          $gstPkgPath = "$gstRoot\lib\pkgconfig"
+          $sdkFullPath = (Get-Item "obs-sdk").FullName
+          $sdkPkgPath = (Get-Item "obs-sdk\lib\pkgconfig").FullName
+          $sdkPkgFwd = $sdkPkgPath.Replace('\', '/')
+          $gstPkgFwd = $gstPkgPath.Replace('\', '/')
+          $sdkIncludeFwd = $sdkFullPath.Replace('\', '/')
+          $qtFwd = if ($env:QTDIR) { $env:QTDIR.Replace('\', '/') } else { "" }
+          $qtArgs = if ($qtFwd) { "-I$qtFwd/include -I$qtFwd/include/QtCore -I$qtFwd/include/QtGui -I$qtFwd/include/QtWidgets" } else { "" }
+
+          $env:PKG_CONFIG = "$gstRoot\bin\pkg-config.exe"
+          $env:PATH = "$gstRoot\bin;$sdkFullPath\..\obs-bin\bin\64bit;$($env:QTDIR)\bin;$env:PATH"
+          $env:PKG_CONFIG_PATH = "$sdkPkgPath;$gstPkgPath;$sdkPkgFwd;$gstPkgFwd"
+
+          meson setup build-win64 `
+            --buildtype release `
+            -Dcpp_std=c++17 `
+            -Ddock=enabled `
+            -Dwebrtc=disabled `
+            -Dpkg_config_path="$sdkPkgFwd,$gstPkgFwd" `
+            -Dc_args="-I$sdkIncludeFwd/include/obs -I$sdkIncludeFwd/include" `
+            -Dcpp_args="-I$sdkIncludeFwd/include/obs -I$sdkIncludeFwd/include $qtArgs"
+          ninja -C build-win64
+
+          Write-Host "Verifying gstd3d11-1.0-0.dll linkage in obs-gstreamer.dll..."
+          $deps = dumpbin /dependents "build-win64\obs-gstreamer.dll" | Out-String
+          Write-Host $deps
+          if ($deps -notmatch "gstd3d11-1\.0-0\.dll") {
+            Write-Error "obs-gstreamer.dll was not linked against gstd3d11-1.0-0.dll!"
+            exit 1
+          }
+
+          # Write ephemeral D3D11 zero-copy runtime test using real Windows ID3D11Device & ID3D11Texture2D
+          $testCode = @'
+          #define COBJMACROS
+          #define GST_USE_UNSTABLE_API
+          #include <stdio.h>
+          #include <stdlib.h>
+          #include <string.h>
+          #include <assert.h>
+          #include <windows.h>
+          #include <d3d11.h>
+          #include <gst/gst.h>
+          #include "gstreamer-master-pipeline.h"
+
+          static ID3D11Device *g_d3d11_dev = NULL;
+          static ID3D11DeviceContext *g_d3d11_ctx = NULL;
+          static ID3D11Texture2D *g_d3d11_tex = NULL;
+
+          /* Provide lightweight OBS graphics hooks backed by real Windows ID3D11Device & ID3D11Texture2D */
+          void obs_enter_graphics(void) {}
+          void obs_leave_graphics(void) {}
+          int gs_get_device_type(void) { return GS_DEVICE_DIRECT3D_11; }
+          const char *gs_get_device_name(void) { return "Windows Direct3D 11 CI Device"; }
+          void *gs_get_device_obj(void) { return (void *)g_d3d11_dev; }
+          uint32_t gs_texture_get_width(const gs_texture_t *tex) { (void)tex; return 1280; }
+          uint32_t gs_texture_get_height(const gs_texture_t *tex) { (void)tex; return 720; }
+          enum gs_color_format gs_texture_get_color_format(const gs_texture_t *tex) { (void)tex; return GS_BGRA; }
+          void *gs_texture_get_obj(gs_texture_t *tex) { (void)tex; return (void *)g_d3d11_tex; }
+          gs_stagesurf_t *gs_stagesurface_create(uint32_t w, uint32_t h, enum gs_color_format fmt) {
+              (void)w; (void)h; (void)fmt;
+              /* Must never be called in zero-copy D3D11 mode */
+              assert(0 && "gs_stagesurface_create called during zero-copy test!");
+              return NULL;
+          }
+          void gs_stagesurface_destroy(gs_stagesurf_t *s) { (void)s; }
+          void gs_stage_texture(gs_stagesurf_t * dst, gs_texture_t *src) { (void)dst; (void)src; }
+          bool gs_stagesurface_map(gs_stagesurf_t *s, uint8_t **data, uint32_t *linesize) {
+              (void)s; (void)data; (void)linesize; return false;
+          }
+          void gs_stagesurface_unmap(gs_stagesurf_t *s) { (void)s; }
+          void blog(int log_level, const char *format, ...) {
+              (void)log_level;
+              va_list args;
+              va_start(args, format);
+              vprintf(format, args);
+              printf("\n");
+              va_end(args);
+          }
+          void *bzalloc(size_t size) { return calloc(1, size); }
+          void bfree(void *ptr) { free(ptr); }
+          char *bstrdup(const char *str) { return str ? _strdup(str) : NULL; }
+
+          static volatile gint g_received_frames = 0;
+          static void on_encoded(GstBuffer *buf, bool keyframe, gpointer user_data) {
+              (void)keyframe; (void)user_data;
+              if (buf && gst_buffer_get_size(buf) > 0)
+                  g_atomic_int_inc(&g_received_frames);
+          }
+
+          int main(int argc, char **argv) {
+              gst_init(&argc, &argv);
+
+              D3D_FEATURE_LEVEL fl;
+              HRESULT hr = D3D11CreateDevice(
+                  NULL, D3D_DRIVER_TYPE_HARDWARE, NULL, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+                  NULL, 0, D3D11_SDK_VERSION, &g_d3d11_dev, &fl, &g_d3d11_ctx);
+              if (FAILED(hr)) {
+                  hr = D3D11CreateDevice(
+                      NULL, D3D_DRIVER_TYPE_WARP, NULL, D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+                      NULL, 0, D3D11_SDK_VERSION, &g_d3d11_dev, &fl, &g_d3d11_ctx);
+              }
+              assert(SUCCEEDED(hr) && g_d3d11_dev != NULL);
+
+              D3D11_TEXTURE2D_DESC desc;
+              memset(&desc, 0, sizeof(desc));
+              desc.Width = 1280;
+              desc.Height = 720;
+              desc.MipLevels = 1;
+              desc.ArraySize = 1;
+              desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+              desc.SampleDesc.Count = 1;
+              desc.Usage = D3D11_USAGE_DEFAULT;
+              desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+
+              hr = ID3D11Device_CreateTexture2D(g_d3d11_dev, &desc, NULL, &g_d3d11_tex);
+              assert(SUCCEEDED(hr) && g_d3d11_tex != NULL);
+
+              gst_master_pipeline_t *hub = gst_master_pipeline_create(
+                  NULL, "auto", 2000, 1, 1280, 720, 30, 1, true, NULL, NULL);
+              assert(hub != NULL);
+              assert(hub->gpu_input == true);
+              assert(hub->d3d11_device != NULL);
+              assert(hub->stagesurf == NULL);
+
+              gst_pipeline_subscriber_t *sub = gst_master_pipeline_subscribe(
+                  hub, on_encoded, NULL, "ci_win_d3d11_zero_copy");
+              assert(sub != NULL);
+
+              for (int i = 0; i < 30 && g_atomic_int_get(&g_received_frames) < 3; i++) {
+                  gst_master_pipeline_push_texture(hub, (gs_texture_t *)g_d3d11_tex, (uint64_t)i * 33333333ULL);
+                  Sleep(33);
+              }
+
+              printf("Windows D3D11 Zero-Copy: gpu_input=%d, stagesurf=%p, pushed=%llu, encoded=%llu, received=%d\n",
+                  (int)hub->gpu_input, (void *)hub->stagesurf,
+                  (unsigned long long)hub->texture_push_count,
+                  (unsigned long long)hub->encoded_sample_count,
+                  g_atomic_int_get(&g_received_frames));
+
+              assert(hub->gpu_input == true);
+              assert(hub->stagesurf == NULL);
+              assert(hub->texture_push_count > 0);
+              assert(hub->encoded_sample_count > 0);
+              assert(g_atomic_int_get(&g_received_frames) > 0);
+
+              gst_master_pipeline_unsubscribe(hub, sub);
+              gst_master_pipeline_destroy(hub);
+              ID3D11Texture2D_Release(g_d3d11_tex);
+              ID3D11DeviceContext_Release(g_d3d11_ctx);
+              ID3D11Device_Release(g_d3d11_dev);
+              return 0;
+          }
+          '@
+          $testFile = Join-Path $env:TEMP "test_d3d11_zero_copy.c"
+          $testExe = Join-Path $env:TEMP "test_d3d11_zero_copy.exe"
+          $testCode | Out-File -FilePath $testFile -Encoding ascii
+
+          cl.exe /nologo /O2 /MD `
+            -DHAVE_GST_D3D11=1 -DHAVE_GST_GL=0 -DCOBJMACROS -DGST_USE_UNSTABLE_API `
+            -I. "-I$sdkFullPath\include\obs" "-I$sdkFullPath\include" `
+            "-I$gstRoot\include\gstreamer-1.0" "-I$gstRoot\include\glib-2.0" "-I$gstRoot\lib\glib-2.0\include" `
+            $testFile gstreamer-master-pipeline.c `
+            /Fe:$testExe `
+            /link "/LIBPATH:$gstRoot\lib" `
+            gstreamer-1.0.lib gstbase-1.0.lib gstvideo-1.0.lib gstapp-1.0.lib gstd3d11-1.0.lib `
+            glib-2.0.lib gobject-2.0.lib d3d11.lib dxgi.lib
+
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          & $testExe
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          Remove-Item -Force $testFile, $testExe -ErrorAction SilentlyContinue

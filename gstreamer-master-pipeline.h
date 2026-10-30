@@ -8,14 +8,23 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <gst/gst.h>
+#include <gst/video/video.h>
 #include <obs.h>
 
 #ifndef HAVE_GST_D3D11
 #define HAVE_GST_D3D11 0
 #endif
 
+#ifndef HAVE_GST_GL
+#define HAVE_GST_GL 0
+#endif
+
 #if HAVE_GST_D3D11
 #include <gst/d3d11/gstd3d11device.h>
+#endif
+
+#if HAVE_GST_GL
+#include <gst/gl/gl.h>
 #endif
 
 #ifdef __cplusplus
@@ -50,8 +59,17 @@ struct gst_master_pipeline
 	GstElement *appsink;
 	gs_stagesurf_t *stagesurf;
 	bool gpu_input;
+	char *selected_encoder;
+	GstVideoFormat appsrc_format;
 #if HAVE_GST_D3D11
 	GstD3D11Device *d3d11_device;
+	bool d3d11_desc_logged;
+#endif
+#if HAVE_GST_GL
+	GstGLDisplay *gl_display;
+	GstGLContext *gl_app_context;
+	GstGLContext *gl_context;
+	bool gl_tex_logged;
 #endif
 
 	gint active_destinations;
@@ -65,6 +83,9 @@ struct gst_master_pipeline
 	gpointer state_user_data;
 	GMutex state_mutex;
 };
+
+bool gst_master_pipeline_element_available(const char *factory_name);
+const char *gst_master_pipeline_select_encoder(const char *requested_encoder, bool gpu_input);
 
 gst_master_pipeline_t *gst_master_pipeline_create(const char *custom_master_pipe, const char *encoder_type, int bitrate_kbps, int keyint_sec, uint32_t width, uint32_t height, uint32_t fps_num, uint32_t fps_den, bool gpu_input, gst_master_state_cb state_cb, gpointer user_data);
 void gst_master_pipeline_destroy(gst_master_pipeline_t *hub);

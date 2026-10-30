@@ -126,9 +126,31 @@ deps = [
 gst_d3d11_dep = dependency('gstreamer-d3d11-1.0', required : false)
 if host_machine.system() == 'windows' and gst_d3d11_dep.found()
   deps += [gst_d3d11_dep]
-  extra_c_args += ['-DHAVE_GST_D3D11=1', '-DCOBJMACROS']
+  extra_c_args += ['-DHAVE_GST_D3D11=1', '-DCOBJMACROS', '-DGST_USE_UNSTABLE_API']
 else
   extra_c_args += ['-DHAVE_GST_D3D11=0']
+endif
+
+gst_gl_dep = dependency('gstreamer-gl-1.0', required : false)
+if gst_gl_dep.found()
+  deps += [gst_gl_dep]
+  extra_c_args += ['-DHAVE_GST_GL=1', '-DGST_USE_UNSTABLE_API']
+  gst_gl_egl_dep = dependency('gstreamer-gl-egl-1.0', required : false)
+  if gst_gl_egl_dep.found()
+    deps += [gst_gl_egl_dep]
+    extra_c_args += ['-DHAVE_GST_GL_EGL=1']
+  else
+    extra_c_args += ['-DHAVE_GST_GL_EGL=0']
+  endif
+  gst_gl_x11_dep = dependency('gstreamer-gl-x11-1.0', required : false)
+  if gst_gl_x11_dep.found()
+    deps += [gst_gl_x11_dep]
+    extra_c_args += ['-DHAVE_GST_GL_X11=1']
+  else
+    extra_c_args += ['-DHAVE_GST_GL_X11=0']
+  endif
+else
+  extra_c_args += ['-DHAVE_GST_GL=0', '-DHAVE_GST_GL_EGL=0', '-DHAVE_GST_GL_X11=0']
 endif
 
 if not dock_opt.disabled() and qt_dep.found() and obs_frontend_dep.found()
