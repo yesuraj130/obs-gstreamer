@@ -1,0 +1,28 @@
+[
+    {
+        "display_name": "",
+        "enabled": true,
+        "encoders": [
+            "gstreamer-encoder-callback",
+            "hjm-gstreamer-encoder-callback"
+        ],
+        "id": "",
+        "module_name": "obs-gstreamer",
+        "outputs": [
+            "hjm-gstreamer-output",
+            "hjm-gstreamer-output-encoded",
+            "gst_encoder_driver_output",
+            "gstreamer-output-callback"
+        ],
+        "services": [],
+        "sources": [
+            "gstreamer-source",
+            "gstreamer-source-video",
+            "gstreamer-filter-video",
+            "gstreamer-filter-video-gpu",
+            "gstreamer-filter-audio",
+            "gst_private_filter_callback"
+        ],
+        "version": ""
+    }
+]

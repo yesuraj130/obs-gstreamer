@@ -55,3 +55,11 @@ if [ ! -f /opt/obs-studio-32/AppDir/.junest/usr/lib/obs-plugins/move-transition.
     sudo cp -r /usr/share/obs/obs-plugins/move-transition/* /opt/obs-studio-32/AppDir/.junest/usr/share/obs/obs-plugins/move-transition/ 2>/dev/null || true
     rm -f /tmp/move-transition.deb
 fi
+
+# Apply saved OBS configuration (settings, docks, profile, scenes & sources) on initial OBS install
+REPO_OBS_CFG="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/obs-studio-config"
+if [ -d "$REPO_OBS_CFG" ] && [ ! -d /root/.config/obs-studio ]; then
+    echo "Applying initial OBS settings, docks, scenes, and sources..."
+    mkdir -p /root/.config/obs-studio
+    cp -rf "$REPO_OBS_CFG"/* /root/.config/obs-studio/ 2>/dev/null || true
+fi
