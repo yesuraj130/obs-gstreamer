@@ -598,7 +598,13 @@ static GstVideoFormat get_obs_compositing_format(void)
 	gs_texture_t *main_tex = obs_get_main_texture();
 	if (main_tex)
 		gs_fmt = gs_texture_get_color_format(main_tex);
+	int dev_type = gs_get_device_type();
 	obs_leave_graphics();
+
+	bool is_gl = (dev_type == GS_DEVICE_OPENGL);
+#if defined(__linux__) || defined(__APPLE__)
+	is_gl = true;
+#endif
 
 	switch (gs_fmt)
 	{
@@ -607,9 +613,16 @@ static GstVideoFormat get_obs_compositing_format(void)
 		return GST_VIDEO_FORMAT_RGBA;
 	case GS_BGRA:
 	case GS_BGRA_UNORM:
-		return GST_VIDEO_FORMAT_BGRA;
+		/*
+		 * On OpenGL (Linux/macOS), OBS allocates GL_RGBA8 textures where
+		 * channel 0 is Red and channel 2 is Blue.
+		 * If we pass GST_VIDEO_FORMAT_BGRA to GStreamer GLMemory,
+		 * glcolorconvert swizzles .bgra and inverts Red and Blue.
+		 * On Direct3D 11 (Windows), DXGI format is native BGRA.
+		 */
+		return is_gl ? GST_VIDEO_FORMAT_RGBA : GST_VIDEO_FORMAT_BGRA;
 	case GS_BGRX:
-		return GST_VIDEO_FORMAT_BGRx;
+		return is_gl ? GST_VIDEO_FORMAT_RGBx : GST_VIDEO_FORMAT_BGRx;
 	case GS_R10G10B10A2:
 		return GST_VIDEO_FORMAT_RGB10A2_LE;
 	case GS_RGBA16F:
@@ -619,7 +632,7 @@ static GstVideoFormat get_obs_compositing_format(void)
 	}
 
 	/* Fallback based on backend device if main texture is not yet rendered */
-	if (gs_get_device_type() == GS_DEVICE_OPENGL)
+	if (is_gl)
 		return GST_VIDEO_FORMAT_RGBA;
 	return GST_VIDEO_FORMAT_BGRA;
 }
@@ -959,10 +972,22 @@ static bool push_gl_texture(gst_master_pipeline_t *hub, gs_texture_t *texture, u
 	switch (color_format)
 	{
 	case GS_RGBA:
-	case GS_RGBA_UNORM: format = GST_VIDEO_FORMAT_RGBA; break;
+	case GS_RGBA_UNORM:
+		format = GST_VIDEO_FORMAT_RGBA;
+		break;
 	case GS_BGRA:
-	case GS_BGRA_UNORM: format = GST_VIDEO_FORMAT_BGRA; break;
-	case GS_BGRX: format = GST_VIDEO_FORMAT_BGRx; break;
+	case GS_BGRA_UNORM:
+		/*
+		 * On OpenGL, OBS allocates GL_RGBA8 textures where component 0 is Red.
+		 * If we pass GST_VIDEO_FORMAT_BGRA to GStreamer GLMemory,
+		 * glcolorconvert swizzles .bgra and inverts Red and Blue!
+		 * Map OBS GS_BGRA to GStreamer RGBA for OpenGL zero-copy.
+		 */
+		format = GST_VIDEO_FORMAT_RGBA;
+		break;
+	case GS_BGRX:
+		format = GST_VIDEO_FORMAT_RGBx;
+		break;
 	default:
 		blog(LOG_ERROR, "[obs-gstreamer-master] Unsupported OpenGL texture format for zero-copy input: %d",
 			(int)color_format);

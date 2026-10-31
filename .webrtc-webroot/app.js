@@ -336,9 +336,12 @@
           showStartupConsole(data);
         }
 
+        var btnClaimPlayit = document.getElementById('btn-claim-playit');
+
         if (externalVncAddr && data && data.tcpTunnel) {
           if (data.tcpTunnel.status === 'online' && data.tcpTunnel.full) {
-            externalVncAddr.textContent = data.tcpTunnel.full;
+            var isStatic = data.tcpTunnel.provider === 'playit';
+            externalVncAddr.textContent = data.tcpTunnel.full + (isStatic ? ' (Static)' : '');
             externalVncDot.className = 'w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse';
           } else if (data.tcpTunnel.status === 'connecting') {
             externalVncAddr.textContent = 'Exposing public port...';
@@ -346,6 +349,17 @@
           } else {
             externalVncAddr.textContent = 'Tunnel offline (reconnecting)';
             externalVncDot.className = 'w-1.5 h-1.5 rounded-full bg-rose-400';
+          }
+
+          if (btnClaimPlayit) {
+            if (data.tcpTunnel.provider !== 'playit' && data.tcpTunnel.claimUrl) {
+              btnClaimPlayit.href = data.tcpTunnel.claimUrl;
+              btnClaimPlayit.classList.remove('hidden');
+              btnClaimPlayit.classList.add('flex');
+            } else {
+              btnClaimPlayit.classList.add('hidden');
+              btnClaimPlayit.classList.remove('flex');
+            }
           }
         }
       })

@@ -74,25 +74,36 @@ function runCommandWithLiveLogs(label, scriptContent, callback) {
   });
 }
 
+const PLAYIT_CONFIG_PATH = '/app/applet/playit.toml';
+const PLAYIT_BIN = '/usr/local/bin/playit';
+const PLAYIT_CLI_BIN = '/usr/local/bin/playit-cli';
+
 let tcpTunnelInfo = {
   host: '',
   port: '',
   full: '',
   status: 'connecting',
+  provider: 'pinggy',
+  claimUrl: '',
   lastUpdated: null
 };
 
-let tunnelProcess = null;
+let pinggyProcess = null;
+let playitDaemon = null;
+let playitSetupProc = null;
+let playitPollTimer = null;
 
-function startTCPTunnel() {
-  if (tunnelProcess) {
-    try { tunnelProcess.kill(); } catch (e) {}
-    tunnelProcess = null;
+function startPinggyTunnel() {
+  if (pinggyProcess) {
+    try { pinggyProcess.kill(); } catch (e) {}
+    pinggyProcess = null;
+  }
+  // Only run Pinggy if Playit is not already active
+  if (tcpTunnelInfo.provider === 'playit' && tcpTunnelInfo.status === 'online') {
+    return;
   }
 
-  addLog('Starting public TCP tunnel for VNC (port 5901)...');
-  tcpTunnelInfo.status = 'connecting';
-
+  addLog('Starting Pinggy TCP tunnel for temporary VNC access...');
   try {
     const proc = spawn('ssh', [
       '-p', '443',
@@ -102,21 +113,19 @@ function startTCPTunnel() {
       '-R', '0:localhost:5901',
       'tcp@a.pinggy.io'
     ]);
-
-    tunnelProcess = proc;
+    pinggyProcess = proc;
 
     const parseOutput = (chunk) => {
       const text = chunk.toString();
       const match = text.match(/tcp:\/\/([^:\s]+):(\d+)/);
-      if (match) {
-        tcpTunnelInfo = {
-          host: match[1],
-          port: match[2],
-          full: `${match[1]}:${match[2]}`,
-          status: 'online',
-          lastUpdated: new Date().toISOString()
-        };
-        addLog(`Public VNC TCP Tunnel online: ${tcpTunnelInfo.full}`);
+      if (match && tcpTunnelInfo.provider !== 'playit') {
+        tcpTunnelInfo.host = match[1];
+        tcpTunnelInfo.port = match[2];
+        tcpTunnelInfo.full = `${match[1]}:${match[2]}`;
+        tcpTunnelInfo.status = 'online';
+        tcpTunnelInfo.provider = 'pinggy';
+        tcpTunnelInfo.lastUpdated = new Date().toISOString();
+        addLog(`Public VNC TCP Tunnel (Pinggy) online: ${tcpTunnelInfo.full}`);
       }
     };
 
@@ -124,22 +133,117 @@ function startTCPTunnel() {
     proc.stderr.on('data', parseOutput);
 
     proc.on('close', () => {
-      addLog('TCP tunnel closed. Reconnecting in 5s...');
-      tcpTunnelInfo.status = 'offline';
-      tunnelProcess = null;
-      setTimeout(startTCPTunnel, 5000);
+      pinggyProcess = null;
+      if (tcpTunnelInfo.provider !== 'playit') {
+        tcpTunnelInfo.status = 'offline';
+        setTimeout(startPinggyTunnel, 5000);
+      }
     });
 
     proc.on('error', (err) => {
-      addLog(`TCP tunnel error: ${err.message}`);
-      tcpTunnelInfo.status = 'offline';
+      if (tcpTunnelInfo.provider !== 'playit') {
+        tcpTunnelInfo.status = 'offline';
+      }
     });
   } catch (e) {
-    addLog(`TCP tunnel spawn error: ${e.message}`);
+    addLog(`Pinggy spawn error: ${e.message}`);
   }
 }
 
-// Start public tunnel on server init
+function startPlayit() {
+  try {
+    exec('mkdir -p /run/playit', () => {});
+    const hasConfig = fs.existsSync(PLAYIT_CONFIG_PATH) && fs.statSync(PLAYIT_CONFIG_PATH).size > 10;
+
+    // Start playit daemon if not already running
+    exec('pgrep -x playit >/dev/null && echo "1" || echo "0"', (err, stdout) => {
+      const isRunning = stdout && stdout.trim() === '1';
+      if (!isRunning && fs.existsSync(PLAYIT_BIN)) {
+        addLog('Launching Playit.gg daemon for permanent static tunnel...');
+        playitDaemon = spawn(PLAYIT_BIN, ['--secret-path', PLAYIT_CONFIG_PATH, '-l', '/app/applet/playit.log'], {
+          detached: true,
+          stdio: 'ignore'
+        });
+        playitDaemon.unref();
+      }
+    });
+
+    if (hasConfig) {
+      // Configuration present -> agent claimed, poll assigned domain & port
+      pollPlayitTunnel();
+    } else {
+      // Configuration missing -> run setup to generate permanent claim code
+      if (!playitSetupProc) {
+        addLog('Starting Playit setup to generate permanent claim URL...');
+        playitSetupProc = spawn(PLAYIT_CLI_BIN, ['setup']);
+
+        const handleSetupOut = (chunk) => {
+          const text = chunk.toString();
+          const match = text.match(/https:\/\/playit\.gg\/claim\/([a-zA-Z0-9]+)/);
+          if (match) {
+            tcpTunnelInfo.claimUrl = `https://playit.gg/claim/${match[1]}`;
+            addLog(`Playit permanent static tunnel claim URL: ${tcpTunnelInfo.claimUrl}`);
+          }
+        };
+
+        playitSetupProc.stdout.on('data', handleSetupOut);
+        playitSetupProc.stderr.on('data', handleSetupOut);
+
+        playitSetupProc.on('close', (code) => {
+          playitSetupProc = null;
+          if (fs.existsSync(PLAYIT_CONFIG_PATH) && fs.statSync(PLAYIT_CONFIG_PATH).size > 10) {
+            addLog('Playit agent successfully claimed! Loading static tunnel...');
+            tcpTunnelInfo.claimUrl = '';
+            pollPlayitTunnel();
+          } else {
+            setTimeout(startPlayit, 5000);
+          }
+        });
+      }
+    }
+  } catch (e) {
+    addLog(`Playit setup error: ${e.message}`);
+  }
+}
+
+function pollPlayitTunnel() {
+  if (playitPollTimer) clearInterval(playitPollTimer);
+  playitPollTimer = setInterval(() => {
+    if (!fs.existsSync(PLAYIT_CONFIG_PATH)) return;
+
+    exec('timeout 3 /usr/local/bin/playit-cli attach --stdout 2>/dev/null || cat /app/applet/playit.log 2>/dev/null', (err, stdout) => {
+      if (!stdout) return;
+      // Search for playit public endpoints: *.gl.joinmc.link:PORT, *.auto.playit.gg:PORT, *.ply.gg:PORT
+      const match = stdout.match(/127\.0\.0\.1:5901\s*=>\s*([a-zA-Z0-9_\-\.]+\.[a-zA-Z]{2,}):(\d+)/i) ||
+                    stdout.match(/([a-zA-Z0-9_\-]+\.(?:gl\.joinmc\.link|auto\.playit\.gg|craft\.ply\.gg|at\.ply\.gg|playit\.gg)):(\d+)/i);
+      if (match) {
+        const host = match[1];
+        const port = match[2];
+        tcpTunnelInfo = {
+          host: host,
+          port: port,
+          full: `${host}:${port}`,
+          status: 'online',
+          provider: 'playit',
+          claimUrl: '',
+          lastUpdated: new Date().toISOString()
+        };
+        // Safely kill temporary Pinggy process once permanent Playit is live
+        if (pinggyProcess) {
+          try { pinggyProcess.kill(); } catch (e) {}
+          pinggyProcess = null;
+        }
+      }
+    });
+  }, 3000);
+}
+
+function startTCPTunnel() {
+  startPinggyTunnel();
+  startPlayit();
+}
+
+// Start public tunnels on server init
 startTCPTunnel();
 
 function checkPort(port, host, callback) {
