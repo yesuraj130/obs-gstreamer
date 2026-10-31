@@ -26,9 +26,11 @@
 
 #include <QtCore/qglobal.h>
 
+#if defined(__GNUC__) || defined(__clang__)
 extern "C" {
 bool obs_frontend_add_dock_by_id(const char *id, const char *title, void *dock) __attribute__((weak));
 }
+#endif
 
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
@@ -1661,7 +1663,12 @@ static void on_frontend_save_load(obs_data_t *save_data, bool saving, void *priv
 void gstreamer_dock_register(void)
 {
 	/* Register dock into OBS Studio early during obs_module_load so OBS UI layout restoration knows about it */
-	if (!g_dock_widget && obs_frontend_add_dock_by_id) {
+#if defined(__GNUC__) || defined(__clang__)
+	const bool can_add_dock = (obs_frontend_add_dock_by_id != nullptr);
+#else
+	const bool can_add_dock = true;
+#endif
+	if (!g_dock_widget && can_add_dock) {
 		g_dock_widget = new GstMasterDockWidget();
 		g_dock_widget->refreshTable();
 
