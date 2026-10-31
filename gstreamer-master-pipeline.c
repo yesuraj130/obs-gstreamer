@@ -591,6 +591,39 @@ static void ensure_appsrc_gpu_caps(gst_master_pipeline_t *hub, GstVideoFormat fo
 }
 #endif
 
+static GstVideoFormat get_obs_compositing_format(void)
+{
+	enum gs_color_format gs_fmt = GS_UNKNOWN;
+	obs_enter_graphics();
+	gs_texture_t *main_tex = obs_get_main_texture();
+	if (main_tex)
+		gs_fmt = gs_texture_get_color_format(main_tex);
+	obs_leave_graphics();
+
+	switch (gs_fmt)
+	{
+	case GS_RGBA:
+	case GS_RGBA_UNORM:
+		return GST_VIDEO_FORMAT_RGBA;
+	case GS_BGRA:
+	case GS_BGRA_UNORM:
+		return GST_VIDEO_FORMAT_BGRA;
+	case GS_BGRX:
+		return GST_VIDEO_FORMAT_BGRx;
+	case GS_R10G10B10A2:
+		return GST_VIDEO_FORMAT_RGB10A2_LE;
+	case GS_RGBA16F:
+		return GST_VIDEO_FORMAT_RGBA64_LE;
+	default:
+		break;
+	}
+
+	/* Fallback based on backend device if main texture is not yet rendered */
+	if (gs_get_device_type() == GS_DEVICE_OPENGL)
+		return GST_VIDEO_FORMAT_RGBA;
+	return GST_VIDEO_FORMAT_BGRA;
+}
+
 static GstElement *create_master_encoder_pipeline(gst_master_pipeline_t *hub, const char *custom_master_pipe, const char *encoder_type, int bitrate_kbps, int keyint_sec)
 {
 	gchar *pipe_desc = NULL;
@@ -612,21 +645,25 @@ static GstElement *create_master_encoder_pipeline(gst_master_pipeline_t *hub, co
 			: gst_master_pipeline_select_encoder(encoder_type, hub->gpu_input);
 		gchar *enc_str = build_encoder_element_str(chosen_enc, gop_size, bitrate);
 
+		GstVideoFormat obs_fmt = get_obs_compositing_format();
+		const char *obs_fmt_str = gst_video_format_to_string(obs_fmt);
+		if (!obs_fmt_str) obs_fmt_str = "RGBA";
+
 #if HAVE_GST_D3D11
 		if (hub->gpu_input && hub->d3d11_device)
 		{
 			const char *post_convert = is_d3d11_memory_encoder(chosen_enc)
 				? "d3d11convert ! video/x-raw(memory:D3D11Memory), format=NV12"
 				: "d3d11convert ! d3d11download ! videoconvert";
-			hub->appsrc_format = GST_VIDEO_FORMAT_BGRA;
+			hub->appsrc_format = obs_fmt;
 			pipe_desc = g_strdup_printf(
 				"appsrc name=hub_appsrc is-live=true format=GST_FORMAT_TIME do-timestamp=true "
 				"caps=\"video/x-raw(memory:D3D11Memory), width=%u, height=%u, "
-				"format=BGRA, framerate=%u/%u\" ! "
+				"format=%s, framerate=%u/%u\" ! "
 				"%s ! %s ! h264parse config-interval=-1 ! "
 				"video/x-h264, stream-format=byte-stream, alignment=au ! "
 				"appsink name=hub_appsink sync=false drop=true max-buffers=1",
-				hub->width, hub->height, hub->fps_num, hub->fps_den, post_convert, enc_str);
+				hub->width, hub->height, obs_fmt_str, hub->fps_num, hub->fps_den, post_convert, enc_str);
 			g_free(enc_str);
 			goto launch_pipeline;
 		}
@@ -640,15 +677,15 @@ static GstElement *create_master_encoder_pipeline(gst_master_pipeline_t *hub, co
 				: is_dmabuf_memory_encoder(chosen_enc)
 					? "glcolorconvert ! gldownload ! video/x-raw(memory:DMABuf), format=NV12"
 					: "glcolorconvert ! gldownload ! videoconvert";
-			hub->appsrc_format = GST_VIDEO_FORMAT_BGRA;
+			hub->appsrc_format = obs_fmt;
 			pipe_desc = g_strdup_printf(
 				"appsrc name=hub_appsrc is-live=true format=GST_FORMAT_TIME do-timestamp=true "
 				"caps=\"video/x-raw(memory:GLMemory), width=%u, height=%u, "
-				"format=BGRA, framerate=%u/%u, texture-target=2D\" ! "
+				"format=%s, framerate=%u/%u, texture-target=2D\" ! "
 				"%s ! %s ! h264parse config-interval=-1 ! "
 				"video/x-h264, stream-format=byte-stream, alignment=au ! "
 				"appsink name=hub_appsink sync=false drop=true max-buffers=1",
-				hub->width, hub->height, hub->fps_num, hub->fps_den, post_convert, enc_str);
+				hub->width, hub->height, obs_fmt_str, hub->fps_num, hub->fps_den, post_convert, enc_str);
 			g_free(enc_str);
 			goto launch_pipeline;
 		}
@@ -669,9 +706,10 @@ static GstElement *create_master_encoder_pipeline(gst_master_pipeline_t *hub, co
 #if HAVE_GST_D3D11 || HAVE_GST_GL
 launch_pipeline:
 #endif
-	blog(LOG_INFO, "[obs-gstreamer-master] Launching Master Hardware Encoder Pipeline (gpu_zero_copy=%s, encoder=%s): %s",
+	blog(LOG_INFO, "[obs-gstreamer-master] Launching Master Hardware Encoder Pipeline (gpu_zero_copy=%s, encoder=%s, appsrc_format=%s): %s",
 		hub->gpu_input ? "yes" : "no",
 		hub->selected_encoder ? hub->selected_encoder : "custom",
+		gst_video_format_to_string(hub->appsrc_format),
 		pipe_desc);
 	GError *error = NULL;
 	GstElement *pipe = gst_parse_launch(pipe_desc, &error);

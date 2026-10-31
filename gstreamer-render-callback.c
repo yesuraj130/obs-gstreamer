@@ -170,8 +170,14 @@ gst_render_callback_t *gst_render_callback_create(gst_source_type_t type, const 
 
 	if (type != GST_SOURCE_MAIN_OUTPUT)
 	{
+		enum gs_color_format tex_fmt = GS_RGBA;
 		obs_enter_graphics();
-		cb->texrender = gs_texrender_create(GS_RGBA, GS_ZS_NONE);
+		gs_texture_t *main_tex = obs_get_main_texture();
+		if (main_tex)
+			tex_fmt = gs_texture_get_color_format(main_tex);
+		else if (gs_get_device_type() == GS_DEVICE_DIRECT3D_11)
+			tex_fmt = GS_BGRA;
+		cb->texrender = gs_texrender_create(tex_fmt, GS_ZS_NONE);
 		obs_leave_graphics();
 	}
 
