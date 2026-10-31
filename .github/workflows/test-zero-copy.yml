@@ -24,7 +24,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential g++ ninja-build python3-pip pkg-config \
-            obs-studio \
+            obs-studio libsimde-dev \
             libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
             libgstreamer-plugins-bad1.0-dev libgstrtspserver-1.0-dev \
             gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
@@ -330,11 +330,16 @@ jobs:
 
           # Write ephemeral D3D11 zero-copy runtime test using real Windows ID3D11Device & ID3D11Texture2D
           $testCode = @'
+          #ifndef COBJMACROS
           #define COBJMACROS
+          #endif
+          #ifndef GST_USE_UNSTABLE_API
           #define GST_USE_UNSTABLE_API
+          #endif
           #include <stdio.h>
           #include <stdlib.h>
           #include <string.h>
+          #include <stdarg.h>
           #include <assert.h>
           #include <windows.h>
           #include <d3d11.h>
@@ -362,7 +367,10 @@ jobs:
               return NULL;
           }
           void gs_stagesurface_destroy(gs_stagesurf_t *s) { (void)s; }
-          void gs_stage_texture(gs_stagesurf_t * dst, gs_texture_t *src) { (void)dst; (void)src; }
+          uint32_t gs_stagesurface_get_width(const gs_stagesurf_t *s) { (void)s; return 0; }
+          uint32_t gs_stagesurface_get_height(const gs_stagesurf_t *s) { (void)s; return 0; }
+          enum gs_color_format gs_stagesurface_get_color_format(const gs_stagesurf_t *s) { (void)s; return GS_UNKNOWN; }
+          void gs_stage_texture(gs_stagesurf_t *dst, gs_texture_t *src) { (void)dst; (void)src; }
           bool gs_stagesurface_map(gs_stagesurf_t *s, uint8_t **data, uint32_t *linesize) {
               (void)s; (void)data; (void)linesize; return false;
           }
@@ -375,9 +383,14 @@ jobs:
               printf("\n");
               va_end(args);
           }
-          void *bzalloc(size_t size) { return calloc(1, size); }
+          void *bmalloc(size_t size) { return calloc(1, size); }
+          void *bmemdup(const void *ptr, size_t size) {
+              if (!ptr || size == 0) return NULL;
+              void *dup = malloc(size);
+              if (dup) memcpy(dup, ptr, size);
+              return dup;
+          }
           void bfree(void *ptr) { free(ptr); }
-          char *bstrdup(const char *str) { return str ? _strdup(str) : NULL; }
 
           static volatile gint g_received_frames = 0;
           static void on_encoded(GstBuffer *buf, bool keyframe, gpointer user_data) {
@@ -457,7 +470,7 @@ jobs:
           cl.exe /nologo /O2 /MD `
             -DHAVE_GST_D3D11=1 -DHAVE_GST_GL=0 -DCOBJMACROS -DGST_USE_UNSTABLE_API `
             -I. "-I$sdkFullPath\include\obs" "-I$sdkFullPath\include" `
-            "-I$gstRoot\include\gstreamer-1.0" "-I$gstRoot\include\glib-2.0" "-I$gstRoot\lib\glib-2.0\include" `
+            "-I$gstRoot\include\gstreamer-1.0" "-I$gstRoot\lib\gstreamer-1.0\include" "-I$gstRoot\include\glib-2.0" "-I$gstRoot\lib\glib-2.0\include" `
             $testFile gstreamer-master-pipeline.c `
             /Fe:$testExe `
             /link "/LIBPATH:$gstRoot\lib" `
