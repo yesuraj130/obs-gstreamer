@@ -111,6 +111,14 @@ static bool is_d3d11_memory_encoder(const char *name)
 }
 #endif
 
+#ifndef GST_CAPS_FEATURE_MEMORY_GL_MEMORY
+#define GST_CAPS_FEATURE_MEMORY_GL_MEMORY "memory:GLMemory"
+#endif
+
+#ifndef GST_CAPS_FEATURE_MEMORY_DMA_BUF
+#define GST_CAPS_FEATURE_MEMORY_DMA_BUF "memory:DMABuf"
+#endif
+
 #if HAVE_GST_GL
 static bool is_gl_memory_encoder(const char *name)
 {
@@ -122,10 +130,29 @@ static bool is_gl_memory_encoder(const char *name)
 		return true;
 
 	/* Dynamic inspection for any custom or new encoder plugins */
-#ifndef GST_CAPS_FEATURE_MEMORY_GL_MEMORY
-#define GST_CAPS_FEATURE_MEMORY_GL_MEMORY "memory:GLMemory"
-#endif
 	return encoder_supports_caps_feature(name, GST_CAPS_FEATURE_MEMORY_GL_MEMORY);
+}
+
+static bool is_dmabuf_memory_encoder(const char *name)
+{
+	if (!name || !name[0]) return false;
+
+	/* Fast-path known hardware encoders that natively consume DMABuf on Linux:
+	 * - vah264enc / vah265enc / vaav1enc (Modern gstva plugin)
+	 * - qsvh264enc / qsvh265enc / qsvav1enc (Modern oneVPL Linux plugin)
+	 * - v4l2h264enc / v4l2h265enc (V4L2 M2M hardware encoders) */
+	if (g_strcmp0(name, "vah264enc") == 0  ||
+	    g_strcmp0(name, "vah265enc") == 0  ||
+	    g_strcmp0(name, "vaav1enc") == 0   ||
+	    g_strcmp0(name, "qsvh264enc") == 0 ||
+	    g_strcmp0(name, "qsvh265enc") == 0 ||
+	    g_strcmp0(name, "qsvav1enc") == 0  ||
+	    g_strcmp0(name, "v4l2h264enc") == 0 ||
+	    g_strcmp0(name, "v4l2h265enc") == 0)
+		return true;
+
+	/* Dynamic inspection for any custom or future encoder plugins */
+	return encoder_supports_caps_feature(name, GST_CAPS_FEATURE_MEMORY_DMA_BUF);
 }
 #endif
 
@@ -150,6 +177,7 @@ static void log_gpu_and_encoder_capabilities_once(void)
 		"amfh264enc",
 		"vah264enc",
 		"vaapih264enc",
+		"v4l2h264enc",
 		"mfh264enc",
 		"vtenc_h264_hw",
 		"x264enc",
@@ -282,6 +310,7 @@ const char *gst_master_pipeline_select_encoder(const char *requested_encoder, bo
 			"vah264enc",
 			"vaapih264enc",
 			"qsvh264enc",
+			"v4l2h264enc",
 			"vtenc_h264_hw",
 			"x264enc",
 			"openh264enc",
@@ -608,7 +637,9 @@ static GstElement *create_master_encoder_pipeline(gst_master_pipeline_t *hub, co
 		{
 			const char *post_convert = is_gl_memory_encoder(chosen_enc)
 				? "glcolorconvert ! video/x-raw(memory:GLMemory), format=NV12"
-				: "glcolorconvert ! gldownload ! videoconvert";
+				: is_dmabuf_memory_encoder(chosen_enc)
+					? "glcolorconvert ! gldownload ! video/x-raw(memory:DMABuf), format=NV12"
+					: "glcolorconvert ! gldownload ! videoconvert";
 			hub->appsrc_format = GST_VIDEO_FORMAT_BGRA;
 			pipe_desc = g_strdup_printf(
 				"appsrc name=hub_appsrc is-live=true format=GST_FORMAT_TIME do-timestamp=true "
