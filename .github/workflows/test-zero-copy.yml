@@ -32,11 +32,11 @@ jobs:
             gstreamer1.0-gl libegl1-mesa-dev libgl1-mesa-dri libglx-mesa0 libgl1 libx11-dev \
             libsoup-3.0-dev qt6-base-dev xvfb
           pip3 install --upgrade meson --break-system-packages || pip3 install --upgrade meson
-          sudo sed -i 's/-std=gnu[0-9]*//g' /usr/lib/*/pkgconfig/libobs.pc /usr/lib/pkgconfig/libobs.pc /usr/share/pkgconfig/libobs.pc 2>/dev/null || true
+          sudo sed -i 's/-std=gnu[0-9]*//g' /usr/lib/*/pkgconfig/*.pc /usr/lib/pkgconfig/*.pc /usr/share/pkgconfig/*.pc 2>/dev/null || true
 
       - name: Build obs-gstreamer.so and verify libgstgl linkage
         run: |
-          meson setup build-linux --buildtype release -Dc_args="-I/usr/include/obs" -Dcpp_args="-I/usr/include/obs -Wno-error"
+          meson setup build-linux --buildtype release -Dc_args="-I/usr/include/obs -Wno-error" -Dcpp_args="-I/usr/include/obs -Wno-error"
           ninja -C build-linux
           ldd build-linux/obs-gstreamer.so | grep -E "libgstgl-1.0"
 
@@ -204,6 +204,9 @@ jobs:
           }
           "GSTREAMER_ROOT=$gstRootTarget" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "$gstRootTarget\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          "GST_PLUGIN_PATH=$gstRootTarget\lib\gstreamer-1.0" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "GST_PLUGIN_SYSTEM_PATH=$gstRootTarget\lib\gstreamer-1.0" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "GSTREAMER_1_0_ROOT_MSVC_X86_64=$gstRootTarget" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Fetch and prepare OBS Studio 32.2.2 (x64) SDK
         shell: pwsh
@@ -308,6 +311,9 @@ jobs:
 
           $env:PKG_CONFIG = "$gstRoot\bin\pkg-config.exe"
           $env:PATH = "$gstRoot\bin;$sdkFullPath\..\obs-bin\bin\64bit;$($env:QTDIR)\bin;$env:PATH"
+          $env:GST_PLUGIN_PATH = "$gstRoot\lib\gstreamer-1.0"
+          $env:GST_PLUGIN_SYSTEM_PATH = "$gstRoot\lib\gstreamer-1.0"
+          $env:GSTREAMER_1_0_ROOT_MSVC_X86_64 = $gstRoot
           $env:PKG_CONFIG_PATH = "$sdkPkgPath;$gstPkgPath;$sdkPkgFwd;$gstPkgFwd"
 
           meson setup build-win64 `
@@ -478,6 +484,10 @@ jobs:
             glib-2.0.lib gobject-2.0.lib d3d11.lib dxgi.lib
 
           if ($LASTEXITCODE -ne 0) { exit 1 }
+          $env:GST_PLUGIN_PATH = "$gstRoot\lib\gstreamer-1.0"
+          $env:GST_PLUGIN_SYSTEM_PATH = "$gstRoot\lib\gstreamer-1.0"
+          $env:GSTREAMER_1_0_ROOT_MSVC_X86_64 = $gstRoot
+          $env:GST_DEBUG = "2"
           & $testExe
           if ($LASTEXITCODE -ne 0) { exit 1 }
           Remove-Item -Force $testFile, $testExe -ErrorAction SilentlyContinue

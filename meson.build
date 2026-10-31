@@ -178,6 +178,12 @@ if not cc.has_header('obs-module.h', dependencies : obs_dep)
   endforeach
 endif
 
+if cc.get_id() != 'msvc' and cc.get_id() != 'clang-cl'
+  extra_c_args += ['-Wno-error']
+else
+  extra_c_args += ['/WX-']
+endif
+
 extra_cpp_args = extra_c_args
 cpp_comp = meson.get_compiler('cpp')
 if cpp_comp.get_id() != 'msvc' and cpp_comp.get_id() != 'clang-cl'

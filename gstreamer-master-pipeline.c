@@ -49,19 +49,14 @@ static bool element_has_property(const char *factory_name, const char *prop_name
 	return pspec != NULL;
 }
 
-static bool is_hardware_encoder_factory(const char *name)
+#if HAVE_GST_D3D11
+static bool is_d3d11_memory_encoder(const char *name)
 {
 	if (!name) return false;
 	return g_strcmp0(name, "nvd3d11h264enc") == 0 ||
-	       g_strcmp0(name, "nvh264enc") == 0 ||
-	       g_strcmp0(name, "nvcudah264enc") == 0 ||
-	       g_strcmp0(name, "qsvh264enc") == 0 ||
-	       g_strcmp0(name, "amfh264enc") == 0 ||
-	       g_strcmp0(name, "vah264enc") == 0 ||
-	       g_strcmp0(name, "vaapih264enc") == 0 ||
-	       g_strcmp0(name, "mfh264enc") == 0 ||
-	       g_strcmp0(name, "vtenc_h264_hw") == 0;
+	       g_strcmp0(name, "d3d11h264enc") == 0;
 }
+#endif
 
 static void log_gpu_and_encoder_capabilities_once(void)
 {
@@ -471,6 +466,7 @@ static bool init_obs_gl_context(gst_master_pipeline_t *hub)
 }
 #endif
 
+#if HAVE_GST_D3D11 || HAVE_GST_GL
 static void ensure_appsrc_gpu_caps(gst_master_pipeline_t *hub, GstVideoFormat format, const char *memory_feature, bool include_tex_target)
 {
 	if (!hub || !hub->appsrc || hub->appsrc_format == format) return;
@@ -493,6 +489,7 @@ static void ensure_appsrc_gpu_caps(gst_master_pipeline_t *hub, GstVideoFormat fo
 		hub->appsrc_format = format;
 	}
 }
+#endif
 
 static GstElement *create_master_encoder_pipeline(gst_master_pipeline_t *hub, const char *custom_master_pipe, const char *encoder_type, int bitrate_kbps, int keyint_sec)
 {
@@ -518,9 +515,9 @@ static GstElement *create_master_encoder_pipeline(gst_master_pipeline_t *hub, co
 #if HAVE_GST_D3D11
 		if (hub->gpu_input && hub->d3d11_device)
 		{
-			const char *post_convert = is_hardware_encoder_factory(chosen_enc)
+			const char *post_convert = is_d3d11_memory_encoder(chosen_enc)
 				? "d3d11convert ! video/x-raw(memory:D3D11Memory), format=NV12"
-				: "d3d11convert ! d3d11download ! video/x-raw, format=I420";
+				: "d3d11convert ! d3d11download ! videoconvert";
 			hub->appsrc_format = GST_VIDEO_FORMAT_BGRA;
 			pipe_desc = g_strdup_printf(
 				"appsrc name=hub_appsrc is-live=true format=GST_FORMAT_TIME do-timestamp=true "
@@ -1288,46 +1285,46 @@ gst_master_pipeline_t *gst_master_pipeline_create(const char *custom_master_pipe
 	}
 
 	hub->pipe = create_master_encoder_pipeline(hub, custom_master_pipe, encoder_type, bitrate_kbps, keyint_sec);
-	if (!hub->pipe)
+	if (hub->pipe)
 	{
-		gst_master_pipeline_destroy(hub);
-		return NULL;
-	}
-
-	hub->appsrc = gst_bin_get_by_name(GST_BIN(hub->pipe), "hub_appsrc");
-	hub->appsink = gst_bin_get_by_name(GST_BIN(hub->pipe), "hub_appsink");
-	if (!hub->appsrc || !hub->appsink)
-	{
-		blog(LOG_ERROR, "[obs-gstreamer-master] Pipeline missing hub_appsrc or hub_appsink");
-		gst_master_pipeline_destroy(hub);
-		return NULL;
+		hub->appsrc = gst_bin_get_by_name(GST_BIN(hub->pipe), "hub_appsrc");
+		hub->appsink = gst_bin_get_by_name(GST_BIN(hub->pipe), "hub_appsink");
 	}
 
 	hub->active_destinations = 0;
-	GstStateChangeReturn state_ret = gst_element_set_state(hub->pipe, GST_STATE_PAUSED);
+	GstStateChangeReturn state_ret = GST_STATE_CHANGE_FAILURE;
+	if (hub->pipe && hub->appsrc && hub->appsink)
+	{
+		state_ret = gst_element_set_state(hub->pipe, GST_STATE_PAUSED);
+	}
 
-	/* If the chosen hardware encoder failed to initialize (e.g. GPU without that ASIC),
-	 * try remaining encoders while keeping GPU zero-copy texture wrapping active first. */
-	if (state_ret == GST_STATE_CHANGE_FAILURE && (!custom_master_pipe || !custom_master_pipe[0]))
+	/* If initial encoder failed to parse or failed state change, try fallback encoders */
+	if ((!hub->pipe || !hub->appsrc || !hub->appsink || state_ret == GST_STATE_CHANGE_FAILURE) &&
+	    (!custom_master_pipe || !custom_master_pipe[0]))
 	{
 		static const char *const fallback_encoders[] = {
+#if HAVE_GST_D3D11
 			"nvd3d11h264enc",
+			"mfh264enc",
+#endif
+#if HAVE_GST_GL
+			"vah264enc",
+			"vaapih264enc",
+#endif
 			"nvh264enc",
 			"qsvh264enc",
 			"amfh264enc",
-			"vah264enc",
-			"vaapih264enc",
-			"mfh264enc",
-			"x264enc",
 			"openh264enc",
+			"x264enc",
 			NULL
 		};
 
-		for (int i = 0; fallback_encoders[i] != NULL && state_ret == GST_STATE_CHANGE_FAILURE; i++)
+		for (int i = 0; fallback_encoders[i] != NULL; i++)
 		{
 			const char *candidate = fallback_encoders[i];
-			if (g_strcmp0(candidate, hub->selected_encoder) == 0 ||
-			    !gst_master_pipeline_element_available(candidate))
+			if (hub->selected_encoder && g_strcmp0(candidate, hub->selected_encoder) == 0)
+				continue;
+			if (!gst_master_pipeline_element_available(candidate))
 				continue;
 
 			blog(LOG_WARNING, "[obs-gstreamer-master] Encoder '%s' failed state change; trying '%s' (gpu_zero_copy=%s)",
@@ -1352,6 +1349,8 @@ gst_master_pipeline_t *gst_master_pipeline_create(const char *custom_master_pipe
 			if (!hub->appsrc || !hub->appsink) continue;
 
 			state_ret = gst_element_set_state(hub->pipe, GST_STATE_PAUSED);
+			if (state_ret != GST_STATE_CHANGE_FAILURE)
+				break;
 		}
 	}
 
