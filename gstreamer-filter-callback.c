@@ -5,6 +5,7 @@
 #include "gstreamer-filter-callback.h"
 #include <obs-module.h>
 #include <util/platform.h>
+#include <inttypes.h>
 
 struct gst_filter_callback
 {
@@ -18,10 +19,24 @@ struct filter_private_data
 	obs_source_t *source;
 	gst_master_pipeline_t *pipeline;
 	gs_texrender_t *texrender;
+	uint32_t width;
+	uint32_t height;
+	enum gs_color_format format;
 	bool active;
 	bool rendering;
 	uint64_t render_count;
 };
+
+static enum gs_color_format get_device_native_color_format(void)
+{
+	enum gs_color_format tex_fmt = GS_RGBA;
+	gs_texture_t *main_tex = obs_get_main_texture();
+	if (main_tex)
+		tex_fmt = gs_texture_get_color_format(main_tex);
+	else if (gs_get_device_type() == GS_DEVICE_DIRECT3D_11)
+		tex_fmt = GS_BGRA;
+	return tex_fmt;
+}
 
 static const char *filter_cb_get_name(void *type_data)
 {
@@ -35,7 +50,7 @@ static void *filter_cb_create(obs_data_t *settings, obs_source_t *source)
 	struct filter_private_data *data = bzalloc(sizeof(struct filter_private_data));
 	data->source = source;
 	data->active = false;
-	data->texrender = gs_texrender_create(GS_RGBA, GS_ZS_NONE);
+	data->format = GS_UNKNOWN;
 	return data;
 }
 
@@ -45,7 +60,12 @@ static void filter_cb_destroy(void *p)
 	if (data)
 	{
 		if (data->texrender)
+		{
+			obs_enter_graphics();
 			gs_texrender_destroy(data->texrender);
+			data->texrender = NULL;
+			obs_leave_graphics();
+		}
 		bfree(data);
 	}
 }
@@ -67,25 +87,35 @@ static void filter_cb_video_render(void *p, gs_effect_t *effect)
 	}
 
 	obs_source_t *target = obs_filter_get_target(data->source);
-	uint32_t width = target ? obs_source_get_base_width(target) : 0;
-	uint32_t height = target ? obs_source_get_base_height(target) : 0;
-	if (!target || width == 0 || height == 0 || !data->texrender)
+	if (!target || data->width == 0 || data->height == 0)
 	{
 		obs_source_skip_video_filter(data->source);
 		return;
 	}
 
+	if (!data->texrender)
+	{
+		enum gs_color_format tex_fmt = (data->format != GS_UNKNOWN) ? data->format : get_device_native_color_format();
+		data->texrender = gs_texrender_create(tex_fmt, GS_ZS_NONE);
+		data->format = tex_fmt;
+		if (!data->texrender)
+		{
+			obs_source_skip_video_filter(data->source);
+			return;
+		}
+	}
+
 	gs_texrender_reset(data->texrender);
-	if (!gs_texrender_begin(data->texrender, width, height))
+	if (!gs_texrender_begin(data->texrender, data->width, data->height))
 	{
 		obs_source_skip_video_filter(data->source);
 		return;
 	}
 
 	struct vec4 clear_color;
-	vec4_set(&clear_color, 0.0f, 0.0f, 0.0f, 0.0f);
+	vec4_zero(&clear_color);
 	gs_clear(GS_CLEAR_COLOR, &clear_color, 0.0f, 0);
-	gs_ortho(0.0f, (float)width, 0.0f, (float)height, -100.0f, 100.0f);
+	gs_ortho(0.0f, (float)data->width, 0.0f, (float)data->height, -100.0f, 100.0f);
 
 	data->rendering = true;
 	obs_source_video_render(target);
@@ -100,9 +130,13 @@ static void filter_cb_video_render(void *p, gs_effect_t *effect)
 	}
 
 	uint64_t frame_number = ++data->render_count;
-	if (frame_number == 1)
-		blog(LOG_INFO, "[obs-gstreamer-filter-callback] Captured filter texture %ux%u",
-			gs_texture_get_width(texture), gs_texture_get_height(texture));
+	if (frame_number == 1 || frame_number % 300 == 0)
+	{
+		blog(LOG_INFO, "[obs-gstreamer-filter-callback] Captured zero-copy filter texture #%" PRIu64 " (%ux%u, format=%d)",
+			frame_number, gs_texture_get_width(texture), gs_texture_get_height(texture),
+			(int)gs_texture_get_color_format(texture));
+	}
+
 	gst_master_pipeline_push_texture(data->pipeline, texture, os_gettime_ns());
 
 	gs_effect_t *filter_effect = obs_get_base_effect(OBS_EFFECT_DEFAULT);
@@ -114,9 +148,17 @@ static void filter_cb_video_render(void *p, gs_effect_t *effect)
 		return;
 	}
 
+	uint32_t draw_w = obs_source_get_width(target);
+	uint32_t draw_h = obs_source_get_height(target);
+	if (draw_w == 0 || draw_h == 0)
+	{
+		draw_w = data->width;
+		draw_h = data->height;
+	}
+
 	gs_effect_set_texture(image_param, texture);
 	while (gs_effect_loop(filter_effect, "Draw"))
-		gs_draw_sprite(texture, 0, width, height);
+		gs_draw_sprite(texture, 0, draw_w, draw_h);
 }
 
 static struct obs_source_info gst_filter_callback_info =
@@ -203,12 +245,20 @@ gst_filter_callback_t *gst_filter_callback_create(gst_source_type_t type, const 
 	{
 		priv->pipeline = cb->pipeline;
 		priv->active = false;
+		priv->width = width;
+		priv->height = height;
+
+		obs_enter_graphics();
+		enum gs_color_format tex_fmt = get_device_native_color_format();
+		priv->format = tex_fmt;
+		priv->texrender = gs_texrender_create(tex_fmt, GS_ZS_NONE);
+		obs_leave_graphics();
 	}
 
 	obs_source_filter_add(target, filter);
 	obs_source_inc_active(target);
-	blog(LOG_INFO, "[obs-gstreamer-filter-callback] Keeping capture target '%s' active while filter tap is attached",
-		obs_source_get_name_safe(target, "unnamed"));
+	blog(LOG_INFO, "[obs-gstreamer-filter-callback] Keeping capture target '%s' active while filter tap is attached (%ux%u, format=%d)",
+		obs_source_get_name_safe(target, "unnamed"), width, height, (int)(priv ? priv->format : GS_UNKNOWN));
 
 	cb->filter = filter;
 	cb->target = target;
