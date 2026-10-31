@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "node server.js",
     "start": "node server.js",
-    "build": "ninja -C build install",
+    "build": "which ninja >/dev/null 2>&1 && [ -f build/build.ninja ] && ninja -C build install || true",
     "lint": "node --check server.js"
   },
   "dependencies": {}
