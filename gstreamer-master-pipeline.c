@@ -49,12 +49,83 @@ static bool element_has_property(const char *factory_name, const char *prop_name
 	return pspec != NULL;
 }
 
+#if HAVE_GST_D3D11 || HAVE_GST_GL
+static bool encoder_supports_caps_feature(const char *factory_name, const char *feature_name)
+{
+	if (!factory_name || !factory_name[0] || !feature_name || !feature_name[0])
+		return false;
+
+	GstElementFactory *factory = gst_element_factory_find(factory_name);
+	if (!factory)
+		return false;
+
+	bool supported = false;
+	const GList *templates = gst_element_factory_get_static_pad_templates(factory);
+	for (const GList *l = templates; l != NULL; l = l->next) {
+		GstStaticPadTemplate *templ = (GstStaticPadTemplate *)l->data;
+		if (templ->direction == GST_PAD_SINK) {
+			GstCaps *caps = gst_static_pad_template_get_caps(templ);
+			if (caps) {
+				guint n_structs = gst_caps_get_size(caps);
+				for (guint i = 0; i < n_structs; i++) {
+					GstCapsFeatures *features = gst_caps_get_features(caps, i);
+					if (features && gst_caps_features_contains(features, feature_name)) {
+						supported = true;
+						break;
+					}
+				}
+				gst_caps_unref(caps);
+			}
+		}
+		if (supported)
+			break;
+	}
+
+	gst_object_unref(factory);
+	return supported;
+}
+#endif
+
 #if HAVE_GST_D3D11
 static bool is_d3d11_memory_encoder(const char *name)
 {
-	if (!name) return false;
-	return g_strcmp0(name, "nvd3d11h264enc") == 0 ||
-	       g_strcmp0(name, "d3d11h264enc") == 0;
+	if (!name || !name[0]) return false;
+
+	/* Exclude Media Foundation from direct D3D11Memory input: on virtual machines/WARP,
+	 * it advertises D3D11Memory statically but fails runtime MFT device binding. */
+	if (g_str_has_prefix(name, "mf"))
+		return false;
+
+	/* Fast-path known hardware encoders that natively consume D3D11Memory */
+	if (g_strcmp0(name, "nvd3d11h264enc") == 0 ||
+	    g_strcmp0(name, "d3d11h264enc") == 0   ||
+	    g_strcmp0(name, "qsvh264enc") == 0     ||
+	    g_strcmp0(name, "amfh264enc") == 0)
+		return true;
+
+	/* Dynamic inspection for any custom or new encoder plugins */
+#ifndef GST_CAPS_FEATURE_MEMORY_D3D11_MEMORY
+#define GST_CAPS_FEATURE_MEMORY_D3D11_MEMORY "memory:D3D11Memory"
+#endif
+	return encoder_supports_caps_feature(name, GST_CAPS_FEATURE_MEMORY_D3D11_MEMORY);
+}
+#endif
+
+#if HAVE_GST_GL
+static bool is_gl_memory_encoder(const char *name)
+{
+	if (!name || !name[0]) return false;
+
+	/* Fast-path known hardware encoders that natively consume GLMemory */
+	if (g_strcmp0(name, "nvh264enc") == 0 ||
+	    g_strcmp0(name, "nvh265enc") == 0)
+		return true;
+
+	/* Dynamic inspection for any custom or new encoder plugins */
+#ifndef GST_CAPS_FEATURE_MEMORY_GL_MEMORY
+#define GST_CAPS_FEATURE_MEMORY_GL_MEMORY "memory:GLMemory"
+#endif
+	return encoder_supports_caps_feature(name, GST_CAPS_FEATURE_MEMORY_GL_MEMORY);
 }
 #endif
 
@@ -535,15 +606,18 @@ static GstElement *create_master_encoder_pipeline(gst_master_pipeline_t *hub, co
 #if HAVE_GST_GL
 		if (hub->gpu_input && hub->gl_app_context && hub->gl_context)
 		{
+			const char *post_convert = is_gl_memory_encoder(chosen_enc)
+				? "glcolorconvert ! video/x-raw(memory:GLMemory), format=NV12"
+				: "glcolorconvert ! gldownload ! videoconvert";
 			hub->appsrc_format = GST_VIDEO_FORMAT_BGRA;
 			pipe_desc = g_strdup_printf(
 				"appsrc name=hub_appsrc is-live=true format=GST_FORMAT_TIME do-timestamp=true "
 				"caps=\"video/x-raw(memory:GLMemory), width=%u, height=%u, "
 				"format=BGRA, framerate=%u/%u, texture-target=2D\" ! "
-				"glcolorconvert ! gldownload ! videoconvert ! %s ! h264parse config-interval=-1 ! "
+				"%s ! %s ! h264parse config-interval=-1 ! "
 				"video/x-h264, stream-format=byte-stream, alignment=au ! "
 				"appsink name=hub_appsink sync=false drop=true max-buffers=1",
-				hub->width, hub->height, hub->fps_num, hub->fps_den, enc_str);
+				hub->width, hub->height, hub->fps_num, hub->fps_den, post_convert, enc_str);
 			g_free(enc_str);
 			goto launch_pipeline;
 		}
