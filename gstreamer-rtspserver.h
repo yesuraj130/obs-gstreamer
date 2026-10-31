@@ -40,6 +40,11 @@ gst_hub_branch_t *gst_rtsp_branch_start(gst_master_pipeline_t *pipeline,
                                         const char *encoder_type,
                                         const char *rtsp_pipeline);
 
+gst_hub_branch_t *gst_custom_branch_start(gst_master_pipeline_t *pipeline,
+                                          const char *name,
+                                          const char *encoder_type,
+                                          const char *custom_pipeline);
+
 gst_hub_branch_t *gst_render_hub_start_branch_data(obs_data_t *settings);
 gst_hub_branch_t *gst_render_hub_start_pipeline_branch(const char *name, const char *source_type, const char *source_name, const char *pipeline_str);
 gst_hub_branch_t *gst_render_hub_start_branch(const gst_hub_output_params_t *params);

@@ -269,16 +269,183 @@ struct gst_hub_branch *gst_rtsp_branch_start(gst_master_pipeline_t *pipeline,
 
 	branch->factory = factory;
 	branch->active = true;
-
-	branch->sub = gst_master_pipeline_subscribe(branch->pipeline, rtsp_frame_cb, branch, branch->name);
+	branch->sub = NULL;
 
 	branch->next = g_branches;
 	g_branches = branch;
 
-	blog(LOG_INFO, "[obs-gstreamer-rtspserver] RTSP branch started: rtsp://0.0.0.0:%s%s (name='%s')",
+	blog(LOG_INFO, "[obs-gstreamer-rtspserver] RTSP branch started: rtsp://0.0.0.0:%s%s (name='%s', waiting for client connection)",
 		branch->service, branch->mount_point, branch->name);
 
 	g_mutex_unlock(&g_hub_mutex);
+	return branch;
+}
+
+static bool custom_pipe_needs_decoder(const char *user_pipe)
+{
+	if (!user_pipe) return false;
+	if (strstr(user_pipe, "decodebin") ||
+	    strstr(user_pipe, "avdec_") ||
+	    strstr(user_pipe, "openh264dec") ||
+	    strstr(user_pipe, "nvh264dec") ||
+	    strstr(user_pipe, "vaapih264dec") ||
+	    strstr(user_pipe, "vah264dec") ||
+	    strstr(user_pipe, "d3d11h264dec") ||
+	    strstr(user_pipe, "v4l2h264dec") ||
+	    strstr(user_pipe, "vtdec")) {
+		return false;
+	}
+	return strstr(user_pipe, "autovideosink") != NULL ||
+	       strstr(user_pipe, "videoconvert") != NULL ||
+	       strstr(user_pipe, "videoscale") != NULL ||
+	       strstr(user_pipe, "glimagesink") != NULL ||
+	       strstr(user_pipe, "d3d11videosink") != NULL ||
+	       strstr(user_pipe, "xvimagesink") != NULL ||
+	       strstr(user_pipe, "ximagesink") != NULL ||
+	       strstr(user_pipe, "fpsdisplaysink") != NULL;
+}
+
+struct gst_hub_branch *gst_custom_branch_start(gst_master_pipeline_t *pipeline,
+                                               const char *name,
+                                               const char *encoder_type,
+                                               const char *custom_pipeline)
+{
+	if (!pipeline) {
+		blog(LOG_ERROR, "[obs-gstreamer-rtspserver] Cannot start custom pipeline branch '%s': master_pipe is NULL",
+			name ? name : "unnamed");
+		return NULL;
+	}
+
+	g_mutex_lock(&g_hub_mutex);
+
+	const char *user_pipe = (custom_pipeline && custom_pipeline[0])
+		? custom_pipeline
+		: "autovideosink sync=false";
+
+	bool is_hevc = encoder_type && (strstr(encoder_type, "h265") != NULL || strstr(encoder_type, "hevc") != NULL);
+	const char *caps_str = is_hevc
+		? "video/x-h265, stream-format=byte-stream, alignment=au"
+		: "video/x-h264, stream-format=byte-stream, alignment=au";
+	const char *parser_str = is_hevc ? "h265parse" : "h264parse";
+
+	char *launch_str = NULL;
+	GError *err = NULL;
+	GstElement *pipe = NULL;
+
+	if (strstr(user_pipe, "appsrc") != NULL) {
+		launch_str = g_strdup(user_pipe);
+		pipe = gst_parse_launch(launch_str, &err);
+	} else if (custom_pipe_needs_decoder(user_pipe)) {
+		launch_str = g_strdup_printf(
+			"appsrc name=appsrc_video is-live=true format=GST_FORMAT_TIME do-timestamp=true "
+			"caps=\"%s\" ! %s ! decodebin ! videoconvert ! %s",
+			caps_str, parser_str, user_pipe);
+		pipe = gst_parse_launch(launch_str, &err);
+	} else {
+		launch_str = g_strdup_printf(
+			"appsrc name=appsrc_video is-live=true format=GST_FORMAT_TIME do-timestamp=true "
+			"caps=\"%s\" ! %s",
+			caps_str, user_pipe);
+		pipe = gst_parse_launch(launch_str, &err);
+		if (err || !pipe) {
+			if (err) g_clear_error(&err);
+			if (pipe) {
+				gst_object_unref(pipe);
+				pipe = NULL;
+			}
+			g_free(launch_str);
+			launch_str = g_strdup_printf(
+				"appsrc name=appsrc_video is-live=true format=GST_FORMAT_TIME do-timestamp=true "
+				"caps=\"%s\" ! %s ! decodebin ! videoconvert ! %s",
+				caps_str, parser_str, user_pipe);
+			pipe = gst_parse_launch(launch_str, &err);
+		}
+	}
+
+	if (err || !pipe) {
+		blog(LOG_ERROR, "[obs-gstreamer-rtspserver] Failed to parse custom branch pipeline '%s' (%s): %s",
+			name ? name : "Custom", launch_str ? launch_str : "", err ? err->message : "unknown error");
+		if (err) g_error_free(err);
+		if (pipe) gst_object_unref(pipe);
+		g_free(launch_str);
+		g_mutex_unlock(&g_hub_mutex);
+		return NULL;
+	}
+
+	GstElement *appsrc = gst_bin_get_by_name(GST_BIN(pipe), "appsrc_video");
+	if (!appsrc) {
+		appsrc = gst_bin_get_by_name(GST_BIN(pipe), "hub_appsrc");
+	}
+	if (!appsrc) {
+		GstIterator *it = gst_bin_iterate_elements(GST_BIN(pipe));
+		GValue item = G_VALUE_INIT;
+		while (it && gst_iterator_next(it, &item) == GST_ITERATOR_OK) {
+			GstElement *elem = GST_ELEMENT(g_value_get_object(&item));
+			if (elem && GST_IS_APP_SRC(elem)) {
+				appsrc = GST_ELEMENT(gst_object_ref(elem));
+				g_value_unset(&item);
+				break;
+			}
+			g_value_unset(&item);
+		}
+		if (it) gst_iterator_free(it);
+	}
+
+	if (!appsrc) {
+		blog(LOG_ERROR, "[obs-gstreamer-rtspserver] Custom branch pipeline '%s' has no appsrc element",
+			name ? name : "Custom");
+		gst_object_unref(pipe);
+		g_free(launch_str);
+		g_mutex_unlock(&g_hub_mutex);
+		return NULL;
+	}
+
+	gst_app_src_set_stream_type(GST_APP_SRC(appsrc), GST_APP_STREAM_TYPE_STREAM);
+	gst_app_src_set_latency(GST_APP_SRC(appsrc), 0, 0);
+
+	struct gst_hub_branch *branch = bzalloc(sizeof(struct gst_hub_branch));
+	branch->name = bstrdup(name ? name : "Custom Pipeline");
+	branch->is_pipeline = true;
+	branch->pipeline = pipeline;
+	branch->pipe = pipe;
+	branch->appsrc = appsrc;
+	branch->waiting_for_keyframe = true;
+	branch->active = true;
+	g_mutex_init(&branch->lock);
+
+	if (gst_element_set_state(branch->pipe, GST_STATE_PLAYING) == GST_STATE_CHANGE_FAILURE) {
+		blog(LOG_ERROR, "[obs-gstreamer-rtspserver] Custom branch pipeline '%s' failed to enter PLAYING state",
+			branch->name);
+		gst_object_unref(branch->appsrc);
+		gst_element_set_state(branch->pipe, GST_STATE_NULL);
+		gst_object_unref(branch->pipe);
+		bfree(branch->name);
+		g_mutex_clear(&branch->lock);
+		bfree(branch);
+		g_free(launch_str);
+		g_mutex_unlock(&g_hub_mutex);
+		return NULL;
+	}
+
+	branch->next = g_branches;
+	g_branches = branch;
+
+	blog(LOG_INFO, "[obs-gstreamer-rtspserver] Custom pipeline branch '%s' started (%s): subscribing to master pipeline",
+		branch->name, launch_str);
+	g_free(launch_str);
+
+	g_mutex_unlock(&g_hub_mutex);
+
+	gst_pipeline_subscriber_t *new_sub = gst_master_pipeline_subscribe(pipeline, rtsp_frame_cb, branch, branch->name);
+	g_mutex_lock(&branch->lock);
+	if (!branch->active) {
+		g_mutex_unlock(&branch->lock);
+		if (new_sub) gst_master_pipeline_unsubscribe(pipeline, new_sub);
+	} else {
+		branch->sub = new_sub;
+		g_mutex_unlock(&branch->lock);
+	}
+
 	return branch;
 }
 
@@ -394,6 +561,7 @@ static void media_configure_cb(GstRTSPMediaFactory *factory, GstRTSPMedia *media
 	}
 	branch->appsrc = appsrc;
 	branch->client_count++;
+	int current_clients = branch->client_count;
 
 	if (branch->media != media) {
 		if (branch->media) {
@@ -407,17 +575,36 @@ static void media_configure_cb(GstRTSPMediaFactory *factory, GstRTSPMedia *media
 	if (branch->client_count == 1) {
 		branch->waiting_for_keyframe = true;
 	}
+
+	bool need_subscribe = (branch->sub == NULL && branch->pipeline != NULL);
+	gst_master_pipeline_t *pipeline = branch->pipeline;
 	g_mutex_unlock(&branch->lock);
 
-	// Request immediate upstream keyframe so newly connected clients start instantly
-	if (branch->pipeline) {
-		gst_master_pipeline_request_keyframe(branch->pipeline);
-	}
-
 	gst_object_unref(element);
-	blog(LOG_INFO, "[obs-gstreamer-rtspserver] RTSP client connected on %s%s (total clients=%d)",
-		branch->service ? branch->service : "", branch->mount_point ? branch->mount_point : "",
-		branch->client_count);
+
+	if (need_subscribe && pipeline) {
+		blog(LOG_INFO, "[obs-gstreamer-rtspserver] RTSP client connected on %s%s (clients=%d): subscribing '%s' to master pipeline",
+			branch->service ? branch->service : "", branch->mount_point ? branch->mount_point : "",
+			current_clients, branch->name ? branch->name : "branch");
+		gst_pipeline_subscriber_t *new_sub = gst_master_pipeline_subscribe(pipeline, rtsp_frame_cb, branch, branch->name);
+		g_mutex_lock(&branch->lock);
+		if (!branch->active || branch->client_count <= 0 || branch->sub != NULL) {
+			g_mutex_unlock(&branch->lock);
+			if (new_sub) {
+				gst_master_pipeline_unsubscribe(pipeline, new_sub);
+			}
+		} else {
+			branch->sub = new_sub;
+			g_mutex_unlock(&branch->lock);
+		}
+	} else {
+		blog(LOG_INFO, "[obs-gstreamer-rtspserver] RTSP client connected on %s%s (total clients=%d)",
+			branch->service ? branch->service : "", branch->mount_point ? branch->mount_point : "",
+			current_clients);
+		if (pipeline) {
+			gst_master_pipeline_request_keyframe(pipeline);
+		}
+	}
 }
 
 static void media_unprepared_cb(GstRTSPMedia *media, gpointer user_data)
@@ -433,9 +620,9 @@ static void media_unprepared_cb(GstRTSPMedia *media, gpointer user_data)
 	}
 
 	if (branch->client_count > 0) branch->client_count--;
-	blog(LOG_INFO, "[obs-gstreamer-rtspserver] RTSP client disconnected on %s%s (remaining=%d)",
-		branch->service ? branch->service : "", branch->mount_point ? branch->mount_point : "",
-		branch->client_count);
+	int remaining = branch->client_count;
+	gst_pipeline_subscriber_t *sub_to_unsub = NULL;
+	gst_master_pipeline_t *pipeline = branch->pipeline;
 
 	if (branch->client_count == 0) {
 		if (branch->appsrc) {
@@ -447,8 +634,21 @@ static void media_unprepared_cb(GstRTSPMedia *media, gpointer user_data)
 			gst_object_unref(branch->media);
 			branch->media = NULL;
 		}
+		sub_to_unsub = branch->sub;
+		branch->sub = NULL;
 	}
 	g_mutex_unlock(&branch->lock);
+
+	blog(LOG_INFO, "[obs-gstreamer-rtspserver] RTSP client disconnected on %s%s (remaining=%d)",
+		branch->service ? branch->service : "", branch->mount_point ? branch->mount_point : "",
+		remaining);
+
+	if (sub_to_unsub && pipeline) {
+		blog(LOG_INFO, "[obs-gstreamer-rtspserver] All RTSP clients disconnected on %s%s: unsubscribing '%s' from master pipeline",
+			branch->service ? branch->service : "", branch->mount_point ? branch->mount_point : "",
+			branch->name ? branch->name : "branch");
+		gst_master_pipeline_unsubscribe(pipeline, sub_to_unsub);
+	}
 }
 
 static void stop_branch_internal(struct gst_hub_branch *branch)
@@ -465,11 +665,12 @@ static void stop_branch_internal(struct gst_hub_branch *branch)
 
 	g_mutex_lock(&branch->lock);
 	branch->active = false;
+	branch->client_count = 0;
 
-	if (branch->sub && branch->pipeline) {
-		gst_master_pipeline_unsubscribe(branch->pipeline, branch->sub);
-		branch->sub = NULL;
-	}
+	gst_pipeline_subscriber_t *sub_to_unsub = branch->sub;
+	branch->sub = NULL;
+	gst_master_pipeline_t *pipeline = branch->pipeline;
+	branch->pipeline = NULL;
 
 	if (branch->appsrc) {
 		gst_object_unref(branch->appsrc);
@@ -503,8 +704,11 @@ static void stop_branch_internal(struct gst_hub_branch *branch)
 		}
 	}
 
-	branch->pipeline = NULL;
 	g_mutex_unlock(&branch->lock);
+
+	if (sub_to_unsub && pipeline) {
+		gst_master_pipeline_unsubscribe(pipeline, sub_to_unsub);
+	}
 
 	blog(LOG_INFO, "[obs-gstreamer-rtspserver] Stopped and destroyed branch '%s'",
 		branch->name ? branch->name : "unnamed");

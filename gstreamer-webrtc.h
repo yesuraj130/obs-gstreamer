@@ -22,6 +22,11 @@
 
 #include <obs-module.h>
 #include <gst/gst.h>
+#include "gstreamer-master-pipeline.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 struct gstreamer_webrtc;
 
@@ -30,3 +35,16 @@ struct gstreamer_webrtc *gstreamer_webrtc_create(obs_output_t *output, obs_data_
 void gstreamer_webrtc_destroy(struct gstreamer_webrtc *webrtc);
 
 GstElement *gstreamer_webrtc_appsrc(struct gstreamer_webrtc *webrtc);
+
+struct gstreamer_webrtc *gst_webrtc_branch_start(gst_master_pipeline_t *master_pipe,
+						 const char *name,
+						 const char *http_port,
+						 const char *stun_server,
+						 const char *web_root,
+						 const char *encoder_type);
+void gst_webrtc_branch_stop(struct gstreamer_webrtc *webrtc);
+
+#ifdef __cplusplus
+}
+#endif
+

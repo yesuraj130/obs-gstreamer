@@ -17,6 +17,7 @@
 
 #include "gstreamer-master-pipeline.h"
 #include "gstreamer-rtspserver.h"
+#include "gstreamer-webrtc.h"
 #include "gstreamer-render-callback.h"
 #include "gstreamer-encoder-callback.h"
 #include "gstreamer-output-callback.h"
@@ -108,11 +109,11 @@ struct GstDestination {
 	std::string webrtc_port;
 	std::string webrtc_stun;
 	std::string webrtc_web_root;
-	obs_output_t *webrtc_output;
+	struct gstreamer_webrtc *webrtc_branch;
 
 	/* Custom Pipeline specifics */
 	std::string custom_pipeline;
-	obs_output_t *custom_output;
+	struct gst_hub_branch *custom_branch;
 
 	GstDestination()
 		: type(DEST_TYPE_RTSP),
@@ -127,9 +128,9 @@ struct GstDestination {
 		  webrtc_port("8888"),
 		  webrtc_stun(""),
 		  webrtc_web_root(""),
-		  webrtc_output(nullptr),
+		  webrtc_branch(nullptr),
 		  custom_pipeline("autovideosink sync=false"),
-		  custom_output(nullptr)
+		  custom_branch(nullptr)
 	{
 	}
 };
@@ -406,35 +407,11 @@ static std::vector<std::string> get_obs_source_names()
 /* --------------------------------------------------------------------------
  * Destination Control Helpers
  * -------------------------------------------------------------------------- */
-static void stop_destination(GstMasterHub *hub, GstDestination *dest)
+static void cleanup_unused_master_pipeline(GstMasterHub *hub)
 {
-	if (!dest->is_active)
+	if (!hub)
 		return;
 
-	if (dest->type == DEST_TYPE_RTSP && dest->rtsp_branch) {
-		blog(LOG_INFO, "[obs-gstreamer-dock] Stopping RTSP branch (%s:%s)",
-			dest->rtsp_port.c_str(), dest->rtsp_mount.c_str());
-		gst_render_hub_stop_branch(dest->rtsp_branch);
-		dest->rtsp_branch = nullptr;
-	} else if (dest->type == DEST_TYPE_WEBRTC && dest->webrtc_output) {
-		if (obs_output_active(dest->webrtc_output)) {
-			obs_output_stop(dest->webrtc_output);
-		}
-		obs_output_release(dest->webrtc_output);
-		dest->webrtc_output = nullptr;
-		blog(LOG_INFO, "[obs-gstreamer-dock] Stopped WebRTC output (port: %s)", dest->webrtc_port.c_str());
-	} else if (dest->type == DEST_TYPE_CUSTOM && dest->custom_output) {
-		if (obs_output_active(dest->custom_output)) {
-			obs_output_stop(dest->custom_output);
-		}
-		obs_output_release(dest->custom_output);
-		dest->custom_output = nullptr;
-		blog(LOG_INFO, "[obs-gstreamer-dock] Stopped Custom pipeline output");
-	}
-
-	dest->is_active = false;
-
-	/* If no active destinations remain on this master hub, detach and destroy GPU render callback */
 	bool any_active = false;
 	for (const auto &d : hub->destinations) {
 		if (d->is_active) {
@@ -443,7 +420,7 @@ static void stop_destination(GstMasterHub *hub, GstDestination *dest)
 		}
 	}
 
-	if (!any_active) {
+	if (!any_active && is_hub_pipeline_active(hub)) {
 		blog(LOG_INFO, "[obs-gstreamer-dock] All destinations stopped: tearing down master pipeline for '%s'",
 			hub->name.c_str());
 		if (hub->active_render_cb) {
@@ -463,7 +440,32 @@ static void stop_destination(GstMasterHub *hub, GstDestination *dest)
 			hub->active_filter_cb = nullptr;
 		}
 	}
+}
 
+static void stop_destination(GstMasterHub *hub, GstDestination *dest)
+{
+	if (!dest->is_active)
+		return;
+
+	if (dest->type == DEST_TYPE_RTSP && dest->rtsp_branch) {
+		blog(LOG_INFO, "[obs-gstreamer-dock] Stopping RTSP branch (%s:%s)",
+			dest->rtsp_port.c_str(), dest->rtsp_mount.c_str());
+		gst_render_hub_stop_branch(dest->rtsp_branch);
+		dest->rtsp_branch = nullptr;
+	} else if (dest->type == DEST_TYPE_WEBRTC && dest->webrtc_branch) {
+		blog(LOG_INFO, "[obs-gstreamer-dock] Stopping WebRTC branch (port: %s)",
+			dest->webrtc_port.c_str());
+		gst_webrtc_branch_stop(dest->webrtc_branch);
+		dest->webrtc_branch = nullptr;
+	} else if (dest->type == DEST_TYPE_CUSTOM && dest->custom_branch) {
+		blog(LOG_INFO, "[obs-gstreamer-dock] Stopping Custom pipeline branch ('%s')",
+			dest->name.c_str());
+		gst_render_hub_stop_branch(dest->custom_branch);
+		dest->custom_branch = nullptr;
+	}
+
+	dest->is_active = false;
+	cleanup_unused_master_pipeline(hub);
 	export_dock_status_json();
 }
 
@@ -536,13 +538,13 @@ static bool start_destination(GstMasterHub *hub, GstDestination *dest)
 {
 	stop_destination(hub, dest);
 
-	if (dest->type == DEST_TYPE_RTSP) {
-		gst_master_pipeline_t *master_pipe = ensure_master_pipeline(hub);
-		if (!master_pipe) {
-			blog(LOG_ERROR, "[obs-gstreamer-dock] Master pipeline object is NULL");
-			return false;
-		}
+	gst_master_pipeline_t *master_pipe = ensure_master_pipeline(hub);
+	if (!master_pipe) {
+		blog(LOG_ERROR, "[obs-gstreamer-dock] Master pipeline object is NULL");
+		return false;
+	}
 
+	if (dest->type == DEST_TYPE_RTSP) {
 		blog(LOG_INFO, "[obs-gstreamer-dock] Starting RTSP destination on port %s%s linked to master pipeline '%s'...",
 			dest->rtsp_port.c_str(), dest->rtsp_mount.c_str(), hub->name.c_str());
 
@@ -557,6 +559,7 @@ static bool start_destination(GstMasterHub *hub, GstDestination *dest)
 
 		if (!dest->rtsp_branch) {
 			blog(LOG_ERROR, "[obs-gstreamer-dock] Failed to start RTSP branch");
+			cleanup_unused_master_pipeline(hub);
 			return false;
 		}
 		dest->is_active = true;
@@ -583,62 +586,53 @@ static bool start_destination(GstMasterHub *hub, GstDestination *dest)
 
 		return true;
 	} else if (dest->type == DEST_TYPE_WEBRTC) {
-		obs_data_t *settings = obs_data_create();
-		obs_data_set_bool(settings, "webrtc_output", true);
-		obs_data_set_string(settings, "webrtc_http_port", dest->webrtc_port.c_str());
-		obs_data_set_string(settings, "webrtc_stun_server", dest->webrtc_stun.c_str());
-		obs_data_set_string(settings, "webrtc_web_root", dest->webrtc_web_root.c_str());
-		obs_data_set_string(settings, "pipeline", "autovideosink sync=false");
+		blog(LOG_INFO, "[obs-gstreamer-dock] Starting WebRTC destination on port %s linked to master pipeline '%s'...",
+			dest->webrtc_port.c_str(), hub->name.c_str());
 
-		dest->webrtc_output = obs_output_create("hjm-gstreamer-output", dest->name.c_str(), settings, nullptr);
-		obs_data_release(settings);
+		dest->webrtc_branch = gst_webrtc_branch_start(
+			master_pipe,
+			dest->name.c_str(),
+			dest->webrtc_port.c_str(),
+			dest->webrtc_stun.c_str(),
+			dest->webrtc_web_root.c_str(),
+			hub->gpu_encoder_type.c_str()
+		);
 
-		if (!dest->webrtc_output) {
-			blog(LOG_ERROR, "[obs-gstreamer-dock] Failed to create WebRTC output");
-			return false;
-		}
-
-		obs_output_set_media(dest->webrtc_output, obs_get_video(), obs_get_audio());
-		if (!obs_output_start(dest->webrtc_output)) {
-			blog(LOG_ERROR, "[obs-gstreamer-dock] Failed to start WebRTC output: %s",
-				obs_output_get_last_error(dest->webrtc_output));
-			stop_destination(hub, dest);
+		if (!dest->webrtc_branch) {
+			blog(LOG_ERROR, "[obs-gstreamer-dock] Failed to start WebRTC branch");
+			cleanup_unused_master_pipeline(hub);
 			return false;
 		}
 		dest->is_active = true;
-		blog(LOG_INFO, "[obs-gstreamer-dock] WebRTC output active on port %s", dest->webrtc_port.c_str());
+		blog(LOG_INFO, "[obs-gstreamer-dock] WebRTC branch active on port %s", dest->webrtc_port.c_str());
 		export_dock_status_json();
 		return true;
 	} else if (dest->type == DEST_TYPE_CUSTOM) {
-		obs_data_t *settings = obs_data_create();
-		obs_data_set_string(settings, "pipeline",
-			dest->custom_pipeline.empty() ? "autovideosink sync=false" : dest->custom_pipeline.c_str());
+		blog(LOG_INFO, "[obs-gstreamer-dock] Starting Custom pipeline destination '%s' linked to master pipeline '%s'...",
+			dest->name.c_str(), hub->name.c_str());
 
-		dest->custom_output = obs_output_create("hjm-gstreamer-output", dest->name.c_str(), settings, nullptr);
-		obs_data_release(settings);
+		dest->custom_branch = gst_custom_branch_start(
+			master_pipe,
+			dest->name.c_str(),
+			hub->gpu_encoder_type.c_str(),
+			dest->custom_pipeline.empty() ? "autovideosink sync=false" : dest->custom_pipeline.c_str()
+		);
 
-		if (!dest->custom_output) {
-			blog(LOG_ERROR, "[obs-gstreamer-dock] Failed to create custom pipeline output");
-			return false;
-		}
-
-		obs_output_set_media(dest->custom_output, obs_get_video(), obs_get_audio());
-		if (!obs_output_start(dest->custom_output)) {
-			blog(LOG_ERROR, "[obs-gstreamer-dock] Failed to start custom output: %s",
-				obs_output_get_last_error(dest->custom_output));
-			stop_destination(hub, dest);
+		if (!dest->custom_branch) {
+			blog(LOG_ERROR, "[obs-gstreamer-dock] Failed to start Custom pipeline branch");
+			cleanup_unused_master_pipeline(hub);
 			return false;
 		}
 		dest->is_active = true;
-		blog(LOG_INFO, "[obs-gstreamer-dock] Custom pipeline output active");
+		blog(LOG_INFO, "[obs-gstreamer-dock] Custom pipeline branch '%s' active", dest->name.c_str());
 		export_dock_status_json();
 		return true;
 	}
 
+	cleanup_unused_master_pipeline(hub);
 	return false;
 }
 
-/* --------------------------------------------------------------------------
 /* --------------------------------------------------------------------------
  * Helper Widget: Collapsible Section
  * -------------------------------------------------------------------------- */

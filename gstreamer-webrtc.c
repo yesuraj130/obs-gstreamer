@@ -78,6 +78,13 @@ struct gstreamer_webrtc {
 	obs_data_t *settings;
 	struct obs_video_info ovi;
 
+	char *name;
+	char *stun_server;
+	gst_master_pipeline_t *master_pipe;
+	gst_pipeline_subscriber_t *sub;
+	bool active;
+	bool waiting_for_keyframe;
+
 	GstElement *pipe;
 	GstElement *appsrc;
 	GstElement *tee;
@@ -92,6 +99,41 @@ struct gstreamer_webrtc {
 	guint bus_watch_id;
 	struct packet_counter pay_counter;
 };
+
+static void webrtc_frame_cb(GstBuffer *buf, bool is_keyframe, gpointer user_data)
+{
+	struct gstreamer_webrtc *webrtc = (struct gstreamer_webrtc *)user_data;
+	if (!webrtc || !buf)
+		return;
+
+	g_mutex_lock(&webrtc->sessions_lock);
+	if (!webrtc->active || !webrtc->appsrc || g_hash_table_size(webrtc->sessions) == 0) {
+		g_mutex_unlock(&webrtc->sessions_lock);
+		return;
+	}
+
+	if (webrtc->waiting_for_keyframe) {
+		if (!is_keyframe) {
+			g_mutex_unlock(&webrtc->sessions_lock);
+			return;
+		}
+		webrtc->waiting_for_keyframe = false;
+		blog(LOG_INFO, "[obs-gstreamer-webrtc] Keyframe delivered to '%s', WebRTC viewer playback starting",
+			webrtc->name ? webrtc->name : "WebRTC");
+	}
+
+	GstBuffer *out_buf = gst_buffer_copy(buf);
+	GST_BUFFER_PTS(out_buf) = GST_CLOCK_TIME_NONE;
+	GST_BUFFER_DTS(out_buf) = GST_CLOCK_TIME_NONE;
+	GstElement *appsrc = gst_object_ref(webrtc->appsrc);
+	g_mutex_unlock(&webrtc->sessions_lock);
+
+	GstFlowReturn ret = gst_app_src_push_buffer(GST_APP_SRC(appsrc), out_buf);
+	if (ret != GST_FLOW_OK && ret != GST_FLOW_FLUSHING) {
+		// Non-fatal flow status
+	}
+	gst_object_unref(appsrc);
+}
 
 #ifndef SOUP_CHECK_VERSION
 #define SOUP_CHECK_VERSION(major, minor, micro) \
@@ -297,11 +339,30 @@ static void remove_session_locked(struct gstreamer_webrtc *webrtc, struct whep_s
 static gboolean idle_teardown(gpointer user_data)
 {
 	struct idle_teardown *ctx = user_data;
+	gst_pipeline_subscriber_t *sub_to_unsub = NULL;
+	gst_master_pipeline_t *master_pipe = NULL;
+	guint remaining = 0;
+
 	g_mutex_lock(&ctx->webrtc->sessions_lock);
 	struct whep_session *session = g_hash_table_lookup(ctx->webrtc->sessions, ctx->id);
-	if (session)
+	if (session) {
 		remove_session_locked(ctx->webrtc, session);
+		remaining = g_hash_table_size(ctx->webrtc->sessions);
+		blog(LOG_INFO, "[obs-gstreamer-webrtc] WebRTC viewer '%s' disconnected (remaining=%u)",
+			ctx->id, remaining);
+		if (remaining == 0 && ctx->webrtc->sub && ctx->webrtc->master_pipe) {
+			sub_to_unsub = ctx->webrtc->sub;
+			ctx->webrtc->sub = NULL;
+			master_pipe = ctx->webrtc->master_pipe;
+		}
+	}
 	g_mutex_unlock(&ctx->webrtc->sessions_lock);
+
+	if (sub_to_unsub && master_pipe) {
+		blog(LOG_INFO, "[obs-gstreamer-webrtc] All WebRTC viewers disconnected: unsubscribing '%s' from master pipeline",
+			ctx->webrtc->name ? ctx->webrtc->name : "WebRTC");
+		gst_master_pipeline_unsubscribe(master_pipe, sub_to_unsub);
+	}
 
 	g_free(ctx->id);
 	g_free(ctx);
@@ -318,15 +379,20 @@ static void session_teardown_async(struct gstreamer_webrtc *webrtc, const char *
 
 static void webrtcbin_connection_state_changed(GstElement *webrtcbin, GParamSpec *pspec, gpointer user_data)
 {
+	UNUSED_PARAMETER(pspec);
 	struct gstreamer_webrtc *webrtc = user_data;
 	GstWebRTCPeerConnectionState state;
 
 	g_object_get(webrtcbin, "connection-state", &state, NULL);
 	blog(LOG_DEBUG, "[obs-gstreamer] WHEP session %s: connection-state %d",
 		GST_ELEMENT_NAME(webrtcbin), (int)state);
-	if (state == GST_WEBRTC_PEER_CONNECTION_STATE_CLOSED ||
-	    state == GST_WEBRTC_PEER_CONNECTION_STATE_FAILED ||
-	    state == GST_WEBRTC_PEER_CONNECTION_STATE_DISCONNECTED) {
+	if (state == GST_WEBRTC_PEER_CONNECTION_STATE_CONNECTED) {
+		if (webrtc && webrtc->master_pipe) {
+			gst_master_pipeline_request_keyframe(webrtc->master_pipe);
+		}
+	} else if (state == GST_WEBRTC_PEER_CONNECTION_STATE_CLOSED ||
+	           state == GST_WEBRTC_PEER_CONNECTION_STATE_FAILED ||
+	           state == GST_WEBRTC_PEER_CONNECTION_STATE_DISCONNECTED) {
 		session_teardown_async(webrtc, GST_ELEMENT_NAME(webrtcbin));
 	}
 }
@@ -615,7 +681,9 @@ static void whep_post(struct gstreamer_webrtc *webrtc, SoupServerMessage *msg)
 		"max-size-time", (guint64)0, "max-size-bytes", (guint)0, NULL);
 	g_object_set(session->webrtcbin, "bundle-policy", GST_WEBRTC_BUNDLE_POLICY_MAX_BUNDLE, NULL);
 
-	const char *stun = obs_data_get_string(webrtc->settings, "webrtc_stun_server");
+	const char *stun = webrtc->stun_server
+		? webrtc->stun_server
+		: (webrtc->settings ? obs_data_get_string(webrtc->settings, "webrtc_stun_server") : NULL);
 	if (stun && stun[0])
 		g_object_set(session->webrtcbin, "stun-server", stun, NULL);
 
@@ -672,14 +740,45 @@ static void whep_post(struct gstreamer_webrtc *webrtc, SoupServerMessage *msg)
 
 	g_mutex_lock(&webrtc->sessions_lock);
 	g_hash_table_insert(webrtc->sessions, g_strdup(session->id), session);
+	guint new_count = g_hash_table_size(webrtc->sessions);
+	bool need_subscribe = (webrtc->master_pipe != NULL && webrtc->sub == NULL && webrtc->active);
+	if (need_subscribe) {
+		webrtc->waiting_for_keyframe = true;
+	}
+	gst_master_pipeline_t *master_pipe = webrtc->master_pipe;
 	g_mutex_unlock(&webrtc->sessions_lock);
 
-	blog(LOG_INFO, "[obs-gstreamer] WHEP POST %s: branch added (unlinked), negotiating", session->id);
+	if (need_subscribe && master_pipe) {
+		blog(LOG_INFO, "[obs-gstreamer-webrtc] WebRTC viewer '%s' connected (viewers=%u): subscribing '%s' to master pipeline",
+			session->id, new_count, webrtc->name ? webrtc->name : "WebRTC");
+		gst_pipeline_subscriber_t *new_sub = gst_master_pipeline_subscribe(
+			master_pipe, webrtc_frame_cb, webrtc, webrtc->name ? webrtc->name : "WebRTC");
+		g_mutex_lock(&webrtc->sessions_lock);
+		if (!webrtc->active || g_hash_table_size(webrtc->sessions) == 0 || webrtc->sub != NULL) {
+			g_mutex_unlock(&webrtc->sessions_lock);
+			if (new_sub) {
+				gst_master_pipeline_unsubscribe(master_pipe, new_sub);
+			}
+		} else {
+			webrtc->sub = new_sub;
+			g_mutex_unlock(&webrtc->sessions_lock);
+		}
+	} else if (master_pipe) {
+		blog(LOG_INFO, "[obs-gstreamer-webrtc] WebRTC viewer '%s' connected (total viewers=%u)",
+			session->id, new_count);
+		gst_master_pipeline_request_keyframe(master_pipe);
+	} else if (webrtc->pay0) {
+		// Ask the encoder for a keyframe so late joiners get picture quickly.
+		GstEvent *event = gst_video_event_new_upstream_force_key_unit(
+			GST_CLOCK_TIME_NONE, TRUE, 0);
+		GstPad *pay_src_pad = gst_element_get_static_pad(webrtc->pay0, "src");
+		if (pay_src_pad) {
+			gst_pad_push_event(pay_src_pad, event);
+			gst_object_unref(pay_src_pad);
+		}
+	}
 
-	// Ask the encoder for a keyframe so late joiners get picture quickly.
-	GstEvent *event = gst_video_event_new_upstream_force_key_unit(
-		GST_CLOCK_TIME_NONE, TRUE, 0);
-	gst_pad_push_event(gst_element_get_static_pad(webrtc->pay0, "src"), event);
+	blog(LOG_INFO, "[obs-gstreamer] WHEP POST %s: branch added (unlinked), negotiating", session->id);
 
 	// Negotiate: offer -> answer. Canonical WHEP answerer flow:
 	// set-remote-description -> request+link sink pad (elements in NULL)
@@ -880,6 +979,114 @@ static gboolean bus_callback(GstBus *bus, GstMessage *message, gpointer user_dat
 // Public interface
 // ---------------------------------------------------------------------------
 
+struct gstreamer_webrtc *gst_webrtc_branch_start(gst_master_pipeline_t *master_pipe,
+						 const char *name,
+						 const char *http_port,
+						 const char *stun_server,
+						 const char *web_root,
+						 const char *encoder_type)
+{
+	UNUSED_PARAMETER(encoder_type);
+	if (!master_pipe) {
+		blog(LOG_ERROR, "[obs-gstreamer-webrtc] Cannot start WebRTC branch '%s': master_pipe is NULL",
+			name ? name : "unnamed");
+		return NULL;
+	}
+
+	struct gstreamer_webrtc *webrtc = g_new0(struct gstreamer_webrtc, 1);
+	webrtc->name = g_strdup(name && name[0] ? name : "WebRTC");
+	webrtc->stun_server = (stun_server && stun_server[0]) ? g_strdup(stun_server) : NULL;
+	webrtc->master_pipe = master_pipe;
+	webrtc->sub = NULL;
+	webrtc->active = true;
+	webrtc->waiting_for_keyframe = true;
+	webrtc->sessions = g_hash_table_new(g_str_hash, g_str_equal);
+	g_mutex_init(&webrtc->sessions_lock);
+
+	const char *port = (http_port && http_port[0]) ? http_port : "8888";
+
+	if (!web_root || !web_root[0]) {
+		webrtc->web_root = g_build_filename(g_get_user_data_dir(), "obs-gstreamer",
+			"webrtc", NULL);
+	} else {
+		webrtc->web_root = g_strdup(web_root);
+	}
+	seed_web_root(webrtc->web_root);
+	blog(LOG_INFO, "[obs-gstreamer-webrtc] WebRTC web root: %s", webrtc->web_root);
+
+	const char *launch =
+		"appsrc name=appsrc_video is-live=true format=GST_FORMAT_TIME do-timestamp=true "
+		"caps=\"video/x-h264, stream-format=byte-stream, alignment=au\" "
+		"! h264parse config-interval=-1 "
+		"! rtph264pay name=pay0 pt=102 config-interval=-1 "
+		"! tee name=t "
+		"t. ! queue leaky=downstream max-size-buffers=30 ! fakesink sync=false";
+
+	GError *err = NULL;
+	webrtc->pipe = gst_parse_launch(launch, &err);
+	if (err || !webrtc->pipe) {
+		blog(LOG_ERROR, "[obs-gstreamer-webrtc] Failed to create WebRTC pipeline for '%s': %s",
+			webrtc->name, err ? err->message : "unknown error");
+		if (err)
+			g_error_free(err);
+		gstreamer_webrtc_destroy(webrtc);
+		return NULL;
+	}
+
+	webrtc->appsrc = gst_bin_get_by_name(GST_BIN(webrtc->pipe), "appsrc_video");
+	if (webrtc->appsrc) {
+		gst_app_src_set_stream_type(GST_APP_SRC(webrtc->appsrc), GST_APP_STREAM_TYPE_STREAM);
+		gst_app_src_set_latency(GST_APP_SRC(webrtc->appsrc), 0, 0);
+	}
+	webrtc->tee = gst_bin_get_by_name(GST_BIN(webrtc->pipe), "t");
+	webrtc->pay0 = gst_bin_get_by_name(GST_BIN(webrtc->pipe), "pay0");
+	webrtc->pay_counter.label = "payloader";
+	if (webrtc->pay0) {
+		GstPad *pay_src = gst_element_get_static_pad(webrtc->pay0, "src");
+		if (pay_src) {
+			gst_pad_add_probe(pay_src, GST_PAD_PROBE_TYPE_BUFFER, rtp_packet_probe,
+				&webrtc->pay_counter, NULL);
+			gst_object_unref(pay_src);
+		}
+	}
+
+	GstBus *bus = gst_element_get_bus(webrtc->pipe);
+	webrtc->bus_watch_id = gst_bus_add_watch(bus, bus_callback, webrtc);
+	gst_object_unref(bus);
+
+	webrtc->server = soup_server_new(NULL, NULL);
+	GError *listen_err = NULL;
+	int port_num = port ? atoi(port) : 8888;
+	if (port_num <= 0 || port_num > 65535)
+		port_num = 8888;
+	if (!soup_server_listen_local(webrtc->server, port_num, 0, &listen_err)) {
+		blog(LOG_ERROR, "[obs-gstreamer-webrtc] Failed to listen on HTTP port %s: %s",
+			port, listen_err ? listen_err->message : "unknown error");
+		if (listen_err)
+			g_error_free(listen_err);
+		gstreamer_webrtc_destroy(webrtc);
+		return NULL;
+	}
+
+	soup_server_add_handler(webrtc->server, "/whep", whep_handler, webrtc, NULL);
+	soup_server_add_handler(webrtc->server, NULL, static_file_handler, webrtc, NULL);
+
+	if (gst_element_set_state(webrtc->pipe, GST_STATE_PLAYING) == GST_STATE_CHANGE_FAILURE) {
+		blog(LOG_ERROR, "[obs-gstreamer-webrtc] Failed to start WebRTC pipeline for '%s'", webrtc->name);
+		gstreamer_webrtc_destroy(webrtc);
+		return NULL;
+	}
+
+	blog(LOG_INFO, "[obs-gstreamer-webrtc] WebRTC branch started: http://0.0.0.0:%s/ (name='%s', waiting for viewer connection)",
+		port, webrtc->name);
+	return webrtc;
+}
+
+void gst_webrtc_branch_stop(struct gstreamer_webrtc *webrtc)
+{
+	gstreamer_webrtc_destroy(webrtc);
+}
+
 struct gstreamer_webrtc *gstreamer_webrtc_create(obs_output_t *output, obs_data_t *settings,
 						 struct obs_video_info *ovi, char **error)
 {
@@ -908,6 +1115,10 @@ struct gstreamer_webrtc *gstreamer_webrtc_create(obs_output_t *output, obs_data_
 	webrtc->output = output;
 	webrtc->settings = settings;
 	webrtc->ovi = *ovi;
+	webrtc->name = g_strdup(output ? obs_output_get_name(output) : "WebRTC");
+	const char *stun = settings ? obs_data_get_string(settings, "webrtc_stun_server") : NULL;
+	webrtc->stun_server = (stun && stun[0]) ? g_strdup(stun) : NULL;
+	webrtc->active = true;
 	webrtc->sessions = g_hash_table_new(g_str_hash, g_str_equal);
 	g_mutex_init(&webrtc->sessions_lock);
 
@@ -1003,6 +1214,18 @@ void gstreamer_webrtc_destroy(struct gstreamer_webrtc *webrtc)
 	if (!webrtc)
 		return;
 
+	g_mutex_lock(&webrtc->sessions_lock);
+	webrtc->active = false;
+	gst_pipeline_subscriber_t *sub_to_unsub = webrtc->sub;
+	webrtc->sub = NULL;
+	gst_master_pipeline_t *master_pipe = webrtc->master_pipe;
+	webrtc->master_pipe = NULL;
+	g_mutex_unlock(&webrtc->sessions_lock);
+
+	if (sub_to_unsub && master_pipe) {
+		gst_master_pipeline_unsubscribe(master_pipe, sub_to_unsub);
+	}
+
 	if (webrtc->bus_watch_id) {
 		g_source_remove(webrtc->bus_watch_id);
 		webrtc->bus_watch_id = 0;
@@ -1037,6 +1260,8 @@ void gstreamer_webrtc_destroy(struct gstreamer_webrtc *webrtc)
 		g_hash_table_destroy(webrtc->sessions);
 	g_mutex_clear(&webrtc->sessions_lock);
 
+	g_free(webrtc->name);
+	g_free(webrtc->stun_server);
 	g_free(webrtc->web_root);
 	g_free(webrtc);
 }
@@ -1049,6 +1274,28 @@ GstElement *gstreamer_webrtc_appsrc(struct gstreamer_webrtc *webrtc)
 #else /* !ENABLE_WEBRTC */
 
 #include <glib.h>
+
+struct gstreamer_webrtc *gst_webrtc_branch_start(gst_master_pipeline_t *master_pipe,
+						 const char *name,
+						 const char *http_port,
+						 const char *stun_server,
+						 const char *web_root,
+						 const char *encoder_type)
+{
+	(void)master_pipe;
+	(void)name;
+	(void)http_port;
+	(void)stun_server;
+	(void)web_root;
+	(void)encoder_type;
+	blog(LOG_WARNING, "[obs-gstreamer] WebRTC WHEP branch is disabled in this build");
+	return NULL;
+}
+
+void gst_webrtc_branch_stop(struct gstreamer_webrtc *webrtc)
+{
+	(void)webrtc;
+}
 
 struct gstreamer_webrtc *gstreamer_webrtc_create(obs_output_t *output, obs_data_t *settings,
 						 struct obs_video_info *ovi, char **error)
@@ -1074,4 +1321,5 @@ GstElement *gstreamer_webrtc_appsrc(struct gstreamer_webrtc *webrtc)
 }
 
 #endif /* ENABLE_WEBRTC */
+
 
