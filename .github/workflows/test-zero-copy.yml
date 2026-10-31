@@ -24,12 +24,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential g++ ninja-build python3-pip pkg-config \
-            obs-studio libobs-dev \
+            obs-studio \
             libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
             libgstreamer-plugins-bad1.0-dev libgstrtspserver-1.0-dev \
             gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
             gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly \
-            gstreamer1.0-gl libegl1-mesa-dev libx11-dev \
+            gstreamer1.0-gl libegl1-mesa-dev libgl1-mesa-dri libglx-mesa0 libgl1 libx11-dev \
             libsoup-3.0-dev qt6-base-dev xvfb
           pip3 install --upgrade meson --break-system-packages || pip3 install --upgrade meson
           sudo sed -i 's/-std=gnu[0-9]*//g' /usr/lib/*/pkgconfig/libobs.pc /usr/lib/pkgconfig/libobs.pc /usr/share/pkgconfig/libobs.pc 2>/dev/null || true
@@ -94,10 +94,10 @@ jobs:
               }
 
               gst_render_callback_t *rcb = gst_render_callback_create(
-                  GST_SOURCE_MAIN_OUTPUT, NULL, "auto", 2000, 1, NULL, NULL);
+                  GST_SOURCE_MAIN_OUTPUT, NULL, NULL, NULL, "auto", 2000, 1, 30, 1);
               assert(rcb != NULL);
 
-              gst_master_pipeline_t *hub = gst_render_callback_get_hub(rcb);
+              gst_master_pipeline_t *hub = gst_render_callback_get_pipeline(rcb);
               assert(hub != NULL);
               assert(hub->gpu_input == true);
               assert(hub->stagesurf == NULL);
