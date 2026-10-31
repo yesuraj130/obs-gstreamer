@@ -40,6 +40,8 @@ bool obs_frontend_add_dock_by_id(const char *id, const char *title, void *dock) 
 
 #include <QtGui/QColor>
 #include <QtGui/QBrush>
+#include <QtGui/QClipboard>
+#include <QtGui/QGuiApplication>
 #include <QtWidgets/QWidget>
 #include <QtWidgets/QDialog>
 #include <QtWidgets/QListWidget>
@@ -781,6 +783,42 @@ public:
 		rtspForm->addRow("RTSP Port:", m_rtspPortEdit);
 		rtspForm->addRow("Mount Path:", m_rtspMountEdit);
 		rtspForm->addRow("Payloader Pipeline:", m_rtspPipeEdit);
+
+		QHBoxLayout *urlLayout = new QHBoxLayout();
+		m_rtspUrlDisplay = new QLineEdit(this);
+		m_rtspUrlDisplay->setReadOnly(true);
+		m_rtspUrlDisplay->setStyleSheet("background-color: #1e222b; color: #38bdf8; font-weight: bold; padding: 4px; border-radius: 3px; border: 1px solid #334155;");
+		QPushButton *btnCopyUrl = new QPushButton("Copy URL", this);
+		btnCopyUrl->setToolTip("Copy exact RTSP stream URL to clipboard (clean, no spaces)");
+		QPushButton *btnCopyPipe = new QPushButton("Copy OBS Source Pipeline", this);
+		btnCopyPipe->setToolTip("Copy complete ready-to-paste GStreamer Source pipeline for OBS");
+		urlLayout->addWidget(m_rtspUrlDisplay, 1);
+		urlLayout->addWidget(btnCopyUrl);
+		urlLayout->addWidget(btnCopyPipe);
+		rtspForm->addRow("Client URL:", urlLayout);
+
+		auto updateRtspUrl = [this]() {
+			QString p = m_rtspPortEdit->text().trimmed();
+			if (p.isEmpty()) p = "8554";
+			QString m = m_rtspMountEdit->text().trimmed();
+			if (m.isEmpty()) m = "/live";
+			if (!m.startsWith('/')) m.prepend('/');
+			m_rtspUrlDisplay->setText(QString("rtsp://127.0.0.1:%1%2").arg(p, m));
+		};
+		connect(m_rtspPortEdit, &QLineEdit::textChanged, updateRtspUrl);
+		connect(m_rtspMountEdit, &QLineEdit::textChanged, updateRtspUrl);
+		updateRtspUrl();
+
+		connect(btnCopyUrl, &QPushButton::clicked, [this]() {
+			QString u = m_rtspUrlDisplay->text().trimmed();
+			QGuiApplication::clipboard()->setText(u);
+		});
+		connect(btnCopyPipe, &QPushButton::clicked, [this]() {
+			QString u = m_rtspUrlDisplay->text().trimmed();
+			QString pipe = QString("rtspsrc location=\"%1\" latency=0 buffer-mode=none ! rtph264depay ! h264parse ! d3d11h264dec ! video.").arg(u);
+			QGuiApplication::clipboard()->setText(pipe);
+		});
+
 		m_typeStack->addWidget(m_rtspGroup);
 
 		/* WebRTC Section */
@@ -868,6 +906,7 @@ private:
 	QLineEdit *m_rtspPortEdit;
 	QLineEdit *m_rtspMountEdit;
 	QLineEdit *m_rtspPipeEdit;
+	QLineEdit *m_rtspUrlDisplay;
 
 	QGroupBox *m_webrtcGroup;
 	QLineEdit *m_webrtcPortEdit;
@@ -1143,12 +1182,18 @@ private:
 			                    (dest->type == DEST_TYPE_WEBRTC) ? "WebRTC" : "Custom";
 
 			QString targetStr;
-			if (dest->type == DEST_TYPE_RTSP)
-				targetStr = QString(":%1%2").arg(QString::fromStdString(dest->rtsp_port), QString::fromStdString(dest->rtsp_mount));
-			else if (dest->type == DEST_TYPE_WEBRTC)
-				targetStr = QString("Port %1").arg(QString::fromStdString(dest->webrtc_port));
-			else
+			if (dest->type == DEST_TYPE_RTSP) {
+				QString p = QString::fromStdString(dest->rtsp_port).trimmed();
+				if (p.isEmpty()) p = "8554";
+				QString m = QString::fromStdString(dest->rtsp_mount).trimmed();
+				if (m.isEmpty()) m = "/live";
+				if (!m.startsWith('/')) m.prepend('/');
+				targetStr = QString("rtsp://127.0.0.1:%1%2").arg(p, m);
+			} else if (dest->type == DEST_TYPE_WEBRTC) {
+				targetStr = QString("WHEP Port %1").arg(QString::fromStdString(dest->webrtc_port));
+			} else {
 				targetStr = "Custom Pipeline";
+			}
 
 			QString statusStr = dest->is_active ? "Running" : "Stopped";
 			QString autoStr = dest->autostart ? " • Autostart" : "";
@@ -1213,6 +1258,18 @@ private:
 				"  border: 1px solid #2b313d;"
 				"  color: #636b7b;"
 				"}";
+
+			if (dest->type == DEST_TYPE_RTSP) {
+				QString copyUrl = targetStr;
+				QPushButton *btnCopy = new QPushButton("Copy URL", rowWidget);
+				btnCopy->setFixedHeight(24);
+				btnCopy->setStyleSheet(obsBtnStyle);
+				btnCopy->setToolTip(QString("Copy %1 to clipboard (clean, no spaces)").arg(copyUrl));
+				connect(btnCopy, &QPushButton::clicked, [copyUrl]() {
+					QGuiApplication::clipboard()->setText(copyUrl);
+				});
+				actionLayout->addWidget(btnCopy);
+			}
 
 			QPushButton *btnStart = new QPushButton("Start", rowWidget);
 			btnStart->setFixedHeight(24);

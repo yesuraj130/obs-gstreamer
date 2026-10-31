@@ -438,18 +438,77 @@ static GstFlowReturn audio_new_sample(GstAppSink *appsink, gpointer user_data)
 #define DEFAULT_INTERNAL_AUDIO_PIPELINE "audioconvert name=audio ! audioresample ! audio/x-raw, format={U8,S16LE,S32LE,F32LE}, channels={1,2,3,4,5,6,8}, layout=interleaved ! appsink name=audio_appsink"
 #define DEFAULT_INTERNAL_PIPELINE DEFAULT_INTERNAL_VIDEO_PIPELINE " " DEFAULT_INTERNAL_AUDIO_PIPELINE
 
+static char *sanitize_pipeline_string(const char *input)
+{
+	if (!input) return NULL;
+
+	while (*input == ' ' || *input == '\t' || *input == '\r' || *input == '\n')
+		input++;
+
+	if (!*input) return g_strdup("");
+
+	GString *out = g_string_sized_new(strlen(input) + 16);
+	const char *p = input;
+
+	while (*p) {
+		/* Match location= */
+		if (strncmp(p, "location=", 9) == 0) {
+			g_string_append_len(out, p, 9);
+			p += 9;
+			while (*p == ' ' || *p == '\t') p++;
+
+			if (*p == '"' || *p == '\'') {
+				char quote = *p;
+				g_string_append_c(out, quote);
+				p++;
+				while (*p == ' ' || *p == '\t') p++;
+
+				const char *val_start = p;
+				while (*p && *p != quote) p++;
+				const char *val_end = p;
+				while (val_end > val_start && (*(val_end - 1) == ' ' || *(val_end - 1) == '\t')) {
+					val_end--;
+				}
+				if (val_end > val_start) {
+					g_string_append_len(out, val_start, val_end - val_start);
+				}
+				if (*p == quote) {
+					g_string_append_c(out, quote);
+					p++;
+				}
+				continue;
+			} else {
+				/* Unquoted location value */
+				while (*p == ' ' || *p == '\t') p++;
+			}
+		}
+
+		g_string_append_c(out, *p);
+		p++;
+	}
+
+	/* Trim trailing whitespace */
+	while (out->len > 0 && (out->str[out->len - 1] == ' ' || out->str[out->len - 1] == '\t' || out->str[out->len - 1] == '\r' || out->str[out->len - 1] == '\n')) {
+		g_string_truncate(out, out->len - 1);
+	}
+
+	return g_string_free(out, FALSE);
+}
+
 static void create_pipeline(struct gstreamer_source_data *data, obs_data_t *settings)
 {
 	if (!data || !settings) return;
 
 	GError *err = NULL;
-	const char *user_pipeline = obs_data_get_string(settings, "pipeline");
-	if (!user_pipeline || !*user_pipeline)
+	const char *raw_user_pipeline = obs_data_get_string(settings, "pipeline");
+	if (!raw_user_pipeline || !*raw_user_pipeline)
 	{
 		blog(LOG_WARNING, "[obs-gstreamer-source] No pipeline specified");
 		data->obs_media_state = OBS_MEDIA_STATE_NONE;
 		return;
 	}
+
+	char *clean_user_pipeline = sanitize_pipeline_string(raw_user_pipeline);
 
 	bool override_internal = obs_data_get_bool(settings, "override_internal_pipeline");
 	const char *default_internal = DEFAULT_INTERNAL_PIPELINE;
@@ -462,8 +521,9 @@ static void create_pipeline(struct gstreamer_source_data *data, obs_data_t *sett
 	const char *internal_pipeline = override_internal ? obs_data_get_string(settings, "internal_pipeline") : default_internal;
 
 	gchar *pipeline_str = NULL;
-	if (internal_pipeline && *internal_pipeline) pipeline_str = g_strdup_printf("%s %s", internal_pipeline, user_pipeline);
-	else pipeline_str = g_strdup(user_pipeline);
+	if (internal_pipeline && *internal_pipeline) pipeline_str = g_strdup_printf("%s %s", internal_pipeline, clean_user_pipeline);
+	else pipeline_str = g_strdup(clean_user_pipeline);
+	g_free(clean_user_pipeline);
 	
 	blog(LOG_INFO, "[obs-gstreamer-source] Launching pipeline (override_internal=%d): %s", override_internal, pipeline_str);
 

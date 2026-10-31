@@ -200,24 +200,30 @@ struct gst_hub_branch *gst_rtsp_branch_start(gst_master_pipeline_t *pipeline,
 	}
 
 	const char *requested_service = "8554";
+	char service_buf[64] = {0};
 	if (service) {
 		const char *s = service;
 		while (*s == ' ' || *s == '\t') s++;
-		if (*s != '\0') requested_service = s;
+		if (*s != '\0') {
+			g_strlcpy(service_buf, s, sizeof(service_buf));
+			g_strchomp(service_buf);
+			if (service_buf[0] != '\0') requested_service = service_buf;
+		}
 	}
 
 	const char *requested_mount = "/live";
-	char mount_buf[256];
+	char mount_buf[256] = {0};
 	if (mount) {
 		const char *m = mount;
 		while (*m == ' ' || *m == '\t') m++;
 		if (*m != '\0') {
 			if (*m != '/') {
 				snprintf(mount_buf, sizeof(mount_buf), "/%s", m);
-				requested_mount = mount_buf;
 			} else {
-				requested_mount = m;
+				g_strlcpy(mount_buf, m, sizeof(mount_buf));
 			}
+			g_strchomp(mount_buf);
+			if (mount_buf[0] != '\0') requested_mount = mount_buf;
 		}
 	}
 
@@ -265,7 +271,8 @@ struct gst_hub_branch *gst_rtsp_branch_start(gst_master_pipeline_t *pipeline,
 
 	gst_rtsp_media_factory_set_launch(factory, launch_str);
 	g_signal_connect(factory, "media-configure", G_CALLBACK(media_configure_cb), branch);
-	gst_rtsp_mount_points_add_factory(server_entry->mounts, branch->mount_point, factory);
+	/* gst_rtsp_mount_points_add_factory takes ownership of one ref; ref it so branch->factory owns a second ref */
+	gst_rtsp_mount_points_add_factory(server_entry->mounts, branch->mount_point, (GstRTSPMediaFactory *)g_object_ref(factory));
 
 	branch->factory = factory;
 	branch->active = true;

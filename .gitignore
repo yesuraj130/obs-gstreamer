@@ -24,3 +24,7 @@ Thumbs.db
 .vscode/
 .idea/
 .aistudio/
+
+# Public assets and uploads
+public/assets/
+/public/assets/
