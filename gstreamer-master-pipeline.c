@@ -1122,8 +1122,8 @@ static bool push_d3d11_nv12_texture(gst_master_pipeline_t *hub, ID3D11Texture2D 
 	output_desc.Format = DXGI_FORMAT_NV12;
 	output_desc.SampleDesc.Count = 1;
 	output_desc.Usage = D3D11_USAGE_DEFAULT;
-	output_desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE |
-		D3D11_BIND_VIDEO_ENCODER;
+	/* AMF requires shader-resource binding to import this texture without copying. */
+	output_desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
 	hr = ID3D11Device_CreateTexture2D(device, &output_desc, NULL, &output_texture);
 	if (FAILED(hr))
 	{
@@ -1193,6 +1193,8 @@ static bool push_d3d11_nv12_texture(gst_master_pipeline_t *hub, ID3D11Texture2D 
 	}
 
 	ID3D11DeviceContext_ExecuteCommandList(immediate, command_list, TRUE);
+	/* Submit the conversion before AMF consumes the shared D3D11 texture. */
+	ID3D11DeviceContext_Flush(immediate);
 
 	gst_d3d11_memory_init_once();
 	allocator = gst_allocator_find(GST_D3D11_MEMORY_NAME);
@@ -1239,6 +1241,9 @@ static bool push_d3d11_nv12_texture(gst_master_pipeline_t *hub, ID3D11Texture2D 
 	GST_BUFFER_DURATION(buffer) = gst_util_uint64_scale_int(GST_SECOND,
 		hub->fps_den, hub->fps_num);
 	hub->frame_index++;
+
+	gst_d3d11_device_unlock(hub->d3d11_device);
+	device_locked = false;
 
 	GstFlowReturn flow = gst_app_src_push_buffer(GST_APP_SRC(hub->appsrc), buffer);
 	buffer = NULL;
