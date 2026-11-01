@@ -20,6 +20,7 @@
 #endif
 
 #if HAVE_GST_D3D11
+#include <d3d11.h>
 #include <gst/d3d11/gstd3d11device.h>
 #endif
 
@@ -64,6 +65,13 @@ struct gst_master_pipeline
 #if HAVE_GST_D3D11
 	GstD3D11Device *d3d11_device;
 	bool d3d11_desc_logged;
+	bool d3d11_nv12_convert;
+	ID3D11DeviceContext *d3d11_deferred_context;
+	ID3D11VertexShader *d3d11_nv12_vertex_shader;
+	ID3D11PixelShader *d3d11_nv12_luma_shader;
+	ID3D11PixelShader *d3d11_nv12_chroma_shader;
+	ID3D11SamplerState *d3d11_nv12_sampler;
+	ID3D11RasterizerState *d3d11_nv12_rasterizer;
 #endif
 #if HAVE_GST_GL
 	GstGLDisplay *gl_display;

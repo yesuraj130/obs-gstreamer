@@ -103,11 +103,15 @@ GStreamer buffer instead of copying the pixels. This is experimental and relies
 on the OBS frame remaining valid while GStreamer consumes it; verify stability
 and frame integrity in the target OBS/GStreamer runtime.
 
-On Windows, Render and Filter Callback can wrap OBS D3D11 textures as
-`GstD3D11Memory` and use `d3d11convert` plus `qsvh264enc` when those GStreamer
-elements are available and the selected encoder is Auto or QSV. Otherwise the
-texture path falls back to GPU staging and CPU readback. The Filter Callback
-also increments the target source's active count while attached; this keeps the
+On Windows, Render and Filter Callback can pass OBS D3D11 textures to
+`GstD3D11Memory` pipelines. Direct D3D11-memory encoders such as AMF and
+QuickSync use a typed shader view to convert OBS typeless BGRA textures to NV12
+on the shared GPU device; the input is sampled directly, without
+`CopyResource` or CPU readback. Other D3D11 encoder paths use `d3d11convert`.
+GPU frame timestamps are expressed in the active GStreamer pipeline's
+running-time domain. If D3D11 zero-copy is unavailable, the texture path falls
+back to GPU staging and CPU readback. The Filter Callback also increments the
+target source's active count while attached; this keeps the
 source active but does not guarantee that an off-air scene is rendered.
 
 
