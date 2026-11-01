@@ -167,6 +167,9 @@ endif
 deps += webrtc_deps
 
 cc = meson.get_compiler('c')
+if host_machine.system() == 'windows' and gst_d3d11_dep.found()
+  deps += [cc.find_library('d3dcompiler', required : true)]
+endif
 obs_inc = []
 if not cc.has_header('obs-module.h', dependencies : obs_dep)
   foreach dir : ['/usr/include/obs', '/usr/local/include/obs']
