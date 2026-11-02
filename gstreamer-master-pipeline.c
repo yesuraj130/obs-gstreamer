@@ -1320,7 +1320,7 @@ static bool init_gl_nv12_converter(gst_master_pipeline_t *hub)
 		"void main() {\n"
 		"    uint vid = uint(gl_VertexID);\n"
 		"    vec2 uv = vec2(float((vid << 1u) & 2u), float(vid & 2u));\n"
-		"    v_uv = uv;\n"
+		"    v_uv = vec2(uv.x, 1.0 - uv.y);\n"
 		"    gl_Position = vec4(uv * vec2(2.0, -2.0) + vec2(-1.0, 1.0), 0.0, 1.0);\n"
 		"}\n";
 
@@ -1329,9 +1329,17 @@ static bool init_gl_nv12_converter(gst_master_pipeline_t *hub)
 		"in vec2 v_uv;\n"
 		"uniform sampler2D s_tex;\n"
 		"uniform vec4 u_y_coeffs;\n"
+		"uniform int u_is_srgb;\n"
 		"out vec4 fragColor;\n"
+		"vec3 linear_to_srgb(vec3 lin) {\n"
+		"    bvec3 cutoff = lessThanEqual(lin, vec3(0.0031308));\n"
+		"    vec3 higher = vec3(1.055) * pow(max(lin, vec3(0.0)), vec3(1.0 / 2.4)) - vec3(0.055);\n"
+		"    vec3 lower = lin * vec3(12.92);\n"
+		"    return mix(higher, lower, cutoff);\n"
+		"}\n"
 		"void main() {\n"
 		"    vec3 c = texture(s_tex, v_uv).rgb;\n"
+		"    if (u_is_srgb != 0) c = linear_to_srgb(c);\n"
 		"    float y = clamp(dot(c, u_y_coeffs.rgb) + u_y_coeffs.w, 0.0, 1.0);\n"
 		"    fragColor = vec4(y, 0.0, 0.0, 1.0);\n"
 		"}\n";
@@ -1342,9 +1350,17 @@ static bool init_gl_nv12_converter(gst_master_pipeline_t *hub)
 		"uniform sampler2D s_tex;\n"
 		"uniform vec4 u_u_coeffs;\n"
 		"uniform vec4 u_v_coeffs;\n"
+		"uniform int u_is_srgb;\n"
 		"out vec4 fragColor;\n"
+		"vec3 linear_to_srgb(vec3 lin) {\n"
+		"    bvec3 cutoff = lessThanEqual(lin, vec3(0.0031308));\n"
+		"    vec3 higher = vec3(1.055) * pow(max(lin, vec3(0.0)), vec3(1.0 / 2.4)) - vec3(0.055);\n"
+		"    vec3 lower = lin * vec3(12.92);\n"
+		"    return mix(higher, lower, cutoff);\n"
+		"}\n"
 		"void main() {\n"
 		"    vec3 c = texture(s_tex, v_uv).rgb;\n"
+		"    if (u_is_srgb != 0) c = linear_to_srgb(c);\n"
 		"    float u = clamp(dot(c, u_u_coeffs.rgb) + u_u_coeffs.w, 0.0, 1.0);\n"
 		"    float v = clamp(dot(c, u_v_coeffs.rgb) + u_v_coeffs.w, 0.0, 1.0);\n"
 		"    fragColor = vec4(u, v, 0.0, 1.0);\n"
@@ -1454,21 +1470,52 @@ static bool push_gl_texture(gst_master_pipeline_t *hub, gs_texture_t *texture, u
 	}
 	guint tex_id = *tex_ptr;
 
+	enum gs_color_format color_format = gs_texture_get_color_format(texture);
+	int is_srgb = gs_is_srgb_format(color_format) ? 1 : 0;
+
 	/* Flush OBS's GL commands before shared context reads texture */
 	gs_flush();
 
 	GstGLFuncs *gl = hub->gl_context->gl_vtable;
 
-	/* Render Pass 1: Y Plane (FBO Y, full resolution) */
-	gl->BindFramebuffer(GL_FRAMEBUFFER, slot->fbo_y);
-	gl->Viewport(0, 0, hub->width, hub->height);
-	gl->UseProgram(hub->gl_nv12_prog_y);
+	GLint prev_vp[4] = {0, 0, (GLint)hub->width, (GLint)hub->height};
+	gl->GetIntegerv(GL_VIEWPORT, prev_vp);
+
+#ifndef GL_TEXTURE_SRGB_DECODE_EXT
+#define GL_TEXTURE_SRGB_DECODE_EXT 0x8A48
+#endif
+#ifndef GL_DECODE_EXT
+#define GL_DECODE_EXT 0x8A49
+#endif
+#ifndef GL_SKIP_DECODE_EXT
+#define GL_SKIP_DECODE_EXT 0x8A4A
+#endif
+
 	gl->ActiveTexture(GL_TEXTURE0);
 	gl->BindTexture(GL_TEXTURE_2D, tex_id);
 	gl->TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
 	gl->TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+	bool srgb_skip_active = false;
+	int shader_srgb_fallback = 0;
+	if (is_srgb)
+	{
+		while (gl->GetError() != GL_NO_ERROR) {}
+		gl->TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SRGB_DECODE_EXT, GL_SKIP_DECODE_EXT);
+		if (gl->GetError() == GL_NO_ERROR)
+			srgb_skip_active = true;
+		else
+			shader_srgb_fallback = 1;
+	}
+
+	/* Render Pass 1: Y Plane (FBO Y, full resolution) */
+	gl->BindFramebuffer(GL_FRAMEBUFFER, slot->fbo_y);
+	gl->Viewport(0, 0, hub->width, hub->height);
+	gl->UseProgram(hub->gl_nv12_prog_y);
 	GLint loc_y = gl->GetUniformLocation(hub->gl_nv12_prog_y, "u_y_coeffs");
+	GLint loc_srgb_y = gl->GetUniformLocation(hub->gl_nv12_prog_y, "u_is_srgb");
 	gl->Uniform4fv(loc_y, 1, hub->color_matrix.y_coeffs);
+	gl->Uniform1i(loc_srgb_y, shader_srgb_fallback);
 	gl->DrawArrays(GL_TRIANGLES, 0, 3);
 
 	/* Render Pass 2: UV Plane (FBO UV, half resolution) */
@@ -1477,13 +1524,19 @@ static bool push_gl_texture(gst_master_pipeline_t *hub, gs_texture_t *texture, u
 	gl->UseProgram(hub->gl_nv12_prog_uv);
 	GLint loc_u = gl->GetUniformLocation(hub->gl_nv12_prog_uv, "u_u_coeffs");
 	GLint loc_v = gl->GetUniformLocation(hub->gl_nv12_prog_uv, "u_v_coeffs");
+	GLint loc_srgb_uv = gl->GetUniformLocation(hub->gl_nv12_prog_uv, "u_is_srgb");
 	gl->Uniform4fv(loc_u, 1, hub->color_matrix.u_coeffs);
 	gl->Uniform4fv(loc_v, 1, hub->color_matrix.v_coeffs);
+	gl->Uniform1i(loc_srgb_uv, shader_srgb_fallback);
 	gl->DrawArrays(GL_TRIANGLES, 0, 3);
+
+	if (srgb_skip_active)
+		gl->TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SRGB_DECODE_EXT, GL_DECODE_EXT);
 
 	gl->BindFramebuffer(GL_FRAMEBUFFER, 0);
 	gl->BindTexture(GL_TEXTURE_2D, 0);
 	gl->UseProgram(0);
+	gl->Viewport(prev_vp[0], prev_vp[1], prev_vp[2], prev_vp[3]);
 	gl->Flush();
 
 	GstVideoInfo info;

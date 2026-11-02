@@ -1684,22 +1684,6 @@ static void on_frontend_event(enum obs_frontend_event event, void *private_data)
 
 		if (g_dock_widget) {
 			g_dock_widget->refreshTable();
-
-			QWidget *p = g_dock_widget->parentWidget();
-			while (p) {
-				if (auto *dw = qobject_cast<QDockWidget*>(p)) {
-					dw->setFeatures(QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetFloatable);
-					if (auto *mw = qobject_cast<QMainWindow*>((QWidget*)obs_frontend_get_main_window())) {
-						mw->addDockWidget(Qt::RightDockWidgetArea, dw);
-					}
-					dw->setVisible(true);
-					dw->show();
-					g_dock_widget->setVisible(true);
-					g_dock_widget->show();
-					break;
-				}
-				p = p->parentWidget();
-			}
 		}
 
 		export_dock_status_json();
@@ -1740,19 +1724,6 @@ void gstreamer_dock_register(void)
 			"GStreamer Master Hub",
 			(void *)g_dock_widget
 		);
-
-		QWidget *p = g_dock_widget->parentWidget();
-		while (p) {
-			if (auto *dw = qobject_cast<QDockWidget*>(p)) {
-				dw->setFeatures(QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetFloatable);
-				dw->setVisible(true);
-				dw->show();
-				g_dock_widget->setVisible(true);
-				g_dock_widget->show();
-				break;
-			}
-			p = p->parentWidget();
-		}
 
 		blog(LOG_INFO, "[obs-gstreamer-dock] Registered GStreamer Master Hub dock early during module load");
 	}
