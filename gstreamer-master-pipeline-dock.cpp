@@ -77,8 +77,8 @@ bool obs_frontend_add_dock_by_id(const char *id, const char *title, void *dock) 
 
 #define DEFAULT_MASTER_PIPELINE \
 	"appsrc name=hub_appsrc is-live=true format=GST_FORMAT_TIME do-timestamp=true " \
-	"caps=\"video/x-raw, format=RGBx, width=%u, height=%u, framerate=%u/%u\" ! " \
-	"videoconvert ! video/x-raw, format=I420 ! x264enc tune=zerolatency speed-preset=ultrafast bframes=0 key-int-max=30 bitrate=4000 ! " \
+	"caps=\"video/x-raw, format=NV12, width=%u, height=%u, framerate=%u/%u\" ! " \
+	"x264enc tune=zerolatency speed-preset=ultrafast bframes=0 key-int-max=30 bitrate=4000 ! " \
 	"h264parse config-interval=-1 ! video/x-h264, stream-format=byte-stream, alignment=au ! " \
 	"appsink name=hub_appsink sync=false drop=true max-buffers=1"
 
@@ -1685,11 +1685,17 @@ static void on_frontend_event(enum obs_frontend_event event, void *private_data)
 		if (g_dock_widget) {
 			g_dock_widget->refreshTable();
 
-			/* Strip close button ('X') from QDockWidget wrapper so it behaves like built-in OBS docks */
 			QWidget *p = g_dock_widget->parentWidget();
 			while (p) {
 				if (auto *dw = qobject_cast<QDockWidget*>(p)) {
 					dw->setFeatures(QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetFloatable);
+					if (auto *mw = qobject_cast<QMainWindow*>((QWidget*)obs_frontend_get_main_window())) {
+						mw->addDockWidget(Qt::RightDockWidgetArea, dw);
+					}
+					dw->setVisible(true);
+					dw->show();
+					g_dock_widget->setVisible(true);
+					g_dock_widget->show();
 					break;
 				}
 				p = p->parentWidget();
@@ -1739,6 +1745,10 @@ void gstreamer_dock_register(void)
 		while (p) {
 			if (auto *dw = qobject_cast<QDockWidget*>(p)) {
 				dw->setFeatures(QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetFloatable);
+				dw->setVisible(true);
+				dw->show();
+				g_dock_widget->setVisible(true);
+				g_dock_widget->show();
 				break;
 			}
 			p = p->parentWidget();

@@ -473,7 +473,7 @@ function restartFullPC(callback) {
     if [ ! -x /opt/obs-studio-32/AppDir/AppRun ]; then
       echo "[Setup] Downloading and extracting OBS Studio 32.2.2..."
       mkdir -p /opt/obs-studio-32
-      APPIMAGE_URL="https://github.com/ivan-hc/OBS-Studio-appimage/releases/download/continuous/OBS-Studio_32.2.2-1-archimage5.0-lite-x86_64.AppImage"
+      APPIMAGE_URL="https://github.com/ivan-hc/OBS-Studio-appimage/releases/download/20261024-102748/OBS-Studio_32.2.2-1-archimage5.0-lite-x86_64.AppImage"
       curl -L -s --retry 3 -o /tmp/obs32.AppImage "$APPIMAGE_URL"
       chmod +x /tmp/obs32.AppImage
       cd /opt/obs-studio-32
