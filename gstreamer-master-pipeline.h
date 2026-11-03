@@ -21,6 +21,7 @@
 
 #if HAVE_GST_D3D11
 #include <d3d11.h>
+#include <d3d10_1.h>
 #include <gst/d3d11/gstd3d11device.h>
 #endif
 
@@ -126,6 +127,7 @@ struct gst_master_pipeline
 #endif
 
 	gint active_destinations;
+	volatile gint pipeline_failed;
 	uint64_t texture_push_count;
 	uint64_t texture_drop_count;
 	uint64_t encoded_sample_count;

@@ -14,8 +14,13 @@
 
 #if HAVE_GST_D3D11
 #include <d3d11.h>
+#include <d3d10_1.h>
 #include <gst/d3d11/gstd3d11memory.h>
 #include "d3d11-nv12-shaders.h"
+
+#ifndef IID_ID3D10Multithread
+static const GUID IID_ID3D10Multithread = { 0x9b7e4c00, 0x342c, 0x4106, { 0xa1, 0x9f, 0x4f, 0x27, 0x04, 0xf6, 0x89, 0xf0 } };
+#endif
 #endif
 
 #if HAVE_GST_GL
@@ -430,6 +435,18 @@ static GstBusSyncReply master_bus_sync_handler(GstBus *bus, GstMessage *msg, gpo
 			debug_info ? debug_info : "none");
 		if (err) g_error_free(err);
 		g_free(debug_info);
+		g_atomic_int_set(&hub->pipeline_failed, 1);
+#if HAVE_GST_D3D11
+		for (int i = 0; i < GST_MASTER_NV12_RING_SLOTS; i++)
+			g_atomic_int_set(&hub->d3d11_slots[i].in_use, 0);
+#endif
+#if HAVE_GST_GL
+		for (int i = 0; i < GST_MASTER_NV12_RING_SLOTS; i++)
+		{
+			g_atomic_int_set(&hub->gl_slots[i].in_use, 0);
+			g_atomic_int_set(&hub->gl_slots[i].plane_refs, 0);
+		}
+#endif
 	}
 	else if (GST_MESSAGE_TYPE(msg) == GST_MESSAGE_WARNING)
 	{
@@ -459,6 +476,24 @@ static bool init_obs_d3d11_device(gst_master_pipeline_t *hub)
 		: NULL;
 	if (device)
 	{
+		ID3D10Multithread *multithread = NULL;
+		HRESULT hr = ID3D11Device_QueryInterface(device, &IID_ID3D10Multithread, (void **)&multithread);
+		if (FAILED(hr) || !multithread)
+		{
+			ID3D11DeviceContext *ctx = NULL;
+			ID3D11Device_GetImmediateContext(device, &ctx);
+			if (ctx)
+			{
+				ID3D11DeviceContext_QueryInterface(ctx, &IID_ID3D10Multithread, (void **)&multithread);
+				ID3D11DeviceContext_Release(ctx);
+			}
+		}
+		if (multithread)
+		{
+			ID3D10Multithread_SetMultithreadProtected(multithread, TRUE);
+			ID3D10Multithread_Release(multithread);
+			blog(LOG_INFO, "[obs-gstreamer-master] Enabled Direct3D 11 multithread protection on OBS device");
+		}
 		hub->d3d11_device = gst_d3d11_device_new_wrapped(device);
 	}
 	obs_leave_graphics();
@@ -731,7 +766,11 @@ static GstElement *create_master_encoder_pipeline(gst_master_pipeline_t *hub, co
 #if HAVE_GST_D3D11
 		if (hub->gpu_input && hub->d3d11_device)
 		{
-			bool enc_needs_download = (g_strcmp0(chosen_enc, "x264enc") == 0);
+			bool enc_needs_download = !is_d3d11_memory_encoder(chosen_enc);
+			bool has_d3d11convert = gst_master_pipeline_element_available("d3d11convert");
+			const char *pre_enc = enc_needs_download
+				? "d3d11download ! "
+				: (has_d3d11convert ? "d3d11convert ! " : "");
 			pipe_desc = g_strdup_printf(
 				"appsrc name=hub_appsrc is-live=true format=GST_FORMAT_TIME do-timestamp=true "
 				"caps=\"video/x-raw(memory:D3D11Memory), width=%u, height=%u, "
@@ -740,7 +779,7 @@ static GstElement *create_master_encoder_pipeline(gst_master_pipeline_t *hub, co
 				"video/x-h264, stream-format=byte-stream, alignment=au ! "
 				"appsink name=hub_appsink sync=false drop=true max-buffers=1",
 				hub->width, hub->height, hub->fps_num, hub->fps_den, hub->colorimetry_str,
-				enc_needs_download ? "d3d11download ! " : "",
+				pre_enc,
 				enc_str);
 			g_free(enc_str);
 			goto launch_pipeline;
@@ -1051,6 +1090,9 @@ static bool init_d3d11_nv12_converter(gst_master_pipeline_t *hub)
 
 static bool push_d3d11_texture(gst_master_pipeline_t *hub, gs_texture_t *texture, uint64_t pts)
 {
+	if (g_atomic_int_get(&hub->pipeline_failed))
+		return false;
+
 	if (gs_get_device_type() != GS_DEVICE_DIRECT3D_11)
 	{
 		blog(LOG_ERROR, "[obs-gstreamer-master] GPU zero-copy requires the OBS Direct3D 11 graphics backend");
@@ -1120,9 +1162,50 @@ static bool push_d3d11_texture(gst_master_pipeline_t *hub, gs_texture_t *texture
 	{
 		gst_d3d11_device_unlock(hub->d3d11_device);
 		g_atomic_int_set(&slot->in_use, 0);
+		if (hr == 0x887a0005 || hr == 0x887a0007)
+		{
+			static uint64_t last_dev_loss_log = 0;
+			uint64_t now_loss = os_gettime_ns();
+			if (now_loss - last_dev_loss_log > 5000000000ULL)
+			{
+				blog(LOG_ERROR, "[obs-gstreamer-master] D3D11 device removed or reset (0x%08lx); resetting NV12 converter", (unsigned long)hr);
+				last_dev_loss_log = now_loss;
+			}
+			destroy_d3d11_nv12_converter(hub);
+			if (hub->d3d11_device)
+			{
+				gst_object_unref(hub->d3d11_device);
+				hub->d3d11_device = NULL;
+			}
+			return false;
+		}
 		blog(LOG_ERROR, "[obs-gstreamer-master] Failed to create SRV for D3D11 NV12 conversion: 0x%08lx", (unsigned long)hr);
 		return false;
 	}
+
+	/* Save complete OBS D3D11 context state so zero-copy conversion doesn't corrupt OBS rendering */
+	ID3D11RenderTargetView *prev_rtv = NULL;
+	ID3D11DepthStencilView *prev_dsv = NULL;
+	ID3D11DeviceContext_OMGetRenderTargets(context, 1, &prev_rtv, &prev_dsv);
+
+	UINT prev_num_vp = 1;
+	D3D11_VIEWPORT prev_vp = {0};
+	ID3D11DeviceContext_RSGetViewports(context, &prev_num_vp, &prev_vp);
+
+	ID3D11VertexShader *prev_vs = NULL;
+	ID3D11DeviceContext_VSGetShader(context, &prev_vs, NULL, NULL);
+
+	ID3D11PixelShader *prev_ps = NULL;
+	ID3D11DeviceContext_PSGetShader(context, &prev_ps, NULL, NULL);
+
+	ID3D11SamplerState *prev_sampler = NULL;
+	ID3D11DeviceContext_PSGetSamplers(context, 0, 1, &prev_sampler);
+
+	ID3D11Buffer *prev_cb = NULL;
+	ID3D11DeviceContext_PSGetConstantBuffers(context, 0, 1, &prev_cb);
+
+	D3D11_PRIMITIVE_TOPOLOGY prev_topology;
+	ID3D11DeviceContext_IAGetPrimitiveTopology(context, &prev_topology);
 
 	/* Render Pass 1: Full-resolution Luma (Y plane, R8_UNORM) */
 	D3D11_VIEWPORT vp_y = {0.0f, 0.0f, (float)hub->width, (float)hub->height, 0.0f, 1.0f};
@@ -1143,12 +1226,31 @@ static bool push_d3d11_texture(gst_master_pipeline_t *hub, gs_texture_t *texture
 	ID3D11DeviceContext_PSSetShader(context, hub->d3d11_nv12_chroma_shader, NULL, 0);
 	ID3D11DeviceContext_Draw(context, 3, 0);
 
-	/* Unbind state and release temporary SRV */
+	/* Unbind temporary SRV and restore previous OBS D3D11 context state */
 	ID3D11ShaderResourceView *null_srv = NULL;
-	ID3D11RenderTargetView *null_rtv = NULL;
 	ID3D11DeviceContext_PSSetShaderResources(context, 0, 1, &null_srv);
-	ID3D11DeviceContext_OMSetRenderTargets(context, 1, &null_rtv, NULL);
 	ID3D11ShaderResourceView_Release(src_srv);
+
+	ID3D11DeviceContext_OMSetRenderTargets(context, 1, &prev_rtv, prev_dsv);
+	if (prev_rtv) ID3D11RenderTargetView_Release(prev_rtv);
+	if (prev_dsv) ID3D11DepthStencilView_Release(prev_dsv);
+
+	if (prev_num_vp > 0)
+		ID3D11DeviceContext_RSSetViewports(context, prev_num_vp, &prev_vp);
+
+	ID3D11DeviceContext_IASetPrimitiveTopology(context, prev_topology);
+
+	ID3D11DeviceContext_VSSetShader(context, prev_vs, NULL, 0);
+	if (prev_vs) ID3D11VertexShader_Release(prev_vs);
+
+	ID3D11DeviceContext_PSSetShader(context, prev_ps, NULL, 0);
+	if (prev_ps) ID3D11PixelShader_Release(prev_ps);
+
+	ID3D11DeviceContext_PSSetSamplers(context, 0, 1, &prev_sampler);
+	if (prev_sampler) ID3D11SamplerState_Release(prev_sampler);
+
+	ID3D11DeviceContext_PSSetConstantBuffers(context, 0, 1, &prev_cb);
+	if (prev_cb) ID3D11Buffer_Release(prev_cb);
 
 	/* Flush GPU commands on render thread before encoder consumes it */
 	ID3D11DeviceContext_Flush(context);
@@ -1798,6 +1900,7 @@ void gst_master_pipeline_push_texture(gst_master_pipeline_t *hub, void *gpu_hand
 void gst_master_pipeline_push_raw_video(gst_master_pipeline_t *hub, struct video_data *frame)
 {
 	if (!hub || !frame || !frame->data[0] || g_atomic_int_get(&hub->active_destinations) <= 0 || !hub->appsrc) return;
+	if (g_atomic_int_get(&hub->pipeline_failed)) return;
 
 	size_t row_size = (size_t)hub->width * 4;
 	if (hub->gpu_input || hub->height == 0 || row_size / 4 != hub->width ||
@@ -1854,6 +1957,8 @@ static void update_active_destinations(gst_master_pipeline_t *hub, int delta)
 
 	if (prev == 0 && updated > 0)
 	{
+		g_atomic_int_set(&hub->pipeline_failed, 0);
+		hub->texture_drop_count = 0;
 		blog(LOG_INFO, "[obs-gstreamer-master] First destination active! Starting master encoder.");
 		if (hub->pipe) gst_element_set_state(hub->pipe, GST_STATE_PLAYING);
 
