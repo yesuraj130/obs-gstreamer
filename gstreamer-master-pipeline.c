@@ -365,8 +365,17 @@ static gchar *build_encoder_element_str(const char *enc_name, int gop_size, int 
 	if (element_has_property(enc_name, "low-latency"))
 		g_string_append(str, " low-latency=true");
 
-	if (g_strcmp0(enc_name, "nvh264enc") == 0 && element_has_property(enc_name, "zerolatency"))
+	if (element_has_property(enc_name, "zerolatency"))
 		g_string_append(str, " zerolatency=true");
+
+	/* AMF encoders (amfh264enc, etc.): ultra-low-latency usage and CBR disable lookahead queueing */
+	if (g_strstr_len(enc_name, -1, "amf") != NULL)
+	{
+		if (element_has_property(enc_name, "usage"))
+			g_string_append(str, " usage=ultra-low-latency");
+		if (element_has_property(enc_name, "rate-control"))
+			g_string_append(str, " rate-control=cbr");
+	}
 
 	return g_string_free(str, FALSE);
 }
