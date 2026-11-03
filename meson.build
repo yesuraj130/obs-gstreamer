@@ -92,6 +92,16 @@ else
   extra_c_args += ['-DENABLE_WEBRTC=0']
 endif
 
+python_prog = find_program('python3', 'python')
+
+version_c = custom_target(
+  'version.c',
+  output : 'version.c',
+  command : [python_prog, files('generate-version.py'), '@OUTPUT@'],
+  build_by_default : true,
+  build_always_stale : true,
+)
+
 sources = [
   'gstreamer.c',
   'gstreamer-source.c',
@@ -105,12 +115,7 @@ sources = [
   'gstreamer-filter.c',
   'gstreamer-output.c',
   'gstreamer-webrtc.c',
-  vcs_tag(
-    command : ['git', 'rev-parse', '--short', 'HEAD'],
-    input : 'version.c.in',
-    output : 'version.c',
-    fallback : 'custom',
-  ),
+  version_c,
 ]
 
 deps = [

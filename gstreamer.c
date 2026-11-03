@@ -22,6 +22,7 @@
 #include <plugin-support.h>
 #include <gst/gst.h>
 
+#include "version.h"
 #include "gstreamer-encoder-callback.h"
 #include "gstreamer-output-callback.h"
 #include "gstreamer-filter-callback.h"
@@ -68,7 +69,7 @@ static inline void gstreamer_dock_unregister(void) {}
 
 bool obs_module_load(void)
 {
-	blog(LOG_INFO, "[obs-gstreamer] Loading plugin (version: %s)", PLUGIN_VERSION);
+	obs_gstreamer_log_build_info();
 
 	gst_init(NULL, NULL);
 	blog(LOG_INFO, "[obs-gstreamer] GStreamer runtime initialized: %s", gst_version_string());
