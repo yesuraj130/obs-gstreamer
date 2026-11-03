@@ -368,14 +368,9 @@ static gchar *build_encoder_element_str(const char *enc_name, int gop_size, int 
 	if (element_has_property(enc_name, "zerolatency"))
 		g_string_append(str, " zerolatency=true");
 
-	/* AMF encoders (amfh264enc, etc.): ultra-low-latency usage and CBR disable lookahead queueing */
-	if (g_strstr_len(enc_name, -1, "amf") != NULL)
-	{
-		if (element_has_property(enc_name, "usage"))
-			g_string_append(str, " usage=ultra-low-latency");
-		if (element_has_property(enc_name, "rate-control"))
-			g_string_append(str, " rate-control=cbr");
-	}
+	/* AMF encoders already have b-frames=0 and rc-lookahead=0 set above if supported;
+	 * avoid forcing usage=ultra-low-latency as older AMD APUs (VCE 1/2/3) return
+	 * AMF_NOT_SUPPORTED and fail caps negotiation (-4). */
 
 	return g_string_free(str, FALSE);
 }
@@ -773,22 +768,16 @@ static GstElement *create_master_encoder_pipeline(gst_master_pipeline_t *hub, co
 		hub->appsrc_format = GST_VIDEO_FORMAT_NV12;
 
 #if HAVE_GST_D3D11
-		if (hub->gpu_input && hub->d3d11_device)
+		if (hub->gpu_input && hub->d3d11_device && is_d3d11_memory_encoder(chosen_enc))
 		{
-			bool enc_needs_download = !is_d3d11_memory_encoder(chosen_enc);
-			bool has_d3d11convert = gst_master_pipeline_element_available("d3d11convert");
-			const char *pre_enc = enc_needs_download
-				? "d3d11download ! "
-				: (has_d3d11convert ? "d3d11convert ! " : "");
 			pipe_desc = g_strdup_printf(
 				"appsrc name=hub_appsrc is-live=true format=GST_FORMAT_TIME do-timestamp=true "
 				"caps=\"video/x-raw(memory:D3D11Memory), width=%u, height=%u, "
 				"format=NV12, framerate=%u/%u, colorimetry=%s\" ! "
-				"%s%s ! h264parse config-interval=-1 ! "
+				"%s ! h264parse config-interval=-1 ! "
 				"video/x-h264, stream-format=byte-stream, alignment=au ! "
 				"appsink name=hub_appsink sync=false drop=true max-buffers=1",
 				hub->width, hub->height, hub->fps_num, hub->fps_den, hub->colorimetry_str,
-				pre_enc,
 				enc_str);
 			g_free(enc_str);
 			goto launch_pipeline;
@@ -796,18 +785,17 @@ static GstElement *create_master_encoder_pipeline(gst_master_pipeline_t *hub, co
 #endif
 
 #if HAVE_GST_GL
-		if (hub->gpu_input && hub->gl_app_context && hub->gl_context)
+		if (hub->gpu_input && hub->gl_app_context && hub->gl_context &&
+		    (is_gl_memory_encoder(chosen_enc) || is_dmabuf_memory_encoder(chosen_enc)))
 		{
-			bool enc_needs_download = (g_strcmp0(chosen_enc, "nvcudah264enc") != 0);
 			pipe_desc = g_strdup_printf(
 				"appsrc name=hub_appsrc is-live=true format=GST_FORMAT_TIME do-timestamp=true "
 				"caps=\"video/x-raw(memory:GLMemory), width=%u, height=%u, "
 				"format=NV12, framerate=%u/%u, texture-target=2D, colorimetry=%s\" ! "
-				"%s%s ! h264parse config-interval=-1 ! "
+				"%s ! h264parse config-interval=-1 ! "
 				"video/x-h264, stream-format=byte-stream, alignment=au ! "
 				"appsink name=hub_appsink sync=false drop=true max-buffers=1",
 				hub->width, hub->height, hub->fps_num, hub->fps_den, hub->colorimetry_str,
-				enc_needs_download ? "gldownload ! " : "",
 				enc_str);
 			g_free(enc_str);
 			goto launch_pipeline;
@@ -1748,14 +1736,15 @@ void gst_master_pipeline_push_texture(gst_master_pipeline_t *hub, void *gpu_hand
 
 	gs_texture_t *tex = (gs_texture_t *)gpu_handle;
 #if HAVE_GST_D3D11
-	if (hub->gpu_input && hub->d3d11_device)
+	if (hub->gpu_input && hub->d3d11_device && is_d3d11_memory_encoder(hub->selected_encoder))
 	{
 		push_d3d11_texture(hub, tex, pts);
 		return;
 	}
 #endif
 #if HAVE_GST_GL
-	if (hub->gpu_input && hub->gl_app_context)
+	if (hub->gpu_input && hub->gl_app_context &&
+	    (is_gl_memory_encoder(hub->selected_encoder) || is_dmabuf_memory_encoder(hub->selected_encoder)))
 	{
 		push_gl_texture(hub, tex, pts);
 		return;
@@ -1795,9 +1784,16 @@ void gst_master_pipeline_push_texture(gst_master_pipeline_t *hub, void *gpu_hand
 	uint32_t src_linesize = 0;
 	if (!gs_stagesurface_map(hub->stagesurf, &src_data, &src_linesize))
 	{
-		if (frame_number == 1)
-			blog(LOG_ERROR, "[obs-gstreamer-master] Failed to map %ux%u staging surface",
+		static uint64_t last_map_fail_log = 0;
+		uint64_t now_fail = os_gettime_ns();
+		if (now_fail - last_map_fail_log > 5000000000ULL)
+		{
+			blog(LOG_ERROR, "[obs-gstreamer-master] Failed to map %ux%u staging surface (device reset?); releasing surface",
 				tex_w, tex_h);
+			last_map_fail_log = now_fail;
+		}
+		gs_stagesurface_destroy(hub->stagesurf);
+		hub->stagesurf = NULL;
 		return;
 	}
 
@@ -2091,9 +2087,20 @@ gst_master_pipeline_t *gst_master_pipeline_create(const char *custom_master_pipe
 	const char *chosen_enc = gst_master_pipeline_select_encoder(encoder_type, gpu_input);
 	hub->selected_encoder = bstrdup(chosen_enc);
 
-	bool allow_gpu_pipe = !custom_master_pipe || !custom_master_pipe[0] ||
-	                      strstr(custom_master_pipe, "memory:D3D11Memory") != NULL ||
-	                      strstr(custom_master_pipe, "memory:GLMemory") != NULL;
+	bool is_hw_gpu_enc = false;
+#if HAVE_GST_D3D11
+	if (is_d3d11_memory_encoder(chosen_enc))
+		is_hw_gpu_enc = true;
+#endif
+#if HAVE_GST_GL
+	if (is_gl_memory_encoder(chosen_enc) || is_dmabuf_memory_encoder(chosen_enc))
+		is_hw_gpu_enc = true;
+#endif
+
+	bool allow_gpu_pipe = (!custom_master_pipe || !custom_master_pipe[0])
+		? is_hw_gpu_enc
+		: (strstr(custom_master_pipe, "memory:D3D11Memory") != NULL ||
+		   strstr(custom_master_pipe, "memory:GLMemory") != NULL);
 
 	if (gpu_input && allow_gpu_pipe)
 	{
