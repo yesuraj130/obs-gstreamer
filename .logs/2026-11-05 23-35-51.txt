@@ -1,0 +1,401 @@
+23:35:51.477: Crash or unclean shutdown detected
+23:35:59.378: [Safe Mode] Normal launch selected, loading third-party plugins is enabled
+23:35:59.543: CPU Name: AMD PRO A4-4350B R4, 5 COMPUTE CORES 2C+3G     
+23:35:59.543: CPU Speed: 2495MHz
+23:35:59.543: Physical Cores: 2, Logical Cores: 2
+23:35:59.547: Physical Memory: 3935MB Total, 1686MB Free
+23:35:59.547: Windows Version: 10.0 Build 19045 (release: 22H2; revision: 2965; 64-bit)
+23:35:59.547: Running as administrator: false
+23:35:59.548: Windows 10/11 Gaming Features:
+23:35:59.548: 	Game DVR: On
+23:35:59.548: 	Game Mode: Probably On (no reg key set)
+23:35:59.719: Sec. Software Status:
+23:35:59.825: 	Microsoft Defender Antivirus: enabled (AV)
+23:35:59.826: 	Windows Firewall: enabled (FW)
+23:36:01.452: Current Date/Time: 2026-11-05, 23:36:01
+23:36:01.452: Browser Hardware Acceleration: true
+23:36:01.452: Hide OBS windows from screen capture: false
+23:36:01.452: Qt Version: 6.11.1 (runtime), 6.11.1 (compiled)
+23:36:01.452: Portable mode: false
+23:36:02.230: OBS 32.2.2 (64-bit, windows)
+23:36:02.230: ---------------------------------
+23:36:03.058: ---------------------------------
+23:36:03.058: audio settings reset:
+23:36:03.058: 	samples per sec: 48000
+23:36:03.058: 	speakers:        1
+23:36:03.058: 	max buffering:   960 milliseconds
+23:36:03.058: 	buffering type:  dynamically increasing
+23:36:03.255: ---------------------------------
+23:36:03.255: Initializing D3D11...
+23:36:03.255: Available Video Adapters: 
+23:36:03.260: 	Adapter 0: AMD Radeon(TM) R4 Graphics
+23:36:03.260: 	  Dedicated VRAM: 121507840 (0.1 GiB)
+23:36:03.260: 	  Shared VRAM:    2063263744 (1.9 GiB)
+23:36:03.260: 	  PCI ID:         1002:98e4
+23:36:03.260: 	  HAGS Status:    Disabled (Default: No, Driver status: Unsupported)
+23:36:03.260: 	  Driver Version: 27.20.20913.2000
+23:36:03.274: 	  output 0:
+23:36:03.274: 	    name=
+23:36:03.274: 	    pos={0, 0}
+23:36:03.274: 	    size={1366, 768}
+23:36:03.274: 	    attached=true
+23:36:03.274: 	    refresh=60
+23:36:03.274: 	    bits_per_color=6
+23:36:03.274: 	    space=RGB_FULL_G22_NONE_P709
+23:36:03.274: 	    primaries=[r=(0.580078, 0.334961), g=(0.330078, 0.565430), b=(0.155273, 0.139648), wp=(0.313477, 0.329102)]
+23:36:03.274: 	    relative_gamut_area=[709=0.654763, P3=0.482672, 2020=0.346285]
+23:36:03.274: 	    sdr_white_nits=80
+23:36:03.274: 	    nit_range=[min=0.500000, max=270.000000, max_full_frame=270.000000]
+23:36:03.274: 	    dpi=96 (100%)
+23:36:03.274: 	    id=\\?\DISPLAY#AUO2E3C#4&fb867bc&0&UID256#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}
+23:36:03.274: 	    alt_id=\\.\DISPLAY1
+23:36:03.294: Loading up D3D11 on adapter AMD Radeon(TM) R4 Graphics (0)
+23:36:03.649: D3D11 loaded successfully, feature level used: b000
+23:36:03.649: DXGI increase maximum frame latency success
+23:36:03.661: D3D11 GPU priority setup failed (not admin?)
+23:36:05.031: ---------------------------------
+23:36:05.031: video settings reset:
+23:36:05.031: 	base resolution:   1280x720
+23:36:05.031: 	output resolution: 1280x720
+23:36:05.031: 	downscale filter:  Bilinear
+23:36:05.031: 	fps:               30/1
+23:36:05.031: 	format:            NV12
+23:36:05.031: 	YUV mode:          sRGB/Full
+23:36:05.032: NV12 texture support enabled
+23:36:05.032: P010 texture support not available
+23:36:05.107: Audio monitoring device:
+23:36:05.107: 	name: Default
+23:36:05.107: 	id: default
+23:36:05.286: ---------------------------------
+23:36:05.298: dllhell: module loaded
+23:36:05.298: dllhell: added DLL directory: C:\Windows\system32
+23:36:05.298: dllhell: added DLL directory: C:\Windows
+23:36:05.298: dllhell: added DLL directory: C:\Windows\System32\Wbem
+23:36:05.298: dllhell: added DLL directory: C:\Windows\System32\WindowsPowerShell\v1.0\
+23:36:05.298: dllhell: added DLL directory: C:\Windows\System32\OpenSSH\
+23:36:05.299: dllhell: added DLL directory: C:\Program Files\filebrowser\
+23:36:05.299: dllhell: added DLL directory: C:\Program Files\Microsoft VS Code\bin
+23:36:05.299: dllhell: added DLL directory: C:\Program Files\Microsoft VS Code\bin\copilot-shim
+23:36:05.299: dllhell: added DLL directory: C:\Program Files\Git\cmd
+23:36:05.299: dllhell: added DLL directory: C:\Users\HJM-Laptop\AppData\Local\Programs\Python\Python312\Scripts\
+23:36:05.300: dllhell: added DLL directory: C:\Users\HJM-Laptop\AppData\Local\Programs\Python\Python312\
+23:36:05.300: dllhell: added DLL directory: C:\Program Files\gstreamer\1.0\msvc_x86_64\bin
+23:36:05.300: dllhell: added DLL directory: C:\Users\HJM-Laptop\AppData\Local\Programs\Python\Python315\Scripts\
+23:36:05.300: dllhell: added DLL directory: C:\Users\HJM-Laptop\AppData\Local\Programs\Python\Python315\
+23:36:05.300: dllhell: added DLL directory: C:\Users\HJM-Laptop\AppData\Local\Programs\Python\Launcher\
+23:36:05.300: dllhell: added DLL directory: C:\Users\HJM-Laptop\AppData\Local\Microsoft\WindowsApps
+23:36:05.431: No AJA devices found, skipping loading AJA UI plugin
+23:36:05.431: Failed to initialize module 'aja-output-ui.dll'
+23:36:05.538: No AJA devices found, skipping loading AJA plugin
+23:36:05.538: Failed to initialize module 'aja.dll'
+23:36:05.573: Skipping module '../../obs-plugins/64bit/chrome_elf.dll', not an OBS plugin
+23:36:05.623: [CoreAudio encoder]: CoreAudio AAC encoder not installed on the system or couldn't be loaded
+23:36:05.645: Failed to load 'en-US' text for module: 'decklink-captions.dll'
+23:36:05.687: Failed to load 'en-US' text for module: 'decklink-output-ui.dll'
+23:36:05.760: A DeckLink iterator could not be created.  The DeckLink drivers may not be installed
+23:36:05.760: Failed to initialize module 'decklink.dll'
+23:36:07.045: Skipping module '../../obs-plugins/64bit/libcef.dll', not an OBS plugin
+23:36:07.094: Skipping module '../../obs-plugins/64bit/libEGL.dll', not an OBS plugin
+23:36:07.135: Skipping module '../../obs-plugins/64bit/libGLESv2.dll', not an OBS plugin
+23:36:07.178: [Move Transition] loaded version 3.0.1
+23:36:07.206: Failed to get nvARPose.dll version info size
+23:36:07.281: Failed to get C:\Program Files\NVIDIA Corporation\NVIDIA Audio Effects SDK\NVAudioEffects.dll version info size
+23:36:07.281: [NVIDIA Audio Effects:] NVIDIA denoiser disabled, redistributable not found or could not be loaded.
+23:36:07.281: Failed to get C:\Program Files\NVIDIA Corporation\NVIDIA Video Effects\NVVideoEffects.dll version info size
+23:36:07.281: [NVIDIA VIDEO FX]: FX disabled, redistributable not found or could not be loaded.
+23:36:08.099: [obs-browser]: Version 2.26.9
+23:36:08.100: [obs-browser]: CEF Version 127.0.6533.120 (runtime), 127.145.7+g2b7d20b+chromium-127.0.6533.120 (compiled)
+23:36:10.861: [obs-gstreamer] Loading plugin (version: 99089f6)
+23:36:10.861: [obs-gstreamer]   Build Date: 2026-11-05 17:59:49 UTC (CI (GitHub Actions #121))
+23:36:10.861: [obs-gstreamer]   Repository: https://github.com/yesuraj130/obs-gstreamer
+23:36:13.120: [obs-gstreamer] GStreamer runtime initialized: GStreamer 1.28.8 (GIT)
+23:36:13.121: [obs-gstreamer] Registered raw output module: hjm-gstreamer-output
+23:36:13.121: [obs-gstreamer] Registered encoded output module: hjm-gstreamer-output-encoded
+23:36:13.121: [obs-gstreamer] Registered source module: gstreamer-source
+23:36:13.121: [obs-gstreamer] Registered source module: gstreamer-source-video
+23:36:13.121: [obs-gstreamer] Registered filter module: gstreamer-filter-video (CPU)
+23:36:13.121: [obs-gstreamer] Registered filter module: gstreamer-filter-video-gpu (GPU)
+23:36:13.121: [obs-gstreamer] Registered filter module: gstreamer-filter-audio
+23:36:13.121: [obs-gstreamer-encoder-callback] Registered master GPU texture encoder & driver
+23:36:13.121: [obs-gstreamer-output-callback] Registered master output callback module
+23:36:13.121: [obs-gstreamer-filter-callback] Registered private filter callback
+23:36:13.176: [obs-gstreamer-dock] Registered GStreamer Master Hub dock early during module load
+23:36:13.176: [obs-gstreamer] Plugin loaded successfully
+23:36:13.252: LoadLibrary failed for 'nvEncodeAPI64.dll': The specified module could not be found.
+23:36:13.252:  (126)
+23:36:13.252: NVENC not supported
+23:36:13.252: Failed to initialize module 'obs-nvenc.dll'
+23:36:19.286: [obs-websocket] [obs_module_load] you can haz websockets (Version: 5.7.4 | RPC Version: 1)
+23:36:19.286: [obs-websocket] [obs_module_load] Qt version (compile-time): 6.11.1 | Qt version (run-time): 6.11.1
+23:36:19.286: [obs-websocket] [obs_module_load] Linked ASIO Version: 103200
+23:36:19.545: [obs-websocket] [obs_module_load] Module loaded.
+23:36:19.727: [Source Clone] loaded version 0.1.5
+23:36:20.267: [vlc-video]: VLC 3.0.18 Vetinari found, VLC video source enabled
+23:36:21.381: ---------------------------------
+23:36:21.381:   Loaded Modules:
+23:36:21.381:     win-wasapi.dll
+23:36:21.381:     win-dshow.dll
+23:36:21.381:     win-capture.dll
+23:36:21.381:     vlc-video.dll
+23:36:21.381:     text-freetype2.dll
+23:36:21.381:     source-clone.dll
+23:36:21.381:     rtmp-services.dll
+23:36:21.381:     obs-x264.dll
+23:36:21.381:     obs-websocket.dll
+23:36:21.381:     obs-webrtc.dll
+23:36:21.381:     obs-vst.dll
+23:36:21.381:     obs-transitions.dll
+23:36:21.381:     obs-text.dll
+23:36:21.381:     obs-qsv11.dll
+23:36:21.381:     obs-outputs.dll
+23:36:21.381:     obs-gstreamer.dll
+23:36:21.381:     obs-filters.dll
+23:36:21.381:     obs-ffmpeg.dll
+23:36:21.381:     obs-browser.dll
+23:36:21.381:     nv-filters.dll
+23:36:21.381:     move-transition.dll
+23:36:21.381:     image-source.dll
+23:36:21.381:     frontend-tools.dll
+23:36:21.381:     droidcam-obs.dll
+23:36:21.381:     decklink-output-ui.dll
+23:36:21.381:     decklink-captions.dll
+23:36:21.381:     coreaudio-encoder.dll
+23:36:21.381:     0dllhell.dll
+23:36:21.381: ---------------------------------
+23:36:21.442: ---------------------------------
+23:36:21.442: Available Encoders:
+23:36:21.442:   Video Encoders:
+23:36:21.456: 	- ffmpeg_svt_av1 (SVT-AV1)
+23:36:21.456: 	- ffmpeg_aom_av1 (AOM AV1)
+23:36:21.720: 	- h264_texture_amf (AMD HW H.264 (AVC))
+23:36:21.721: 	- gstreamer-encoder-callback (GStreamer Master Pipeline GPU Texture Encoder)
+23:36:21.721: 	- hjm-gstreamer-encoder-callback (GStreamer Master Pipeline GPU Texture Encoder)
+23:36:21.721: 	- obs_x264 (x264)
+23:36:21.721:   Audio Encoders:
+23:36:21.721: 	- ffmpeg_aac (FFmpeg AAC)
+23:36:21.721: 	- ffmpeg_opus (FFmpeg Opus)
+23:36:21.721: 	- ffmpeg_pcm_s16le (FFmpeg PCM (16-bit))
+23:36:21.721: 	- ffmpeg_pcm_s24le (FFmpeg PCM (24-bit))
+23:36:21.721: 	- ffmpeg_pcm_f32le (FFmpeg PCM (32-bit float))
+23:36:21.721: 	- ffmpeg_alac (FFmpeg ALAC (24-bit))
+23:36:21.721: 	- ffmpeg_flac (FFmpeg FLAC (16-bit))
+23:36:21.721: ==== Startup complete ===============================================
+23:36:21.758: signal_handler_connect: signal 'file_changed' not found
+23:36:22.241: All scene data cleared
+23:36:22.241: ------------------------------------------------
+23:36:22.426: [obs-gstreamer-source] GStreamer Video Source: Source created
+23:36:23.997: [Media Source 'Media']: settings:
+23:36:23.997: 	input:                   E:/New folder/Videos/Ebenesarae _ John Jebaraj _ Tamil Christian song _johnjebaraj  _tamilchristiansongs(720P_HD).mp4
+23:36:23.997: 	input_format:            (null)
+23:36:23.997: 	speed:                   100
+23:36:23.997: 	is_looping:              no
+23:36:23.997: 	is_linear_alpha:         no
+23:36:23.997: 	is_hw_decoding:          no
+23:36:23.997: 	is_clear_on_media_end:   yes
+23:36:23.997: 	restart_on_activate:     yes
+23:36:23.997: 	close_when_inactive:     no
+23:36:23.997: 	full_decode:             no
+23:36:23.997: 	ffmpeg_options:          
+23:36:24.133: Switched to scene 'Scene'
+23:36:24.156: [obs-gstreamer-dock] Restored 1 Master Hub(s) from OBS scene collection
+23:36:24.264: ------------------------------------------------
+23:36:24.265: Loaded scenes:
+23:36:24.265: - scene 'Scene':
+23:36:24.265:     - source: 'Color' (color_source_v3)
+23:36:24.265:     - source: 'GStreamer Video Source' (gstreamer-source-video)
+23:36:24.265:     - source: 'Image' (image_source)
+23:36:24.265:     - source: 'Media' (ffmpeg_source)
+23:36:24.265: - scene 'Scene 2':
+23:36:24.265: ------------------------------------------------
+23:36:24.759: adding 85 milliseconds of audio buffering, total audio buffering is now 85 milliseconds (source: Media)
+23:36:24.759: 
+23:36:25.143: [obs-gstreamer-dock] Autostarting destination 'Default RTSP' for hub 'Program Master Hub'
+23:36:25.143: [obs-gstreamer-dock] Starting Master Pipeline for 'Program Master Hub' (method='Render Callback (GPU Direct Texture)', encoder=auto, bitrate=4000 kbps)
+23:36:25.143: [obs-gstreamer-master] GPU Backend: Direct3D 11 (Adapter: Direct3D 11) | Available GStreamer H.264 encoders: [amfh264enc, mfh264enc, x264enc]
+23:36:25.143: [obs-gstreamer-master] Enabled Direct3D 11 multithread protection on OBS device/context
+23:36:25.183: [obs-gstreamer-master] Wrapped OBS ID3D11Device for zero-copy D3D11Memory pipeline
+23:36:26.293: [obs-gstreamer-master] Launching Master Hardware Encoder Pipeline (gpu_zero_copy=yes, encoder=amfh264enc, appsrc_format=BGRA): appsrc name=hub_appsrc is-live=true format=GST_FORMAT_TIME do-timestamp=true caps="video/x-raw(memory:D3D11Memory), width=1280, height=720, format=BGRA, framerate=30/1" ! d3d11convert ! video/x-raw(memory:D3D11Memory), format=NV12 ! amfh264enc gop-size=30 bitrate=4000 ! h264parse config-interval=-1 ! video/x-h264, stream-format=byte-stream, alignment=au ! appsink name=hub_appsink sync=false drop=true max-buffers=1
+23:36:26.935: [obs-gstreamer-dock] Starting RTSP destination on port 8554/live linked to master pipeline 'Program Master Hub'...
+23:36:27.047: [obs-gstreamer-rtspserver] Bound new RTSP server listening on port 8554
+23:36:27.071: [obs-gstreamer-rtspserver] RTSP branch started: rtsp://0.0.0.0:8554/live (name='Default RTSP', waiting for client connection)
+23:36:41.998: [obs-gstreamer-rtspserver] RTSP client connected on 8554/live (clients=1): subscribing 'Default RTSP' to master pipeline
+23:36:41.999: [obs-gstreamer-master] Subscriber 'Default RTSP' connected
+23:36:41.999: [obs-gstreamer-master] First destination active! Starting master encoder.
+23:36:42.001: [obs-gstreamer-render-callback] Pipeline active: attached render callback
+23:36:42.028: [obs-gstreamer-render-callback] Main output texture available: 1280x720, format=5
+23:36:42.030: [obs-gstreamer-master] Initialized D3D11 converter (2-slot ring buffer, appsrc_format=BGRA)
+23:36:42.031: [obs-gstreamer-master] D3D11 zero-copy frame #1 pushed (1280x720, format=BGRA, slot=0, drops=0)
+23:36:42.095: [obs-gstreamer-master] Encoder busy: dropped D3D11 frame #3 (all 2 slots in use, total drops: 1)
+23:36:42.311: [obs-gstreamer-master] Encoded sample #1: 133227 bytes, keyframe=yes (gpu_zero_copy=yes, stagesurf=NONE)
+23:36:42.311: [obs-gstreamer-rtspserver] Keyframe delivered to 'Default RTSP', client playback starting
+23:36:52.695: [obs-gstreamer-master] D3D11 zero-copy frame #300 pushed (1280x720, format=BGRA, slot=1, drops=6)
+23:36:52.742: [obs-gstreamer-master] Encoded sample #300: 14325 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+23:37:02.694: [obs-gstreamer-master] D3D11 zero-copy frame #600 pushed (1280x720, format=BGRA, slot=1, drops=6)
+23:37:02.733: [obs-gstreamer-master] Encoded sample #600: 10814 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+23:37:12.694: [obs-gstreamer-master] D3D11 zero-copy frame #900 pushed (1280x720, format=BGRA, slot=1, drops=6)
+23:37:12.737: [obs-gstreamer-master] Encoded sample #900: 4764 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+23:37:22.694: [obs-gstreamer-master] D3D11 zero-copy frame #1200 pushed (1280x720, format=BGRA, slot=1, drops=6)
+23:37:22.735: [obs-gstreamer-master] Encoded sample #1200: 44 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+23:37:32.695: [obs-gstreamer-master] D3D11 zero-copy frame #1500 pushed (1280x720, format=BGRA, slot=1, drops=6)
+23:37:32.736: [obs-gstreamer-master] Encoded sample #1500: 12601 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+23:37:42.695: [obs-gstreamer-master] D3D11 zero-copy frame #1800 pushed (1280x720, format=BGRA, slot=1, drops=6)
+23:37:42.737: [obs-gstreamer-master] Encoded sample #1800: 14557 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+23:37:52.695: [obs-gstreamer-master] D3D11 zero-copy frame #2100 pushed (1280x720, format=BGRA, slot=1, drops=6)
+23:37:52.736: [obs-gstreamer-master] Encoded sample #2100: 16164 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+23:38:03.328: [obs-gstreamer-master] D3D11 zero-copy frame #2400 pushed (1280x720, format=BGRA, slot=1, drops=16)
+23:38:03.370: [obs-gstreamer-master] Encoded sample #2400: 18635 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+23:38:13.461: [obs-gstreamer-master] D3D11 zero-copy frame #2700 pushed (1280x720, format=BGRA, slot=1, drops=16)
+23:38:13.504: [obs-gstreamer-master] Encoded sample #2700: 14812 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+23:38:23.629: [obs-gstreamer-master] D3D11 zero-copy frame #3000 pushed (1280x720, format=BGRA, slot=1, drops=17)
+23:38:23.669: [obs-gstreamer-master] Encoded sample #3000: 12680 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+23:38:33.694: [obs-gstreamer-master] D3D11 zero-copy frame #3300 pushed (1280x720, format=BGRA, slot=1, drops=17)
+23:38:33.736: [obs-gstreamer-master] Encoded sample #3300: 13833 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+23:38:43.695: [obs-gstreamer-master] D3D11 zero-copy frame #3600 pushed (1280x720, format=BGRA, slot=1, drops=17)
+23:38:43.736: [obs-gstreamer-master] Encoded sample #3600: 14748 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+23:38:54.661: [obs-gstreamer-master] D3D11 zero-copy frame #3900 pushed (1280x720, format=BGRA, slot=1, drops=29)
+23:38:54.704: [obs-gstreamer-master] Encoded sample #3900: 24457 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+23:39:04.861: [obs-gstreamer-master] D3D11 zero-copy frame #4200 pushed (1280x720, format=BGRA, slot=1, drops=32)
+23:39:04.903: [obs-gstreamer-master] Encoded sample #4200: 11944 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+23:39:15.461: [obs-gstreamer-master] D3D11 zero-copy frame #4500 pushed (1280x720, format=BGRA, slot=1, drops=42)
+23:39:15.500: [obs-gstreamer-master] Encoded sample #4500: 7699 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+23:39:25.495: [obs-gstreamer-master] D3D11 zero-copy frame #4800 pushed (1280x720, format=BGRA, slot=1, drops=42)
+23:39:25.534: [obs-gstreamer-master] Encoded sample #4800: 10369 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+23:39:35.828: [obs-gstreamer-master] D3D11 zero-copy frame #5100 pushed (1280x720, format=BGRA, slot=1, drops=44)
+23:39:35.869: [obs-gstreamer-master] Encoded sample #5100: 14392 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+23:39:46.295: [obs-gstreamer-master] D3D11 zero-copy frame #5400 pushed (1280x720, format=BGRA, slot=1, drops=50)
+23:39:46.336: [obs-gstreamer-master] Encoded sample #5400: 22051 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+23:39:56.528: [obs-gstreamer-master] D3D11 zero-copy frame #5700 pushed (1280x720, format=BGRA, slot=1, drops=54)
+23:39:56.570: [obs-gstreamer-master] Encoded sample #5700: 12316 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+23:40:06.897: [obs-gstreamer-master] D3D11 zero-copy frame #6000 pushed (1280x720, format=BGRA, slot=1, drops=60)
+23:40:06.936: [obs-gstreamer-master] Encoded sample #6000: 11496 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+23:40:17.267: [obs-gstreamer-master] D3D11 zero-copy frame #6300 pushed (1280x720, format=BGRA, slot=1, drops=60)
+23:40:17.304: [obs-gstreamer-master] Encoded sample #6300: 48951 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+23:40:27.701: [obs-gstreamer-master] D3D11 zero-copy frame #6600 pushed (1280x720, format=BGRA, slot=1, drops=60)
+23:40:27.855: [obs-gstreamer-master] Encoded sample #6600: 19323 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+23:40:38.061: [obs-gstreamer-master] D3D11 zero-copy frame #6900 pushed (1280x720, format=BGRA, slot=1, drops=60)
+23:40:38.103: [obs-gstreamer-master] Encoded sample #6900: 20906 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+23:40:48.228: [obs-gstreamer-master] D3D11 zero-copy frame #7200 pushed (1280x720, format=BGRA, slot=1, drops=60)
+23:40:48.269: [obs-gstreamer-master] Encoded sample #7200: 46 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+23:40:58.528: [obs-gstreamer-master] D3D11 zero-copy frame #7500 pushed (1280x720, format=BGRA, slot=1, drops=67)
+23:40:58.570: [obs-gstreamer-master] Encoded sample #7500: 21629 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+23:41:09.061: [obs-gstreamer-master] D3D11 zero-copy frame #7800 pushed (1280x720, format=BGRA, slot=1, drops=69)
+23:41:09.104: [obs-gstreamer-master] Encoded sample #7800: 21497 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+23:41:19.428: [obs-gstreamer-master] D3D11 zero-copy frame #8100 pushed (1280x720, format=BGRA, slot=1, drops=71)
+23:41:19.470: [obs-gstreamer-master] Encoded sample #8100: 16998 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+23:41:29.795: [obs-gstreamer-master] D3D11 zero-copy frame #8400 pushed (1280x720, format=BGRA, slot=1, drops=72)
+23:41:29.836: [obs-gstreamer-master] Encoded sample #8400: 19433 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+23:41:39.894: [obs-gstreamer-master] D3D11 zero-copy frame #8700 pushed (1280x720, format=BGRA, slot=1, drops=73)
+23:41:39.936: [obs-gstreamer-master] Encoded sample #8700: 14943 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+23:41:49.896: [obs-gstreamer-master] D3D11 zero-copy frame #9000 pushed (1280x720, format=BGRA, slot=1, drops=73)
+23:41:49.936: [obs-gstreamer-master] Encoded sample #9000: 15384 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+23:42:00.194: [obs-gstreamer-master] D3D11 zero-copy frame #9300 pushed (1280x720, format=BGRA, slot=1, drops=77)
+23:42:00.236: [obs-gstreamer-master] Encoded sample #9300: 19144 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+23:42:10.328: [obs-gstreamer-master] D3D11 zero-copy frame #9600 pushed (1280x720, format=BGRA, slot=1, drops=77)
+23:42:10.371: [obs-gstreamer-master] Encoded sample #9600: 29025 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+23:42:20.794: [obs-gstreamer-master] D3D11 zero-copy frame #9900 pushed (1280x720, format=BGRA, slot=1, drops=82)
+23:42:20.836: [obs-gstreamer-master] Encoded sample #9900: 11539 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+23:42:31.374: [obs-gstreamer-master] D3D11 zero-copy frame #10200 pushed (1280x720, format=BGRA, slot=1, drops=84)
+23:42:31.636: [obs-gstreamer-master] Encoded sample #10200: 21078 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+23:42:41.961: [obs-gstreamer-master] D3D11 zero-copy frame #10500 pushed (1280x720, format=BGRA, slot=1, drops=92)
+23:42:42.003: [obs-gstreamer-master] Encoded sample #10500: 14656 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+23:42:52.228: [obs-gstreamer-master] D3D11 zero-copy frame #10800 pushed (1280x720, format=BGRA, slot=1, drops=93)
+23:42:52.269: [obs-gstreamer-master] Encoded sample #10800: 11017 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+23:43:02.695: [obs-gstreamer-master] D3D11 zero-copy frame #11100 pushed (1280x720, format=BGRA, slot=1, drops=96)
+23:43:02.736: [obs-gstreamer-master] Encoded sample #11100: 14311 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+23:43:12.694: [obs-gstreamer-master] D3D11 zero-copy frame #11400 pushed (1280x720, format=BGRA, slot=1, drops=96)
+23:43:12.736: [obs-gstreamer-master] Encoded sample #11400: 14741 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+23:43:14.848: [obs-gstreamer-rtspserver] RTSP client disconnected on 8554/live (remaining=0)
+23:43:14.848: [obs-gstreamer-rtspserver] All RTSP clients disconnected on 8554/live: unsubscribing 'Default RTSP' from master pipeline
+23:43:14.848: [obs-gstreamer-master] Subscriber 'Default RTSP' disconnected
+23:43:14.848: [obs-gstreamer-master] All destinations inactive. Pausing encoder pipeline (0% CPU/GPU).
+23:43:14.848: [obs-gstreamer-render-callback] Pipeline idle: detached render callback (0% GPU)
+23:43:20.991: [obs-gstreamer-dock] Stopping RTSP branch (8554:/live)
+23:43:20.992: [obs-gstreamer-rtspserver] Stopping RTSP server on port 8554
+23:43:20.992: [obs-gstreamer-rtspserver] Stopped and destroyed branch 'Default RTSP'
+23:43:20.992: [obs-gstreamer-dock] All destinations stopped: tearing down master pipeline for 'Program Master Hub'
+23:43:24.704: ==== Shutting down ==================================================
+23:43:24.714: [obs-gstreamer-dock] Saved 1 Master Hub(s) to OBS scene collection
+23:43:24.927: [obs-gstreamer-source] GStreamer Video Source: Source destroyed
+23:43:25.069: All scene data cleared
+23:43:25.070: ------------------------------------------------
+23:43:25.199: Tried to call obs_frontend_remove_event_callback with no callbacks!
+23:43:25.354: [obs-websocket] [obs_module_unload] Shutting down...
+23:43:25.373: Tried to call obs_frontend_remove_event_callback with no callbacks!
+23:43:25.373: [obs-websocket] [obs_module_unload] Finished shutting down.
+23:43:25.376: [obs-gstreamer] Unloading plugin...
+23:43:25.377: Tried to call obs_frontend_remove_save_callback with no callbacks!
+23:43:25.377: Tried to call obs_frontend_remove_event_callback with no callbacks!
+23:43:25.377: [obs-gstreamer-dock] Unregistered GStreamer Master Hub dock
+23:43:25.377: [obs-gstreamer] Plugin unloaded successfully
+23:43:25.377: [Scripting] Total detached callbacks: 0
+23:43:25.378: Freeing OBS context data
+23:43:25.478: == Profiler Results =============================
+23:43:25.478: run_program_init: 37444 ms
+23:43:25.478:  ┣OBSApp::AppInit: 758.876 ms
+23:43:25.478:  ┃ ┗OBSApp::InitLocale: 106.057 ms
+23:43:25.478:  ┗OBSApp::OBSInit: 27576.4 ms
+23:43:25.478:    ┣obs_startup: 1909.51 ms
+23:43:25.478:    ┗OBSBasic::OBSInit: 24139.1 ms
+23:43:25.478:      ┣OBSBasic::InitBasicConfig: 121.16 ms
+23:43:25.478:      ┣OBSBasic::ResetAudio: 0.648 ms
+23:43:25.478:      ┣OBSBasic::ResetVideo: 2048.52 ms
+23:43:25.478:      ┃ ┗obs_init_graphics: 1972.33 ms
+23:43:25.478:      ┃   ┗shader compilation: 1110.16 ms
+23:43:25.478:      ┣OBSBasic::InitOBSCallbacks: 0.013 ms
+23:43:25.478:      ┣OBSBasic::InitHotkeys: 0.067 ms
+23:43:25.478:      ┣obs_load_all_modules2: 16094.3 ms
+23:43:25.478:      ┃ ┣obs_init_module(0dllhell.dll): 2.494 ms
+23:43:25.478:      ┃ ┣obs_init_module(aja-output-ui.dll): 3.983 ms
+23:43:25.479:      ┃ ┣obs_init_module(aja.dll): 13.94 ms
+23:43:25.479:      ┃ ┣obs_init_module(coreaudio-encoder.dll): 8.595 ms
+23:43:25.479:      ┃ ┣obs_init_module(decklink-captions.dll): 0 ms
+23:43:25.479:      ┃ ┣obs_init_module(decklink-output-ui.dll): 0 ms
+23:43:25.479:      ┃ ┣obs_init_module(decklink.dll): 3.31 ms
+23:43:25.479:      ┃ ┣obs_init_module(droidcam-obs.dll): 35.165 ms
+23:43:25.479:      ┃ ┣obs_init_module(frontend-tools.dll): 105.32 ms
+23:43:25.479:      ┃ ┣obs_init_module(image-source.dll): 0.045 ms
+23:43:25.479:      ┃ ┣obs_init_module(move-transition.dll): 32.341 ms
+23:43:25.479:      ┃ ┣obs_init_module(nv-filters.dll): 0.894 ms
+23:43:25.479:      ┃ ┣obs_init_module(obs-browser.dll): 1.164 ms
+23:43:25.479:      ┃ ┣obs_init_module(obs-ffmpeg.dll): 1487.08 ms
+23:43:25.479:      ┃ ┣obs_init_module(obs-filters.dll): 0.166 ms
+23:43:25.479:      ┃ ┣obs_init_module(obs-gstreamer.dll): 2315.23 ms
+23:43:25.479:      ┃ ┣obs_init_module(obs-nvenc.dll): 1.541 ms
+23:43:25.479:      ┃ ┃ ┗nvenc_check: 1.354 ms
+23:43:25.479:      ┃ ┣obs_init_module(obs-outputs.dll): 0.054 ms
+23:43:25.479:      ┃ ┣obs_init_module(obs-qsv11.dll): 5174.6 ms
+23:43:25.479:      ┃ ┣obs_init_module(obs-text.dll): 0.573 ms
+23:43:25.479:      ┃ ┣obs_init_module(obs-transitions.dll): 0.088 ms
+23:43:25.479:      ┃ ┣obs_init_module(obs-vst.dll): 0.052 ms
+23:43:25.479:      ┃ ┣obs_init_module(obs-webrtc.dll): 23.451 ms
+23:43:25.479:      ┃ ┣obs_init_module(obs-websocket.dll): 259.868 ms
+23:43:25.479:      ┃ ┣obs_init_module(obs-x264.dll): 0.004 ms
+23:43:25.479:      ┃ ┣obs_init_module(rtmp-services.dll): 2.497 ms
+23:43:25.479:      ┃ ┣obs_init_module(source-clone.dll): 0.103 ms
+23:43:25.479:      ┃ ┣obs_init_module(text-freetype2.dll): 0.405 ms
+23:43:25.479:      ┃ ┣obs_init_module(vlc-video.dll): 326.197 ms
+23:43:25.479:      ┃ ┣obs_init_module(win-capture.dll): 345.289 ms
+23:43:25.479:      ┃ ┣obs_init_module(win-dshow.dll): 140.58 ms
+23:43:25.479:      ┃ ┣obs_init_module(win-wasapi.dll): 43.718 ms
+23:43:25.479:      ┃ ┗reset_win32_symbol_paths: 0.538 ms
+23:43:25.479:      ┣OBSBasic::InitService: 1.808 ms
+23:43:25.479:      ┣OBSBasic::ResetOutputs: 28.221 ms
+23:43:25.479:      ┣OBSBasic::CreateHotkeys: 23.98 ms
+23:43:25.479:      ┣OBSBasic::InitPrimitives: 1.551 ms
+23:43:25.479:      ┗OBSBasic::Load: 2510.56 ms
+23:43:25.479: obs_hotkey_thread(25 ms): min=0.005 ms, median=0.019 ms, max=233.296 ms, 99th percentile=0.972 ms, 99.9275% below 25 ms
+23:43:25.479: audio_thread(Audio): min=0.032 ms, median=0.139 ms, max=327.778 ms, 99th percentile=2.345 ms
+23:43:25.479: obs_graphics_thread(33.3333 ms): min=0.019 ms, median=1.65 ms, max=360.036 ms, 99th percentile=17.691 ms, 99.5145% below 33.333 ms
+23:43:25.479:  ┣tick_sources: min=0.001 ms, median=0.021 ms, max=47.15 ms, 99th percentile=0.261 ms
+23:43:25.479:  ┣output_frame: min=0.015 ms, median=1.029 ms, max=344.938 ms, 99th percentile=13.961 ms
+23:43:25.479:  ┃ ┗gs_context(video->graphics): min=0.015 ms, median=1.026 ms, max=344.519 ms, 99th percentile=13.928 ms
+23:43:25.479:  ┃   ┣render_video: min=0.001 ms, median=1.008 ms, max=111.227 ms, 99th percentile=12.378 ms
+23:43:25.479:  ┃   ┃ ┗render_main_texture: min=0.001 ms, median=0.997 ms, max=111.214 ms, 99th percentile=9.933 ms
+23:43:25.479:  ┃   ┗gs_flush: min=0.004 ms, median=0.008 ms, max=343.077 ms, 99th percentile=0.783 ms
+23:43:25.479:  ┗render_displays: min=0 ms, median=0.531 ms, max=216.966 ms, 99th percentile=2.235 ms
+23:43:25.480: =================================================
+23:43:25.480: == Profiler Time Between Calls ==================
+23:43:25.480: obs_hotkey_thread(25 ms): min=24.064 ms, median=25.287 ms, max=342.326 ms, 58.8538% within ±2% of 25 ms (1.91645% lower, 39.2298% higher)
+23:43:25.480: obs_graphics_thread(33.3333 ms): min=0.103 ms, median=33.333 ms, max=360.063 ms, 88.8392% within ±2% of 33.333 ms (6.11993% lower, 5.04085% higher)
+23:43:25.480: =================================================
+23:43:25.588: Number of memory leaks: 0
