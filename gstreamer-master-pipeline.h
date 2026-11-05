@@ -63,8 +63,6 @@ typedef struct gst_d3d11_nv12_slot
 	ID3D11Texture2D *texture;
 	ID3D11Texture2D *gst_texture;
 	HANDLE shared_handle;
-	ID3D11RenderTargetView *luma_rtv;
-	ID3D11RenderTargetView *chroma_rtv;
 	volatile gint in_use;
 } gst_d3d11_nv12_slot_t;
 #endif
@@ -102,15 +100,9 @@ struct gst_master_pipeline
 #if HAVE_GST_D3D11
 	GstD3D11Device *d3d11_device;
 	ID3D11Device *d3d11_native_device;
-	ID3D11VertexShader *d3d11_nv12_vertex_shader;
-	ID3D11PixelShader *d3d11_nv12_luma_shader;
-	ID3D11PixelShader *d3d11_nv12_chroma_shader;
-	ID3D11SamplerState *d3d11_nv12_sampler;
-	ID3D11Buffer *d3d11_nv12_cbuffer;
 	gst_d3d11_nv12_slot_t d3d11_slots[GST_MASTER_NV12_RING_SLOTS];
 	uint32_t d3d11_next_slot;
 	bool d3d11_nv12_ready;
-	bool d3d11_desc_logged;
 #endif
 #if HAVE_GST_GL
 	GstGLDisplay *gl_display;
