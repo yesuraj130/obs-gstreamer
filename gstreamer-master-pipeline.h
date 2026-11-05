@@ -61,6 +61,8 @@ typedef struct gst_nv12_color_matrix
 typedef struct gst_d3d11_nv12_slot
 {
 	ID3D11Texture2D *texture;
+	ID3D11Texture2D *gst_texture;
+	HANDLE shared_handle;
 	ID3D11RenderTargetView *luma_rtv;
 	ID3D11RenderTargetView *chroma_rtv;
 	volatile gint in_use;
@@ -99,6 +101,7 @@ struct gst_master_pipeline
 
 #if HAVE_GST_D3D11
 	GstD3D11Device *d3d11_device;
+	ID3D11Device *d3d11_native_device;
 	ID3D11VertexShader *d3d11_nv12_vertex_shader;
 	ID3D11PixelShader *d3d11_nv12_luma_shader;
 	ID3D11PixelShader *d3d11_nv12_chroma_shader;

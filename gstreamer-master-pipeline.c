@@ -25,6 +25,12 @@ static const GUID IID_ID3D10Multithread = { 0x9b7e4e00, 0x342c, 0x4106, { 0xa1, 
 #ifndef IID_ID3D11Multithread
 static const GUID IID_ID3D11Multithread = { 0x03024be4, 0xc065, 0x4c45, { 0x80, 0x13, 0x0d, 0xb3, 0xd7, 0x73, 0x62, 0xc2 } };
 #endif
+#ifndef IID_IDXGIDevice
+static const GUID IID_IDXGIDevice = { 0x54ec77fa, 0x1377, 0x44e6, { 0x8c, 0x32, 0x88, 0xfd, 0x5f, 0x44, 0xc8, 0x4c } };
+#endif
+#ifndef IID_IDXGIResource
+static const GUID IID_IDXGIResource = { 0x035f3ab4, 0x482e, 0x4e50, { 0xb4, 0x1f, 0x8a, 0x7f, 0x8b, 0xd8, 0x96, 0x0b } };
+#endif
 #endif
 
 #if HAVE_GST_GL
@@ -508,7 +514,63 @@ static bool init_obs_d3d11_device(gst_master_pipeline_t *hub)
 			}
 			ID3D11DeviceContext_Release(ctx);
 		}
-		hub->d3d11_device = gst_d3d11_device_new_wrapped(device);
+#ifdef _WIN32
+		/* Query physical DXGI adapter from OBS device to run GStreamer on its own isolated D3D11 context */
+		IDXGIDevice *dxgi_dev = NULL;
+		IDXGIAdapter *adapter = NULL;
+		HRESULT hr_ad = ID3D11Device_QueryInterface(device, &IID_IDXGIDevice, (void **)&dxgi_dev);
+		if (SUCCEEDED(hr_ad) && dxgi_dev)
+		{
+			IDXGIDevice_GetAdapter(dxgi_dev, &adapter);
+			IDXGIDevice_Release(dxgi_dev);
+		}
+
+		HMODULE hD3D11 = GetModuleHandleW(L"d3d11.dll");
+		if (!hD3D11) hD3D11 = LoadLibraryW(L"d3d11.dll");
+		PFN_D3D11_CREATE_DEVICE pD3D11CreateDevice = hD3D11
+			? (PFN_D3D11_CREATE_DEVICE)GetProcAddress(hD3D11, "D3D11CreateDevice")
+			: NULL;
+
+		ID3D11Device *gst_native_dev = NULL;
+		ID3D11DeviceContext *gst_native_ctx = NULL;
+		if (pD3D11CreateDevice && adapter)
+		{
+			HRESULT hr_create = pD3D11CreateDevice(
+				adapter,
+				D3D_DRIVER_TYPE_UNKNOWN,
+				NULL,
+				D3D11_CREATE_DEVICE_VIDEO_SUPPORT,
+				NULL, 0,
+				D3D11_SDK_VERSION,
+				&gst_native_dev,
+				NULL,
+				&gst_native_ctx);
+			if (SUCCEEDED(hr_create) && gst_native_dev)
+			{
+				ID3D10Multithread *gst_mt = NULL;
+				if (gst_native_ctx && (SUCCEEDED(ID3D11DeviceContext_QueryInterface(gst_native_ctx, &IID_ID3D11Multithread, (void **)&gst_mt)) ||
+				                       SUCCEEDED(ID3D11DeviceContext_QueryInterface(gst_native_ctx, &IID_ID3D10Multithread, (void **)&gst_mt))))
+				{
+					ID3D10Multithread_SetMultithreadProtected(gst_mt, TRUE);
+					ID3D10Multithread_Release(gst_mt);
+				}
+				if (gst_native_ctx) ID3D11DeviceContext_Release(gst_native_ctx);
+				hub->d3d11_native_device = gst_native_dev;
+				hub->d3d11_device = gst_d3d11_device_new_wrapped(gst_native_dev);
+				blog(LOG_INFO, "[obs-gstreamer-master] Created dedicated GStreamer Direct3D 11 device on OBS GPU adapter (full context isolation)");
+			}
+			else
+			{
+				blog(LOG_WARNING, "[obs-gstreamer-master] D3D11CreateDevice for dedicated device returned 0x%08lx; falling back to wrapped OBS device", (unsigned long)hr_create);
+			}
+			IDXGIAdapter_Release(adapter);
+		}
+#endif
+		if (!hub->d3d11_device)
+		{
+			hub->d3d11_device = gst_d3d11_device_new_wrapped(device);
+			blog(LOG_INFO, "[obs-gstreamer-master] Wrapped OBS ID3D11Device for zero-copy D3D11Memory pipeline");
+		}
 	}
 	obs_leave_graphics();
 
@@ -518,7 +580,6 @@ static bool init_obs_d3d11_device(gst_master_pipeline_t *hub)
 		return false;
 	}
 
-	blog(LOG_INFO, "[obs-gstreamer-master] Wrapped OBS ID3D11Device for zero-copy D3D11Memory pipeline");
 	return true;
 }
 #endif
@@ -975,11 +1036,17 @@ static void destroy_d3d11_nv12_converter(gst_master_pipeline_t *hub)
 			ID3D11RenderTargetView_Release(slot->chroma_rtv);
 			slot->chroma_rtv = NULL;
 		}
+		if (slot->gst_texture && slot->gst_texture != slot->texture)
+		{
+			ID3D11Texture2D_Release(slot->gst_texture);
+			slot->gst_texture = NULL;
+		}
 		if (slot->texture)
 		{
 			ID3D11Texture2D_Release(slot->texture);
 			slot->texture = NULL;
 		}
+		slot->shared_handle = NULL;
 		g_atomic_int_set(&slot->in_use, 0);
 	}
 	if (hub->d3d11_nv12_cbuffer)
@@ -1082,6 +1149,13 @@ static bool init_d3d11_nv12_converter(gst_master_pipeline_t *hub)
 		}
 	}
 
+	obs_enter_graphics();
+	ID3D11Device *obs_device = (gs_get_device_type() == GS_DEVICE_DIRECT3D_11)
+		? (ID3D11Device *)gs_get_device_obj()
+		: NULL;
+	obs_leave_graphics();
+	if (!obs_device) return false;
+
 	for (int i = 0; i < GST_MASTER_NV12_RING_SLOTS; i++)
 	{
 		gst_d3d11_nv12_slot_t *slot = &hub->d3d11_slots[i];
@@ -1094,13 +1168,42 @@ static bool init_d3d11_nv12_converter(gst_master_pipeline_t *hub)
 		tex_desc.SampleDesc.Count = 1;
 		tex_desc.Usage = D3D11_USAGE_DEFAULT;
 		tex_desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+		if (hub->d3d11_native_device)
+			tex_desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED;
 
-		HRESULT hr = ID3D11Device_CreateTexture2D(device, &tex_desc, NULL, &slot->texture);
+		HRESULT hr = ID3D11Device_CreateTexture2D(obs_device, &tex_desc, NULL, &slot->texture);
 		if (FAILED(hr))
 		{
 			blog(LOG_ERROR, "[obs-gstreamer-master] Failed to create D3D11 texture slot %d (format=%d): 0x%08lx",
 				i, (int)tex_dxgi_format, (unsigned long)hr);
 			return false;
+		}
+
+		if (hub->d3d11_native_device)
+		{
+			IDXGIResource *dxgi_res = NULL;
+			HRESULT hr_res = ID3D11Texture2D_QueryInterface(slot->texture, &IID_IDXGIResource, (void **)&dxgi_res);
+			if (SUCCEEDED(hr_res) && dxgi_res)
+			{
+				IDXGIResource_GetSharedHandle(dxgi_res, &slot->shared_handle);
+				IDXGIResource_Release(dxgi_res);
+			}
+			if (slot->shared_handle)
+			{
+				hr = ID3D11Device_OpenSharedResource(hub->d3d11_native_device, slot->shared_handle,
+					&IID_ID3D11Texture2D, (void **)&slot->gst_texture);
+				if (FAILED(hr))
+				{
+					blog(LOG_ERROR, "[obs-gstreamer-master] Failed to open shared texture slot %d on GStreamer device: 0x%08lx",
+						i, (unsigned long)hr);
+					return false;
+				}
+			}
+		}
+		else
+		{
+			slot->gst_texture = slot->texture;
+			ID3D11Texture2D_AddRef(slot->gst_texture);
 		}
 
 		if (hub->appsrc_format == GST_VIDEO_FORMAT_NV12)
@@ -1199,11 +1302,18 @@ static bool push_d3d11_texture(gst_master_pipeline_t *hub, gs_texture_t *texture
 
 	if (hub->appsrc_format == GST_VIDEO_FORMAT_BGRA || hub->appsrc_format == GST_VIDEO_FORMAT_RGBA)
 	{
-		ID3D11DeviceContext *context = gst_d3d11_device_get_device_context_handle(hub->d3d11_device);
-		gst_d3d11_device_lock(hub->d3d11_device);
-		ID3D11DeviceContext_CopyResource(context, (ID3D11Resource *)slot->texture, (ID3D11Resource *)d3d_texture);
-		ID3D11DeviceContext_Flush(context);
-		gst_d3d11_device_unlock(hub->d3d11_device);
+		ID3D11Device *obs_dev = (ID3D11Device *)gs_get_device_obj();
+		ID3D11DeviceContext *obs_ctx = NULL;
+		if (obs_dev) ID3D11Device_GetImmediateContext(obs_dev, &obs_ctx);
+		if (obs_ctx)
+		{
+			ID3D11DeviceContext_CopyResource(obs_ctx, (ID3D11Resource *)slot->texture, (ID3D11Resource *)d3d_texture);
+			if (hub->d3d11_native_device)
+			{
+				ID3D11DeviceContext_Flush(obs_ctx);
+			}
+			ID3D11DeviceContext_Release(obs_ctx);
+		}
 	}
 	else
 	{
@@ -1367,14 +1477,15 @@ static bool push_d3d11_texture(gst_master_pipeline_t *hub, gs_texture_t *texture
 		return false;
 	}
 
-	ID3D11Texture2D_AddRef(slot->texture);
+	ID3D11Texture2D *push_tex = (slot->gst_texture) ? slot->gst_texture : slot->texture;
+	ID3D11Texture2D_AddRef(push_tex);
 	GstMemory *memory = gst_d3d11_allocator_alloc_wrapped(
-		GST_D3D11_ALLOCATOR(allocator), hub->d3d11_device, (ID3D11Resource *)slot->texture,
+		GST_D3D11_ALLOCATOR(allocator), hub->d3d11_device, (ID3D11Resource *)push_tex,
 		GST_VIDEO_INFO_SIZE(&info), slot, d3d11_nv12_slot_release_notify);
 	gst_object_unref(allocator);
 	if (!memory)
 	{
-		ID3D11Texture2D_Release(slot->texture);
+		ID3D11Texture2D_Release(push_tex);
 		g_atomic_int_set(&slot->in_use, 0);
 		blog(LOG_ERROR, "[obs-gstreamer-master] Failed to wrap D3D11 texture slot as GstD3D11Memory");
 		return false;
@@ -2382,6 +2493,11 @@ void gst_master_pipeline_destroy(gst_master_pipeline_t *hub)
 	{
 		gst_object_unref(hub->d3d11_device);
 		hub->d3d11_device = NULL;
+	}
+	if (hub->d3d11_native_device)
+	{
+		ID3D11Device_Release(hub->d3d11_native_device);
+		hub->d3d11_native_device = NULL;
 	}
 #endif
 
