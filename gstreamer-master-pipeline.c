@@ -31,6 +31,10 @@ static const GUID IID_IDXGIDevice = { 0x54ec77fa, 0x1377, 0x44e6, { 0x8c, 0x32, 
 #ifndef IID_IDXGIResource
 static const GUID IID_IDXGIResource = { 0x035f3ab4, 0x482e, 0x4e50, { 0xb4, 0x1f, 0x8a, 0x7f, 0x8b, 0xd8, 0x96, 0x0b } };
 #endif
+#ifndef IID_ID3D11Texture2D
+static const GUID IID_ID3D11Texture2D = { 0x6f15aaf2, 0xd208, 0x4e89, { 0x9a, 0xb4, 0x48, 0x95, 0x35, 0xd3, 0x4f, 0x9c } };
+#endif
+static const GUID gst_IID_ID3D11Texture2D = { 0x6f15aaf2, 0xd208, 0x4e89, { 0x9a, 0xb4, 0x48, 0x95, 0x35, 0xd3, 0x4f, 0x9c } };
 #endif
 
 #if HAVE_GST_GL
@@ -1191,7 +1195,7 @@ static bool init_d3d11_nv12_converter(gst_master_pipeline_t *hub)
 			if (slot->shared_handle)
 			{
 				hr = ID3D11Device_OpenSharedResource(hub->d3d11_native_device, slot->shared_handle,
-					&IID_ID3D11Texture2D, (void **)&slot->gst_texture);
+					&gst_IID_ID3D11Texture2D, (void **)&slot->gst_texture);
 				if (FAILED(hr))
 				{
 					blog(LOG_ERROR, "[obs-gstreamer-master] Failed to open shared texture slot %d on GStreamer device: 0x%08lx",

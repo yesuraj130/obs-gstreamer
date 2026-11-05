@@ -131,6 +131,10 @@ deps = [
 gst_d3d11_dep = dependency('gstreamer-d3d11-1.0', required : false)
 if host_machine.system() == 'windows' and gst_d3d11_dep.found()
   deps += [gst_d3d11_dep]
+  dxguid_dep = meson.get_compiler('c').find_library('dxguid', required : false)
+  if dxguid_dep.found()
+    deps += [dxguid_dep]
+  endif
   extra_c_args += ['-DHAVE_GST_D3D11=1', '-DCOBJMACROS', '-DGST_USE_UNSTABLE_API']
 else
   extra_c_args += ['-DHAVE_GST_D3D11=0']
