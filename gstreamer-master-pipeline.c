@@ -770,14 +770,16 @@ static GstElement *create_master_encoder_pipeline(gst_master_pipeline_t *hub, co
 #if HAVE_GST_D3D11
 		if (hub->gpu_input && hub->d3d11_device && is_d3d11_memory_encoder(chosen_enc))
 		{
+			bool has_d3d11convert = gst_master_pipeline_element_available("d3d11convert");
 			pipe_desc = g_strdup_printf(
 				"appsrc name=hub_appsrc is-live=true format=GST_FORMAT_TIME do-timestamp=true "
 				"caps=\"video/x-raw(memory:D3D11Memory), width=%u, height=%u, "
 				"format=NV12, framerate=%u/%u, colorimetry=%s\" ! "
-				"%s ! h264parse config-interval=-1 ! "
+				"%s%s ! h264parse config-interval=-1 ! "
 				"video/x-h264, stream-format=byte-stream, alignment=au ! "
 				"appsink name=hub_appsink sync=false drop=true max-buffers=1",
 				hub->width, hub->height, hub->fps_num, hub->fps_den, hub->colorimetry_str,
+				has_d3d11convert ? "d3d11convert ! " : "",
 				enc_str);
 			g_free(enc_str);
 			goto launch_pipeline;
@@ -848,6 +850,12 @@ launch_pipeline:
 			gst_structure_set(s, "device", GST_TYPE_D3D11_DEVICE, hub->d3d11_device, NULL);
 			gst_element_set_context(pipe, ctx);
 			gst_context_unref(ctx);
+
+			GstContext *ctx2 = gst_context_new("gst.d3d11.device", TRUE);
+			GstStructure *s2 = gst_context_writable_structure(ctx2);
+			gst_structure_set(s2, "device", GST_TYPE_D3D11_DEVICE, hub->d3d11_device, NULL);
+			gst_element_set_context(pipe, ctx2);
+			gst_context_unref(ctx2);
 		}
 #endif
 #if HAVE_GST_GL
@@ -1108,21 +1116,32 @@ static bool push_d3d11_texture(gst_master_pipeline_t *hub, gs_texture_t *texture
 	if (!hub->d3d11_nv12_ready && !init_d3d11_nv12_converter(hub))
 		return false;
 
-	/* 2-slot ping-pong check-before-use: drop frame if slot is still held by downstream encoder */
-	uint32_t slot_idx = hub->d3d11_next_slot;
-	gst_d3d11_nv12_slot_t *slot = &hub->d3d11_slots[slot_idx];
+	/* Multi-slot ring buffer check: locate any available slot starting from next_slot */
+	int free_idx = -1;
+	for (int i = 0; i < GST_MASTER_NV12_RING_SLOTS; i++)
+	{
+		uint32_t candidate = (hub->d3d11_next_slot + i) % GST_MASTER_NV12_RING_SLOTS;
+		if (g_atomic_int_get(&hub->d3d11_slots[candidate].in_use) == 0)
+		{
+			free_idx = (int)candidate;
+			break;
+		}
+	}
 
-	if (g_atomic_int_get(&slot->in_use) != 0)
+	if (free_idx < 0)
 	{
 		hub->texture_drop_count++;
 		uint64_t drops = hub->texture_drop_count;
 		if (drops == 1 || drops % 120 == 0)
 		{
-			blog(LOG_WARNING, "[obs-gstreamer-master] Encoder busy: dropped D3D11 frame #%" PRIu64 " (slot %u in use, total drops: %" PRIu64 ")",
-				hub->texture_push_count + 1, slot_idx, drops);
+			blog(LOG_WARNING, "[obs-gstreamer-master] Encoder busy: dropped D3D11 frame #%" PRIu64 " (all %d slots in use, total drops: %" PRIu64 ")",
+				hub->texture_push_count + 1, GST_MASTER_NV12_RING_SLOTS, drops);
 		}
 		return true;
 	}
+
+	uint32_t slot_idx = (uint32_t)free_idx;
+	gst_d3d11_nv12_slot_t *slot = &hub->d3d11_slots[slot_idx];
 
 	/* Claim slot and advance ring pointer */
 	g_atomic_int_set(&slot->in_use, 1);
@@ -1541,20 +1560,32 @@ static bool push_gl_texture(gst_master_pipeline_t *hub, gs_texture_t *texture, u
 	if (!hub->gl_nv12_ready && !init_gl_nv12_converter(hub))
 		return false;
 
-	uint32_t slot_idx = hub->gl_next_slot;
-	gst_gl_nv12_slot_t *slot = &hub->gl_slots[slot_idx];
+	/* Multi-slot ring buffer check: locate any available slot starting from next_slot */
+	int free_idx = -1;
+	for (int i = 0; i < GST_MASTER_NV12_RING_SLOTS; i++)
+	{
+		uint32_t candidate = (hub->gl_next_slot + i) % GST_MASTER_NV12_RING_SLOTS;
+		if (g_atomic_int_get(&hub->gl_slots[candidate].in_use) == 0)
+		{
+			free_idx = (int)candidate;
+			break;
+		}
+	}
 
-	if (g_atomic_int_get(&slot->in_use) != 0)
+	if (free_idx < 0)
 	{
 		hub->texture_drop_count++;
 		uint64_t drops = hub->texture_drop_count;
 		if (drops == 1 || drops % 120 == 0)
 		{
-			blog(LOG_WARNING, "[obs-gstreamer-master] Encoder busy: dropped OpenGL frame #%" PRIu64 " (slot %u in use, total drops: %" PRIu64 ")",
-				hub->texture_push_count + 1, slot_idx, drops);
+			blog(LOG_WARNING, "[obs-gstreamer-master] Encoder busy: dropped OpenGL frame #%" PRIu64 " (all %d slots in use, total drops: %" PRIu64 ")",
+				hub->texture_push_count + 1, GST_MASTER_NV12_RING_SLOTS, drops);
 		}
 		return true;
 	}
+
+	uint32_t slot_idx = (uint32_t)free_idx;
+	gst_gl_nv12_slot_t *slot = &hub->gl_slots[slot_idx];
 
 	g_atomic_int_set(&slot->in_use, 1);
 	g_atomic_int_set(&slot->plane_refs, 2); /* 2 planes: Y and UV */
