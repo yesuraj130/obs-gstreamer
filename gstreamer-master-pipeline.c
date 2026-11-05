@@ -4,6 +4,7 @@
 
 #include "gstreamer-master-pipeline.h"
 #include <obs-module.h>
+#include <util/platform.h>
 #include <gst/gst.h>
 #include <gst/app/gstappsrc.h>
 #include <gst/app/gstappsink.h>
@@ -19,7 +20,10 @@
 #include "d3d11-nv12-shaders.h"
 
 #ifndef IID_ID3D10Multithread
-static const GUID IID_ID3D10Multithread = { 0x9b7e4c00, 0x342c, 0x4106, { 0xa1, 0x9f, 0x4f, 0x27, 0x04, 0xf6, 0x89, 0xf0 } };
+static const GUID IID_ID3D10Multithread = { 0x9b7e4e00, 0x342c, 0x4106, { 0xa1, 0x9f, 0x4f, 0x27, 0x04, 0xf6, 0x89, 0xf0 } };
+#endif
+#ifndef IID_ID3D11Multithread
+static const GUID IID_ID3D11Multithread = { 0x03024be4, 0xc065, 0x4c45, { 0x80, 0x13, 0x0d, 0xb3, 0xd7, 0x73, 0x62, 0xc2 } };
 #endif
 #endif
 
@@ -480,23 +484,29 @@ static bool init_obs_d3d11_device(gst_master_pipeline_t *hub)
 		: NULL;
 	if (device)
 	{
-		ID3D10Multithread *multithread = NULL;
-		HRESULT hr = ID3D11Device_QueryInterface(device, &IID_ID3D10Multithread, (void **)&multithread);
-		if (FAILED(hr) || !multithread)
+		ID3D11DeviceContext *ctx = NULL;
+		ID3D11Device_GetImmediateContext(device, &ctx);
+		if (ctx)
 		{
-			ID3D11DeviceContext *ctx = NULL;
-			ID3D11Device_GetImmediateContext(device, &ctx);
-			if (ctx)
+			ID3D10Multithread *multithread = NULL;
+			HRESULT hr = ID3D11DeviceContext_QueryInterface(ctx, &IID_ID3D11Multithread, (void **)&multithread);
+			if (FAILED(hr) || !multithread)
+				hr = ID3D11DeviceContext_QueryInterface(ctx, &IID_ID3D10Multithread, (void **)&multithread);
+			if (FAILED(hr) || !multithread)
+				hr = ID3D11Device_QueryInterface(device, &IID_ID3D11Multithread, (void **)&multithread);
+			if (FAILED(hr) || !multithread)
+				hr = ID3D11Device_QueryInterface(device, &IID_ID3D10Multithread, (void **)&multithread);
+			if (SUCCEEDED(hr) && multithread)
 			{
-				ID3D11DeviceContext_QueryInterface(ctx, &IID_ID3D10Multithread, (void **)&multithread);
-				ID3D11DeviceContext_Release(ctx);
+				ID3D10Multithread_SetMultithreadProtected(multithread, TRUE);
+				ID3D10Multithread_Release(multithread);
+				blog(LOG_INFO, "[obs-gstreamer-master] Enabled Direct3D 11 multithread protection on OBS device/context");
 			}
-		}
-		if (multithread)
-		{
-			ID3D10Multithread_SetMultithreadProtected(multithread, TRUE);
-			ID3D10Multithread_Release(multithread);
-			blog(LOG_INFO, "[obs-gstreamer-master] Enabled Direct3D 11 multithread protection on OBS device");
+			else
+			{
+				blog(LOG_WARNING, "[obs-gstreamer-master] Failed to query ID3D10/11Multithread on device/context: 0x%08lx", (unsigned long)hr);
+			}
+			ID3D11DeviceContext_Release(ctx);
 		}
 		hub->d3d11_device = gst_d3d11_device_new_wrapped(device);
 	}
@@ -765,22 +775,41 @@ static GstElement *create_master_encoder_pipeline(gst_master_pipeline_t *hub, co
 		gchar *enc_str = build_encoder_element_str(chosen_enc, gop_size, bitrate);
 
 		init_hub_color_matrix(hub);
-		hub->appsrc_format = GST_VIDEO_FORMAT_NV12;
 
 #if HAVE_GST_D3D11
 		if (hub->gpu_input && hub->d3d11_device && is_d3d11_memory_encoder(chosen_enc))
 		{
 			bool has_d3d11convert = gst_master_pipeline_element_available("d3d11convert");
-			pipe_desc = g_strdup_printf(
-				"appsrc name=hub_appsrc is-live=true format=GST_FORMAT_TIME do-timestamp=true "
-				"caps=\"video/x-raw(memory:D3D11Memory), width=%u, height=%u, "
-				"format=NV12, framerate=%u/%u, colorimetry=%s\" ! "
-				"%s%s ! h264parse config-interval=-1 ! "
-				"video/x-h264, stream-format=byte-stream, alignment=au ! "
-				"appsink name=hub_appsink sync=false drop=true max-buffers=1",
-				hub->width, hub->height, hub->fps_num, hub->fps_den, hub->colorimetry_str,
-				has_d3d11convert ? "d3d11convert ! " : "",
-				enc_str);
+			GstVideoFormat obs_fmt = get_obs_compositing_format();
+			if (has_d3d11convert)
+			{
+				hub->appsrc_format = (obs_fmt == GST_VIDEO_FORMAT_RGBA) ? GST_VIDEO_FORMAT_RGBA : GST_VIDEO_FORMAT_BGRA;
+				pipe_desc = g_strdup_printf(
+					"appsrc name=hub_appsrc is-live=true format=GST_FORMAT_TIME do-timestamp=true "
+					"caps=\"video/x-raw(memory:D3D11Memory), width=%u, height=%u, "
+					"format=%s, framerate=%u/%u\" ! "
+					"d3d11convert ! video/x-raw(memory:D3D11Memory), format=NV12 ! "
+					"%s ! h264parse config-interval=-1 ! "
+					"video/x-h264, stream-format=byte-stream, alignment=au ! "
+					"appsink name=hub_appsink sync=false drop=true max-buffers=1",
+					hub->width, hub->height,
+					gst_video_format_to_string(hub->appsrc_format),
+					hub->fps_num, hub->fps_den,
+					enc_str);
+			}
+			else
+			{
+				hub->appsrc_format = GST_VIDEO_FORMAT_NV12;
+				pipe_desc = g_strdup_printf(
+					"appsrc name=hub_appsrc is-live=true format=GST_FORMAT_TIME do-timestamp=true "
+					"caps=\"video/x-raw(memory:D3D11Memory), width=%u, height=%u, "
+					"format=NV12, framerate=%u/%u, colorimetry=%s\" ! "
+					"%s ! h264parse config-interval=-1 ! "
+					"video/x-h264, stream-format=byte-stream, alignment=au ! "
+					"appsink name=hub_appsink sync=false drop=true max-buffers=1",
+					hub->width, hub->height, hub->fps_num, hub->fps_den, hub->colorimetry_str,
+					enc_str);
+			}
 			g_free(enc_str);
 			goto launch_pipeline;
 		}
@@ -989,59 +1018,68 @@ static bool init_d3d11_nv12_converter(gst_master_pipeline_t *hub)
 	ID3D11Device *device = gst_d3d11_device_get_device_handle(hub->d3d11_device);
 	if (!device) return false;
 
-	HRESULT hr = ID3D11Device_CreateVertexShader(device,
-		g_d3d11_nv12_vs_dxbc, sizeof(g_d3d11_nv12_vs_dxbc),
-		NULL, &hub->d3d11_nv12_vertex_shader);
-	if (FAILED(hr))
-	{
-		blog(LOG_ERROR, "[obs-gstreamer-master] Failed to create D3D11 NV12 vertex shader: 0x%08lx", (unsigned long)hr);
-		return false;
-	}
+	DXGI_FORMAT tex_dxgi_format = DXGI_FORMAT_B8G8R8A8_UNORM;
+	if (hub->appsrc_format == GST_VIDEO_FORMAT_RGBA)
+		tex_dxgi_format = DXGI_FORMAT_R8G8B8A8_UNORM;
+	else if (hub->appsrc_format == GST_VIDEO_FORMAT_NV12)
+		tex_dxgi_format = DXGI_FORMAT_NV12;
 
-	hr = ID3D11Device_CreatePixelShader(device,
-		g_d3d11_nv12_ps_y_dxbc, sizeof(g_d3d11_nv12_ps_y_dxbc),
-		NULL, &hub->d3d11_nv12_luma_shader);
-	if (FAILED(hr))
+	if (hub->appsrc_format == GST_VIDEO_FORMAT_NV12)
 	{
-		blog(LOG_ERROR, "[obs-gstreamer-master] Failed to create D3D11 NV12 luma shader: 0x%08lx", (unsigned long)hr);
-		return false;
-	}
+		HRESULT hr = ID3D11Device_CreateVertexShader(device,
+			g_d3d11_nv12_vs_dxbc, sizeof(g_d3d11_nv12_vs_dxbc),
+			NULL, &hub->d3d11_nv12_vertex_shader);
+		if (FAILED(hr))
+		{
+			blog(LOG_ERROR, "[obs-gstreamer-master] Failed to create D3D11 NV12 vertex shader: 0x%08lx", (unsigned long)hr);
+			return false;
+		}
 
-	hr = ID3D11Device_CreatePixelShader(device,
-		g_d3d11_nv12_ps_uv_dxbc, sizeof(g_d3d11_nv12_ps_uv_dxbc),
-		NULL, &hub->d3d11_nv12_chroma_shader);
-	if (FAILED(hr))
-	{
-		blog(LOG_ERROR, "[obs-gstreamer-master] Failed to create D3D11 NV12 chroma shader: 0x%08lx", (unsigned long)hr);
-		return false;
-	}
+		hr = ID3D11Device_CreatePixelShader(device,
+			g_d3d11_nv12_ps_y_dxbc, sizeof(g_d3d11_nv12_ps_y_dxbc),
+			NULL, &hub->d3d11_nv12_luma_shader);
+		if (FAILED(hr))
+		{
+			blog(LOG_ERROR, "[obs-gstreamer-master] Failed to create D3D11 NV12 luma shader: 0x%08lx", (unsigned long)hr);
+			return false;
+		}
 
-	D3D11_SAMPLER_DESC samp_desc = {0};
-	samp_desc.Filter = D3D11_FILTER_MIN_MAG_LINEAR_MIP_POINT;
-	samp_desc.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
-	samp_desc.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
-	samp_desc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
-	samp_desc.ComparisonFunc = D3D11_COMPARISON_NEVER;
-	hr = ID3D11Device_CreateSamplerState(device, &samp_desc, &hub->d3d11_nv12_sampler);
-	if (FAILED(hr))
-	{
-		blog(LOG_ERROR, "[obs-gstreamer-master] Failed to create D3D11 sampler state: 0x%08lx", (unsigned long)hr);
-		return false;
-	}
+		hr = ID3D11Device_CreatePixelShader(device,
+			g_d3d11_nv12_ps_uv_dxbc, sizeof(g_d3d11_nv12_ps_uv_dxbc),
+			NULL, &hub->d3d11_nv12_chroma_shader);
+		if (FAILED(hr))
+		{
+			blog(LOG_ERROR, "[obs-gstreamer-master] Failed to create D3D11 NV12 chroma shader: 0x%08lx", (unsigned long)hr);
+			return false;
+		}
 
-	D3D11_BUFFER_DESC cb_desc = {0};
-	cb_desc.ByteWidth = sizeof(gst_nv12_color_matrix_t);
-	cb_desc.Usage = D3D11_USAGE_DYNAMIC;
-	cb_desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-	cb_desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+		D3D11_SAMPLER_DESC samp_desc = {0};
+		samp_desc.Filter = D3D11_FILTER_MIN_MAG_LINEAR_MIP_POINT;
+		samp_desc.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
+		samp_desc.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
+		samp_desc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+		samp_desc.ComparisonFunc = D3D11_COMPARISON_NEVER;
+		hr = ID3D11Device_CreateSamplerState(device, &samp_desc, &hub->d3d11_nv12_sampler);
+		if (FAILED(hr))
+		{
+			blog(LOG_ERROR, "[obs-gstreamer-master] Failed to create D3D11 sampler state: 0x%08lx", (unsigned long)hr);
+			return false;
+		}
 
-	D3D11_SUBRESOURCE_DATA cb_init = {0};
-	cb_init.pSysMem = &hub->color_matrix;
-	hr = ID3D11Device_CreateBuffer(device, &cb_desc, &cb_init, &hub->d3d11_nv12_cbuffer);
-	if (FAILED(hr))
-	{
-		blog(LOG_ERROR, "[obs-gstreamer-master] Failed to create D3D11 constant buffer: 0x%08lx", (unsigned long)hr);
-		return false;
+		D3D11_BUFFER_DESC cb_desc = {0};
+		cb_desc.ByteWidth = sizeof(gst_nv12_color_matrix_t);
+		cb_desc.Usage = D3D11_USAGE_DYNAMIC;
+		cb_desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+		cb_desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+
+		D3D11_SUBRESOURCE_DATA cb_init = {0};
+		cb_init.pSysMem = &hub->color_matrix;
+		hr = ID3D11Device_CreateBuffer(device, &cb_desc, &cb_init, &hub->d3d11_nv12_cbuffer);
+		if (FAILED(hr))
+		{
+			blog(LOG_ERROR, "[obs-gstreamer-master] Failed to create D3D11 constant buffer: 0x%08lx", (unsigned long)hr);
+			return false;
+		}
 	}
 
 	for (int i = 0; i < GST_MASTER_NV12_RING_SLOTS; i++)
@@ -1052,44 +1090,48 @@ static bool init_d3d11_nv12_converter(gst_master_pipeline_t *hub)
 		tex_desc.Height = hub->height;
 		tex_desc.MipLevels = 1;
 		tex_desc.ArraySize = 1;
-		tex_desc.Format = DXGI_FORMAT_NV12;
+		tex_desc.Format = tex_dxgi_format;
 		tex_desc.SampleDesc.Count = 1;
 		tex_desc.Usage = D3D11_USAGE_DEFAULT;
 		tex_desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
 
-		hr = ID3D11Device_CreateTexture2D(device, &tex_desc, NULL, &slot->texture);
+		HRESULT hr = ID3D11Device_CreateTexture2D(device, &tex_desc, NULL, &slot->texture);
 		if (FAILED(hr))
 		{
-			blog(LOG_ERROR, "[obs-gstreamer-master] Failed to create D3D11 NV12 texture slot %d: 0x%08lx", i, (unsigned long)hr);
+			blog(LOG_ERROR, "[obs-gstreamer-master] Failed to create D3D11 texture slot %d (format=%d): 0x%08lx",
+				i, (int)tex_dxgi_format, (unsigned long)hr);
 			return false;
 		}
 
-		D3D11_RENDER_TARGET_VIEW_DESC rtv_y = {0};
-		rtv_y.Format = DXGI_FORMAT_R8_UNORM;
-		rtv_y.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
-		hr = ID3D11Device_CreateRenderTargetView(device, (ID3D11Resource *)slot->texture, &rtv_y, &slot->luma_rtv);
-		if (FAILED(hr))
+		if (hub->appsrc_format == GST_VIDEO_FORMAT_NV12)
 		{
-			blog(LOG_ERROR, "[obs-gstreamer-master] Failed to create D3D11 luma RTV slot %d: 0x%08lx", i, (unsigned long)hr);
-			return false;
-		}
+			D3D11_RENDER_TARGET_VIEW_DESC rtv_y = {0};
+			rtv_y.Format = DXGI_FORMAT_R8_UNORM;
+			rtv_y.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
+			hr = ID3D11Device_CreateRenderTargetView(device, (ID3D11Resource *)slot->texture, &rtv_y, &slot->luma_rtv);
+			if (FAILED(hr))
+			{
+				blog(LOG_ERROR, "[obs-gstreamer-master] Failed to create D3D11 luma RTV slot %d: 0x%08lx", i, (unsigned long)hr);
+				return false;
+			}
 
-		D3D11_RENDER_TARGET_VIEW_DESC rtv_uv = {0};
-		rtv_uv.Format = DXGI_FORMAT_R8G8_UNORM;
-		rtv_uv.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
-		hr = ID3D11Device_CreateRenderTargetView(device, (ID3D11Resource *)slot->texture, &rtv_uv, &slot->chroma_rtv);
-		if (FAILED(hr))
-		{
-			blog(LOG_ERROR, "[obs-gstreamer-master] Failed to create D3D11 chroma RTV slot %d: 0x%08lx", i, (unsigned long)hr);
-			return false;
+			D3D11_RENDER_TARGET_VIEW_DESC rtv_uv = {0};
+			rtv_uv.Format = DXGI_FORMAT_R8G8_UNORM;
+			rtv_uv.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
+			hr = ID3D11Device_CreateRenderTargetView(device, (ID3D11Resource *)slot->texture, &rtv_uv, &slot->chroma_rtv);
+			if (FAILED(hr))
+			{
+				blog(LOG_ERROR, "[obs-gstreamer-master] Failed to create D3D11 chroma RTV slot %d: 0x%08lx", i, (unsigned long)hr);
+				return false;
+			}
 		}
 
 		g_atomic_int_set(&slot->in_use, 0);
 	}
 
 	hub->d3d11_nv12_ready = true;
-	blog(LOG_INFO, "[obs-gstreamer-master] Initialized D3D11 NV12 converter (%d-slot ring buffer, colorimetry=%s)",
-		GST_MASTER_NV12_RING_SLOTS, hub->colorimetry_str);
+	blog(LOG_INFO, "[obs-gstreamer-master] Initialized D3D11 converter (%d-slot ring buffer, appsrc_format=%s)",
+		GST_MASTER_NV12_RING_SLOTS, gst_video_format_to_string(hub->appsrc_format));
 	return true;
 }
 
@@ -1155,125 +1197,162 @@ static bool push_d3d11_texture(gst_master_pipeline_t *hub, gs_texture_t *texture
 		return false;
 	}
 
-	enum gs_color_format color_format = gs_texture_get_color_format(texture);
-	DXGI_FORMAT srv_fmt = DXGI_FORMAT_B8G8R8A8_UNORM;
-	if (color_format == GS_RGBA || color_format == GS_RGBA_UNORM)
-		srv_fmt = DXGI_FORMAT_R8G8B8A8_UNORM;
-	else if (color_format == GS_BGRX)
-		srv_fmt = DXGI_FORMAT_B8G8R8X8_UNORM;
-
-	ID3D11Device *device = gst_d3d11_device_get_device_handle(hub->d3d11_device);
-	ID3D11DeviceContext *context = gst_d3d11_device_get_device_context_handle(hub->d3d11_device);
-
-	gst_d3d11_device_lock(hub->d3d11_device);
-
-	D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc = {0};
-	srv_desc.Format = srv_fmt;
-	srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-	srv_desc.Texture2D.MipLevels = 1;
-
-	ID3D11ShaderResourceView *src_srv = NULL;
-	HRESULT hr = ID3D11Device_CreateShaderResourceView(device, (ID3D11Resource *)d3d_texture, &srv_desc, &src_srv);
-	if (FAILED(hr))
+	if (hub->appsrc_format == GST_VIDEO_FORMAT_BGRA || hub->appsrc_format == GST_VIDEO_FORMAT_RGBA)
 	{
+		ID3D11DeviceContext *context = gst_d3d11_device_get_device_context_handle(hub->d3d11_device);
+		gst_d3d11_device_lock(hub->d3d11_device);
+		ID3D11DeviceContext_CopyResource(context, (ID3D11Resource *)slot->texture, (ID3D11Resource *)d3d_texture);
+		ID3D11DeviceContext_Flush(context);
 		gst_d3d11_device_unlock(hub->d3d11_device);
-		g_atomic_int_set(&slot->in_use, 0);
-		if (hr == 0x887a0005 || hr == 0x887a0007)
+	}
+	else
+	{
+		enum gs_color_format color_format = gs_texture_get_color_format(texture);
+		DXGI_FORMAT srv_fmt = DXGI_FORMAT_B8G8R8A8_UNORM;
+		if (color_format == GS_RGBA || color_format == GS_RGBA_UNORM)
+			srv_fmt = DXGI_FORMAT_R8G8B8A8_UNORM;
+		else if (color_format == GS_BGRX)
+			srv_fmt = DXGI_FORMAT_B8G8R8X8_UNORM;
+
+		ID3D11Device *device = gst_d3d11_device_get_device_handle(hub->d3d11_device);
+		ID3D11DeviceContext *context = gst_d3d11_device_get_device_context_handle(hub->d3d11_device);
+
+		gst_d3d11_device_lock(hub->d3d11_device);
+
+		D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc = {0};
+		srv_desc.Format = srv_fmt;
+		srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+		srv_desc.Texture2D.MipLevels = 1;
+
+		ID3D11ShaderResourceView *src_srv = NULL;
+		HRESULT hr = ID3D11Device_CreateShaderResourceView(device, (ID3D11Resource *)d3d_texture, &srv_desc, &src_srv);
+		if (FAILED(hr))
 		{
-			static uint64_t last_dev_loss_log = 0;
-			uint64_t now_loss = os_gettime_ns();
-			if (now_loss - last_dev_loss_log > 5000000000ULL)
+			gst_d3d11_device_unlock(hub->d3d11_device);
+			g_atomic_int_set(&slot->in_use, 0);
+			if (hr == 0x887a0005 || hr == 0x887a0007)
 			{
-				blog(LOG_ERROR, "[obs-gstreamer-master] D3D11 device removed or reset (0x%08lx); resetting NV12 converter", (unsigned long)hr);
-				last_dev_loss_log = now_loss;
+				static uint64_t last_dev_loss_log = 0;
+				uint64_t now_loss = os_gettime_ns();
+				if (now_loss - last_dev_loss_log > 5000000000ULL)
+				{
+					blog(LOG_ERROR, "[obs-gstreamer-master] D3D11 device removed or reset (0x%08lx); resetting converter", (unsigned long)hr);
+					last_dev_loss_log = now_loss;
+				}
+				destroy_d3d11_nv12_converter(hub);
+				if (hub->d3d11_device)
+				{
+					gst_object_unref(hub->d3d11_device);
+					hub->d3d11_device = NULL;
+				}
+				return false;
 			}
-			destroy_d3d11_nv12_converter(hub);
-			if (hub->d3d11_device)
-			{
-				gst_object_unref(hub->d3d11_device);
-				hub->d3d11_device = NULL;
-			}
+			blog(LOG_ERROR, "[obs-gstreamer-master] Failed to create SRV for D3D11 NV12 conversion: 0x%08lx", (unsigned long)hr);
 			return false;
 		}
-		blog(LOG_ERROR, "[obs-gstreamer-master] Failed to create SRV for D3D11 NV12 conversion: 0x%08lx", (unsigned long)hr);
-		return false;
+
+		/* Save complete OBS D3D11 context state so zero-copy conversion doesn't corrupt OBS rendering */
+		ID3D11RenderTargetView *prev_rtv = NULL;
+		ID3D11DepthStencilView *prev_dsv = NULL;
+		ID3D11DeviceContext_OMGetRenderTargets(context, 1, &prev_rtv, &prev_dsv);
+
+		ID3D11BlendState *prev_blend_state = NULL;
+		FLOAT prev_blend_factor[4] = {0};
+		UINT prev_sample_mask = 0xffffffff;
+		ID3D11DeviceContext_OMGetBlendState(context, &prev_blend_state, prev_blend_factor, &prev_sample_mask);
+
+		ID3D11DepthStencilState *prev_ds_state = NULL;
+		UINT prev_stencil_ref = 0;
+		ID3D11DeviceContext_OMGetDepthStencilState(context, &prev_ds_state, &prev_stencil_ref);
+
+		ID3D11RasterizerState *prev_rs_state = NULL;
+		ID3D11DeviceContext_RSGetState(context, &prev_rs_state);
+
+		UINT prev_num_vp = 1;
+		D3D11_VIEWPORT prev_vp = {0};
+		ID3D11DeviceContext_RSGetViewports(context, &prev_num_vp, &prev_vp);
+
+		ID3D11VertexShader *prev_vs = NULL;
+		ID3D11DeviceContext_VSGetShader(context, &prev_vs, NULL, NULL);
+
+		ID3D11PixelShader *prev_ps = NULL;
+		ID3D11DeviceContext_PSGetShader(context, &prev_ps, NULL, NULL);
+
+		ID3D11SamplerState *prev_sampler = NULL;
+		ID3D11DeviceContext_PSGetSamplers(context, 0, 1, &prev_sampler);
+
+		ID3D11Buffer *prev_cb = NULL;
+		ID3D11DeviceContext_PSGetConstantBuffers(context, 0, 1, &prev_cb);
+
+		D3D11_PRIMITIVE_TOPOLOGY prev_topology;
+		ID3D11DeviceContext_IAGetPrimitiveTopology(context, &prev_topology);
+
+		/* Neutral states for 1:1 color conversion */
+		ID3D11DeviceContext_OMSetBlendState(context, NULL, NULL, 0xffffffff);
+		ID3D11DeviceContext_OMSetDepthStencilState(context, NULL, 0);
+		ID3D11DeviceContext_RSSetState(context, NULL);
+
+		/* Render Pass 1: Full-resolution Luma (Y plane, R8_UNORM) */
+		D3D11_VIEWPORT vp_y = {0.0f, 0.0f, (float)hub->width, (float)hub->height, 0.0f, 1.0f};
+		ID3D11DeviceContext_RSSetViewports(context, 1, &vp_y);
+		ID3D11DeviceContext_OMSetRenderTargets(context, 1, &slot->luma_rtv, NULL);
+		ID3D11DeviceContext_IASetPrimitiveTopology(context, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+		ID3D11DeviceContext_VSSetShader(context, hub->d3d11_nv12_vertex_shader, NULL, 0);
+		ID3D11DeviceContext_PSSetShader(context, hub->d3d11_nv12_luma_shader, NULL, 0);
+		ID3D11DeviceContext_PSSetSamplers(context, 0, 1, &hub->d3d11_nv12_sampler);
+		ID3D11DeviceContext_PSSetConstantBuffers(context, 0, 1, &hub->d3d11_nv12_cbuffer);
+		ID3D11DeviceContext_PSSetShaderResources(context, 0, 1, &src_srv);
+		ID3D11DeviceContext_Draw(context, 3, 0);
+
+		/* Render Pass 2: Half-resolution Chroma (UV plane, R8G8_UNORM) */
+		D3D11_VIEWPORT vp_uv = {0.0f, 0.0f, (float)(hub->width / 2), (float)(hub->height / 2), 0.0f, 1.0f};
+		ID3D11DeviceContext_RSSetViewports(context, 1, &vp_uv);
+		ID3D11DeviceContext_OMSetRenderTargets(context, 1, &slot->chroma_rtv, NULL);
+		ID3D11DeviceContext_PSSetShader(context, hub->d3d11_nv12_chroma_shader, NULL, 0);
+		ID3D11DeviceContext_Draw(context, 3, 0);
+
+		/* Unbind temporary SRV and restore previous OBS D3D11 context state */
+		ID3D11ShaderResourceView *null_srv = NULL;
+		ID3D11DeviceContext_PSSetShaderResources(context, 0, 1, &null_srv);
+		ID3D11ShaderResourceView_Release(src_srv);
+
+		ID3D11DeviceContext_OMSetRenderTargets(context, 1, &prev_rtv, prev_dsv);
+		if (prev_rtv) ID3D11RenderTargetView_Release(prev_rtv);
+		if (prev_dsv) ID3D11DepthStencilView_Release(prev_dsv);
+
+		ID3D11DeviceContext_OMSetBlendState(context, prev_blend_state, prev_blend_factor, prev_sample_mask);
+		if (prev_blend_state) ID3D11BlendState_Release(prev_blend_state);
+
+		ID3D11DeviceContext_OMSetDepthStencilState(context, prev_ds_state, prev_stencil_ref);
+		if (prev_ds_state) ID3D11DepthStencilState_Release(prev_ds_state);
+
+		ID3D11DeviceContext_RSSetState(context, prev_rs_state);
+		if (prev_rs_state) ID3D11RasterizerState_Release(prev_rs_state);
+
+		if (prev_num_vp > 0)
+			ID3D11DeviceContext_RSSetViewports(context, prev_num_vp, &prev_vp);
+
+		ID3D11DeviceContext_IASetPrimitiveTopology(context, prev_topology);
+
+		ID3D11DeviceContext_VSSetShader(context, prev_vs, NULL, 0);
+		if (prev_vs) ID3D11VertexShader_Release(prev_vs);
+
+		ID3D11DeviceContext_PSSetShader(context, prev_ps, NULL, 0);
+		if (prev_ps) ID3D11PixelShader_Release(prev_ps);
+
+		ID3D11DeviceContext_PSSetSamplers(context, 0, 1, &prev_sampler);
+		if (prev_sampler) ID3D11SamplerState_Release(prev_sampler);
+
+		ID3D11DeviceContext_PSSetConstantBuffers(context, 0, 1, &prev_cb);
+		if (prev_cb) ID3D11Buffer_Release(prev_cb);
+
+		/* Flush GPU commands on render thread before encoder consumes it */
+		ID3D11DeviceContext_Flush(context);
+		gst_d3d11_device_unlock(hub->d3d11_device);
 	}
 
-	/* Save complete OBS D3D11 context state so zero-copy conversion doesn't corrupt OBS rendering */
-	ID3D11RenderTargetView *prev_rtv = NULL;
-	ID3D11DepthStencilView *prev_dsv = NULL;
-	ID3D11DeviceContext_OMGetRenderTargets(context, 1, &prev_rtv, &prev_dsv);
-
-	UINT prev_num_vp = 1;
-	D3D11_VIEWPORT prev_vp = {0};
-	ID3D11DeviceContext_RSGetViewports(context, &prev_num_vp, &prev_vp);
-
-	ID3D11VertexShader *prev_vs = NULL;
-	ID3D11DeviceContext_VSGetShader(context, &prev_vs, NULL, NULL);
-
-	ID3D11PixelShader *prev_ps = NULL;
-	ID3D11DeviceContext_PSGetShader(context, &prev_ps, NULL, NULL);
-
-	ID3D11SamplerState *prev_sampler = NULL;
-	ID3D11DeviceContext_PSGetSamplers(context, 0, 1, &prev_sampler);
-
-	ID3D11Buffer *prev_cb = NULL;
-	ID3D11DeviceContext_PSGetConstantBuffers(context, 0, 1, &prev_cb);
-
-	D3D11_PRIMITIVE_TOPOLOGY prev_topology;
-	ID3D11DeviceContext_IAGetPrimitiveTopology(context, &prev_topology);
-
-	/* Render Pass 1: Full-resolution Luma (Y plane, R8_UNORM) */
-	D3D11_VIEWPORT vp_y = {0.0f, 0.0f, (float)hub->width, (float)hub->height, 0.0f, 1.0f};
-	ID3D11DeviceContext_RSSetViewports(context, 1, &vp_y);
-	ID3D11DeviceContext_OMSetRenderTargets(context, 1, &slot->luma_rtv, NULL);
-	ID3D11DeviceContext_IASetPrimitiveTopology(context, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-	ID3D11DeviceContext_VSSetShader(context, hub->d3d11_nv12_vertex_shader, NULL, 0);
-	ID3D11DeviceContext_PSSetShader(context, hub->d3d11_nv12_luma_shader, NULL, 0);
-	ID3D11DeviceContext_PSSetSamplers(context, 0, 1, &hub->d3d11_nv12_sampler);
-	ID3D11DeviceContext_PSSetConstantBuffers(context, 0, 1, &hub->d3d11_nv12_cbuffer);
-	ID3D11DeviceContext_PSSetShaderResources(context, 0, 1, &src_srv);
-	ID3D11DeviceContext_Draw(context, 3, 0);
-
-	/* Render Pass 2: Half-resolution Chroma (UV plane, R8G8_UNORM) */
-	D3D11_VIEWPORT vp_uv = {0.0f, 0.0f, (float)(hub->width / 2), (float)(hub->height / 2), 0.0f, 1.0f};
-	ID3D11DeviceContext_RSSetViewports(context, 1, &vp_uv);
-	ID3D11DeviceContext_OMSetRenderTargets(context, 1, &slot->chroma_rtv, NULL);
-	ID3D11DeviceContext_PSSetShader(context, hub->d3d11_nv12_chroma_shader, NULL, 0);
-	ID3D11DeviceContext_Draw(context, 3, 0);
-
-	/* Unbind temporary SRV and restore previous OBS D3D11 context state */
-	ID3D11ShaderResourceView *null_srv = NULL;
-	ID3D11DeviceContext_PSSetShaderResources(context, 0, 1, &null_srv);
-	ID3D11ShaderResourceView_Release(src_srv);
-
-	ID3D11DeviceContext_OMSetRenderTargets(context, 1, &prev_rtv, prev_dsv);
-	if (prev_rtv) ID3D11RenderTargetView_Release(prev_rtv);
-	if (prev_dsv) ID3D11DepthStencilView_Release(prev_dsv);
-
-	if (prev_num_vp > 0)
-		ID3D11DeviceContext_RSSetViewports(context, prev_num_vp, &prev_vp);
-
-	ID3D11DeviceContext_IASetPrimitiveTopology(context, prev_topology);
-
-	ID3D11DeviceContext_VSSetShader(context, prev_vs, NULL, 0);
-	if (prev_vs) ID3D11VertexShader_Release(prev_vs);
-
-	ID3D11DeviceContext_PSSetShader(context, prev_ps, NULL, 0);
-	if (prev_ps) ID3D11PixelShader_Release(prev_ps);
-
-	ID3D11DeviceContext_PSSetSamplers(context, 0, 1, &prev_sampler);
-	if (prev_sampler) ID3D11SamplerState_Release(prev_sampler);
-
-	ID3D11DeviceContext_PSSetConstantBuffers(context, 0, 1, &prev_cb);
-	if (prev_cb) ID3D11Buffer_Release(prev_cb);
-
-	/* Flush GPU commands on render thread before encoder consumes it */
-	ID3D11DeviceContext_Flush(context);
-	gst_d3d11_device_unlock(hub->d3d11_device);
-
 	GstVideoInfo info;
-	if (!gst_video_info_set_format(&info, GST_VIDEO_FORMAT_NV12, width, height))
+	if (!gst_video_info_set_format(&info, hub->appsrc_format, width, height))
 	{
 		g_atomic_int_set(&slot->in_use, 0);
 		return false;
@@ -1297,7 +1376,7 @@ static bool push_d3d11_texture(gst_master_pipeline_t *hub, gs_texture_t *texture
 	{
 		ID3D11Texture2D_Release(slot->texture);
 		g_atomic_int_set(&slot->in_use, 0);
-		blog(LOG_ERROR, "[obs-gstreamer-master] Failed to wrap D3D11 NV12 texture slot as GstD3D11Memory");
+		blog(LOG_ERROR, "[obs-gstreamer-master] Failed to wrap D3D11 texture slot as GstD3D11Memory");
 		return false;
 	}
 
@@ -1316,11 +1395,11 @@ static bool push_d3d11_texture(gst_master_pipeline_t *hub, gs_texture_t *texture
 		offsets[plane] = GST_VIDEO_INFO_PLANE_OFFSET(&info, plane);
 		strides[plane] = GST_VIDEO_INFO_PLANE_STRIDE(&info, plane);
 	}
-	if (!gst_buffer_add_video_meta_full(buffer, GST_VIDEO_FRAME_FLAG_NONE, GST_VIDEO_FORMAT_NV12, width, height,
+	if (!gst_buffer_add_video_meta_full(buffer, GST_VIDEO_FRAME_FLAG_NONE, hub->appsrc_format, width, height,
 		GST_VIDEO_INFO_N_PLANES(&info), offsets, strides))
 	{
 		gst_buffer_unref(buffer);
-		blog(LOG_ERROR, "[obs-gstreamer-master] Failed to attach NV12 video metadata to D3D11 frame");
+		blog(LOG_ERROR, "[obs-gstreamer-master] Failed to attach video metadata to D3D11 frame");
 		return false;
 	}
 
@@ -1333,7 +1412,7 @@ static bool push_d3d11_texture(gst_master_pipeline_t *hub, gs_texture_t *texture
 	GstFlowReturn flow = gst_app_src_push_buffer(GST_APP_SRC(hub->appsrc), buffer);
 	if (flow != GST_FLOW_OK)
 	{
-		blog(LOG_ERROR, "[obs-gstreamer-master] D3D11 NV12 texture push failed: flow=%s",
+		blog(LOG_ERROR, "[obs-gstreamer-master] D3D11 texture push failed: flow=%s",
 			gst_flow_get_name(flow));
 		return false;
 	}
@@ -1341,9 +1420,11 @@ static bool push_d3d11_texture(gst_master_pipeline_t *hub, gs_texture_t *texture
 	uint64_t frame_number = ++hub->texture_push_count;
 	if (frame_number == 1 || frame_number % 300 == 0)
 	{
-		blog(LOG_INFO, "[obs-gstreamer-master] D3D11 NV12 zero-copy frame #%" PRIu64
-			" converted and pushed (%ux%u, slot=%u, drops=%" PRIu64 ")",
-			frame_number, width, height, slot_idx, hub->texture_drop_count);
+		blog(LOG_INFO, "[obs-gstreamer-master] D3D11 zero-copy frame #%" PRIu64
+			" pushed (%ux%u, format=%s, slot=%u, drops=%" PRIu64 ")",
+			frame_number, width, height,
+			gst_video_format_to_string(hub->appsrc_format),
+			slot_idx, hub->texture_drop_count);
 	}
 	return true;
 }
