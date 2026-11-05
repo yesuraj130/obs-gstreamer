@@ -1,0 +1,236 @@
+22:45:28.679: CPU Name: AMD PRO A4-4350B R4, 5 COMPUTE CORES 2C+3G     
+22:45:28.703: CPU Speed: 2495MHz
+22:45:28.703: Physical Cores: 2, Logical Cores: 2
+22:45:28.714: Physical Memory: 3935MB Total, 790MB Free
+22:45:28.714: Windows Version: 10.0 Build 19045 (release: 22H2; revision: 2965; 64-bit)
+22:45:28.714: Running as administrator: false
+22:45:28.715: Windows 10/11 Gaming Features:
+22:45:28.715: 	Game DVR: On
+22:45:28.715: 	Game Mode: Probably On (no reg key set)
+22:45:28.742: Sec. Software Status:
+22:45:28.769: 	Microsoft Defender Antivirus: enabled (AV)
+22:45:28.770: 	Windows Firewall: enabled (FW)
+22:45:28.820: Current Date/Time: 2026-11-05, 22:45:28
+22:45:28.820: Browser Hardware Acceleration: true
+22:45:28.820: Hide OBS windows from screen capture: false
+22:45:28.820: Qt Version: 6.11.1 (runtime), 6.11.1 (compiled)
+22:45:28.820: Portable mode: false
+22:45:41.884: OBS 32.2.2 (64-bit, windows)
+22:45:41.884: ---------------------------------
+22:45:43.165: ---------------------------------
+22:45:43.165: audio settings reset:
+22:45:43.165: 	samples per sec: 48000
+22:45:43.165: 	speakers:        1
+22:45:43.165: 	max buffering:   960 milliseconds
+22:45:43.165: 	buffering type:  dynamically increasing
+22:45:43.551: ---------------------------------
+22:45:43.551: Initializing D3D11...
+22:45:43.551: Available Video Adapters: 
+22:45:43.557: 	Adapter 0: AMD Radeon(TM) R4 Graphics
+22:45:43.557: 	  Dedicated VRAM: 121507840 (0.1 GiB)
+22:45:43.557: 	  Shared VRAM:    2063263744 (1.9 GiB)
+22:45:43.557: 	  PCI ID:         1002:98e4
+22:45:43.558: 	  HAGS Status:    Disabled (Default: No, Driver status: Unsupported)
+22:45:43.559: 	  Driver Version: 27.20.20913.2000
+22:45:43.560: 	  output 0:
+22:45:43.560: 	    name=
+22:45:43.560: 	    pos={0, 0}
+22:45:43.560: 	    size={1366, 768}
+22:45:43.560: 	    attached=true
+22:45:43.560: 	    refresh=60
+22:45:43.560: 	    bits_per_color=6
+22:45:43.560: 	    space=RGB_FULL_G22_NONE_P709
+22:45:43.560: 	    primaries=[r=(0.580078, 0.334961), g=(0.330078, 0.565430), b=(0.155273, 0.139648), wp=(0.313477, 0.329102)]
+22:45:43.560: 	    relative_gamut_area=[709=0.654763, P3=0.482672, 2020=0.346285]
+22:45:43.560: 	    sdr_white_nits=80
+22:45:43.560: 	    nit_range=[min=0.500000, max=270.000000, max_full_frame=270.000000]
+22:45:43.560: 	    dpi=96 (100%)
+22:45:43.560: 	    id=\\?\DISPLAY#AUO2E3C#4&fb867bc&0&UID256#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}
+22:45:43.560: 	    alt_id=\\.\DISPLAY1
+22:45:43.561: Loading up D3D11 on adapter AMD Radeon(TM) R4 Graphics (0)
+22:45:43.871: D3D11 loaded successfully, feature level used: b000
+22:45:43.871: DXGI increase maximum frame latency success
+22:45:43.871: D3D11 GPU priority setup failed (not admin?)
+22:45:49.496: ---------------------------------
+22:45:49.497: video settings reset:
+22:45:49.497: 	base resolution:   1280x720
+22:45:49.497: 	output resolution: 1280x720
+22:45:49.497: 	downscale filter:  Bilinear
+22:45:49.497: 	fps:               30/1
+22:45:49.497: 	format:            NV12
+22:45:49.497: 	YUV mode:          sRGB/Full
+22:45:49.517: NV12 texture support enabled
+22:45:49.517: P010 texture support not available
+22:45:49.568: Audio monitoring device:
+22:45:49.568: 	name: Default
+22:45:49.568: 	id: default
+22:45:50.229: ---------------------------------
+22:45:50.238: dllhell: module loaded
+22:45:50.238: dllhell: added DLL directory: C:\Windows\system32
+22:45:50.238: dllhell: added DLL directory: C:\Windows
+22:45:50.238: dllhell: added DLL directory: C:\Windows\System32\Wbem
+22:45:50.238: dllhell: added DLL directory: C:\Windows\System32\WindowsPowerShell\v1.0\
+22:45:50.238: dllhell: added DLL directory: C:\Windows\System32\OpenSSH\
+22:45:50.238: dllhell: added DLL directory: C:\Program Files\filebrowser\
+22:45:50.238: dllhell: added DLL directory: C:\Program Files\Microsoft VS Code\bin
+22:45:50.239: dllhell: added DLL directory: C:\Program Files\Microsoft VS Code\bin\copilot-shim
+22:45:50.239: dllhell: added DLL directory: C:\Program Files\Git\cmd
+22:45:50.239: dllhell: added DLL directory: C:\Users\HJM-Laptop\AppData\Local\Programs\Python\Python312\Scripts\
+22:45:50.239: dllhell: added DLL directory: C:\Users\HJM-Laptop\AppData\Local\Programs\Python\Python312\
+22:45:50.239: dllhell: added DLL directory: C:\Program Files\gstreamer\1.0\msvc_x86_64\bin
+22:45:50.239: dllhell: added DLL directory: C:\Users\HJM-Laptop\AppData\Local\Programs\Python\Python315\Scripts\
+22:45:50.239: dllhell: added DLL directory: C:\Users\HJM-Laptop\AppData\Local\Programs\Python\Python315\
+22:45:50.240: dllhell: added DLL directory: C:\Users\HJM-Laptop\AppData\Local\Programs\Python\Launcher\
+22:45:50.240: dllhell: added DLL directory: C:\Users\HJM-Laptop\AppData\Local\Microsoft\WindowsApps
+22:45:50.775: No AJA devices found, skipping loading AJA UI plugin
+22:45:50.776: Failed to initialize module 'aja-output-ui.dll'
+22:45:51.434: No AJA devices found, skipping loading AJA plugin
+22:45:51.434: Failed to initialize module 'aja.dll'
+22:45:51.466: Skipping module '../../obs-plugins/64bit/chrome_elf.dll', not an OBS plugin
+22:45:52.117: [CoreAudio encoder]: CoreAudio AAC encoder not installed on the system or couldn't be loaded
+22:45:52.415: Failed to load 'en-US' text for module: 'decklink-captions.dll'
+22:45:52.610: Failed to load 'en-US' text for module: 'decklink-output-ui.dll'
+22:45:52.885: A DeckLink iterator could not be created.  The DeckLink drivers may not be installed
+22:45:52.885: Failed to initialize module 'decklink.dll'
+22:45:54.982: Skipping module '../../obs-plugins/64bit/libcef.dll', not an OBS plugin
+22:45:55.010: Skipping module '../../obs-plugins/64bit/libEGL.dll', not an OBS plugin
+22:45:55.039: Skipping module '../../obs-plugins/64bit/libGLESv2.dll', not an OBS plugin
+22:45:58.673: [Move Transition] loaded version 3.0.1
+22:45:58.674: Failed to get nvARPose.dll version info size
+22:45:58.924: Failed to get C:\Program Files\NVIDIA Corporation\NVIDIA Audio Effects SDK\NVAudioEffects.dll version info size
+22:45:58.925: [NVIDIA Audio Effects:] NVIDIA denoiser disabled, redistributable not found or could not be loaded.
+22:45:58.925: Failed to get C:\Program Files\NVIDIA Corporation\NVIDIA Video Effects\NVVideoEffects.dll version info size
+22:45:58.925: [NVIDIA VIDEO FX]: FX disabled, redistributable not found or could not be loaded.
+22:46:00.348: [obs-browser]: Version 2.26.9
+22:46:00.348: [obs-browser]: CEF Version 127.0.6533.120 (runtime), 127.145.7+g2b7d20b+chromium-127.0.6533.120 (compiled)
+22:46:09.402: [obs-gstreamer] Loading plugin (version: ae0fb24)
+22:46:09.402: [obs-gstreamer]   Build Date: 2026-11-05 17:13:19 UTC (CI (GitHub Actions #119))
+22:46:09.402: [obs-gstreamer]   Repository: https://github.com/yesuraj130/obs-gstreamer
+22:46:11.378: [obs-gstreamer] GStreamer runtime initialized: GStreamer 1.28.8 (GIT)
+22:46:11.379: [obs-gstreamer] Registered raw output module: hjm-gstreamer-output
+22:46:11.379: [obs-gstreamer] Registered encoded output module: hjm-gstreamer-output-encoded
+22:46:11.379: [obs-gstreamer] Registered source module: gstreamer-source
+22:46:11.379: [obs-gstreamer] Registered source module: gstreamer-source-video
+22:46:11.392: [obs-gstreamer] Registered filter module: gstreamer-filter-video (CPU)
+22:46:11.392: [obs-gstreamer] Registered filter module: gstreamer-filter-video-gpu (GPU)
+22:46:11.392: [obs-gstreamer] Registered filter module: gstreamer-filter-audio
+22:46:11.392: [obs-gstreamer-encoder-callback] Registered master GPU texture encoder & driver
+22:46:11.393: [obs-gstreamer-output-callback] Registered master output callback module
+22:46:11.393: [obs-gstreamer-filter-callback] Registered private filter callback
+22:46:11.864: [obs-gstreamer-dock] Registered GStreamer Master Hub dock early during module load
+22:46:11.864: [obs-gstreamer] Plugin loaded successfully
+22:46:12.281: LoadLibrary failed for 'nvEncodeAPI64.dll': The specified module could not be found.
+22:46:12.281:  (126)
+22:46:12.281: NVENC not supported
+22:46:12.281: Failed to initialize module 'obs-nvenc.dll'
+22:46:17.233: [obs-websocket] [obs_module_load] you can haz websockets (Version: 5.7.4 | RPC Version: 1)
+22:46:17.233: [obs-websocket] [obs_module_load] Qt version (compile-time): 6.11.1 | Qt version (run-time): 6.11.1
+22:46:17.233: [obs-websocket] [obs_module_load] Linked ASIO Version: 103200
+22:46:17.686: [obs-websocket] [obs_module_load] Module loaded.
+22:46:18.458: [Source Clone] loaded version 0.1.5
+22:46:19.779: [vlc-video]: VLC 3.0.18 Vetinari found, VLC video source enabled
+22:46:28.037: ---------------------------------
+22:46:28.037:   Loaded Modules:
+22:46:28.037:     win-wasapi.dll
+22:46:28.037:     win-dshow.dll
+22:46:28.037:     win-capture.dll
+22:46:28.037:     vlc-video.dll
+22:46:28.037:     text-freetype2.dll
+22:46:28.037:     source-clone.dll
+22:46:28.037:     rtmp-services.dll
+22:46:28.037:     obs-x264.dll
+22:46:28.037:     obs-websocket.dll
+22:46:28.037:     obs-webrtc.dll
+22:46:28.037:     obs-vst.dll
+22:46:28.037:     obs-transitions.dll
+22:46:28.037:     obs-text.dll
+22:46:28.037:     obs-qsv11.dll
+22:46:28.037:     obs-outputs.dll
+22:46:28.037:     obs-gstreamer.dll
+22:46:28.037:     obs-filters.dll
+22:46:28.037:     obs-ffmpeg.dll
+22:46:28.037:     obs-browser.dll
+22:46:28.037:     nv-filters.dll
+22:46:28.037:     move-transition.dll
+22:46:28.037:     image-source.dll
+22:46:28.037:     frontend-tools.dll
+22:46:28.037:     droidcam-obs.dll
+22:46:28.037:     decklink-output-ui.dll
+22:46:28.037:     decklink-captions.dll
+22:46:28.037:     coreaudio-encoder.dll
+22:46:28.037:     0dllhell.dll
+22:46:28.037: ---------------------------------
+22:46:28.336: ---------------------------------
+22:46:28.336: Available Encoders:
+22:46:28.336:   Video Encoders:
+22:46:28.405: 	- ffmpeg_svt_av1 (SVT-AV1)
+22:46:28.405: 	- ffmpeg_aom_av1 (AOM AV1)
+22:46:28.500: 	- h264_texture_amf (AMD HW H.264 (AVC))
+22:46:28.500: 	- gstreamer-encoder-callback (GStreamer Master Pipeline GPU Texture Encoder)
+22:46:28.500: 	- hjm-gstreamer-encoder-callback (GStreamer Master Pipeline GPU Texture Encoder)
+22:46:28.501: 	- obs_x264 (x264)
+22:46:28.501:   Audio Encoders:
+22:46:28.519: 	- ffmpeg_aac (FFmpeg AAC)
+22:46:28.519: 	- ffmpeg_opus (FFmpeg Opus)
+22:46:28.519: 	- ffmpeg_pcm_s16le (FFmpeg PCM (16-bit))
+22:46:28.519: 	- ffmpeg_pcm_s24le (FFmpeg PCM (24-bit))
+22:46:28.519: 	- ffmpeg_pcm_f32le (FFmpeg PCM (32-bit float))
+22:46:28.519: 	- ffmpeg_alac (FFmpeg ALAC (24-bit))
+22:46:28.519: 	- ffmpeg_flac (FFmpeg FLAC (16-bit))
+22:46:28.519: ==== Startup complete ===============================================
+22:46:28.819: signal_handler_connect: signal 'file_changed' not found
+22:46:30.835: All scene data cleared
+22:46:30.836: ------------------------------------------------
+22:46:32.080: [obs-gstreamer-source] GStreamer Video Source: Source created
+22:46:33.504: [Media Source 'Media']: settings:
+22:46:33.504: 	input:                   E:/New folder/Videos/Ebenesarae _ John Jebaraj _ Tamil Christian song _johnjebaraj  _tamilchristiansongs(720P_HD).mp4
+22:46:33.504: 	input_format:            (null)
+22:46:33.504: 	speed:                   100
+22:46:33.504: 	is_looping:              no
+22:46:33.504: 	is_linear_alpha:         no
+22:46:33.504: 	is_hw_decoding:          no
+22:46:33.504: 	is_clear_on_media_end:   yes
+22:46:33.504: 	restart_on_activate:     yes
+22:46:33.504: 	close_when_inactive:     no
+22:46:33.504: 	full_decode:             no
+22:46:33.504: 	ffmpeg_options:          
+22:46:33.554: Switched to scene 'Scene'
+22:46:33.624: [obs-gstreamer-dock] Restored 1 Master Hub(s) from OBS scene collection
+22:46:33.742: ------------------------------------------------
+22:46:33.743: Loaded scenes:
+22:46:33.743: - scene 'Scene':
+22:46:33.743:     - source: 'Color' (color_source_v3)
+22:46:33.743:     - source: 'GStreamer Video Source' (gstreamer-source-video)
+22:46:33.743:     - source: 'Image' (image_source)
+22:46:33.743:     - source: 'Media' (ffmpeg_source)
+22:46:33.743: - scene 'Scene 2':
+22:46:33.743: ------------------------------------------------
+22:46:34.366: adding 42 milliseconds of audio buffering, total audio buffering is now 42 milliseconds (source: Media)
+22:46:34.366: 
+22:46:35.539: [obs-gstreamer-dock] Autostarting destination 'Default RTSP' for hub 'Program Master Hub'
+22:46:35.539: [obs-gstreamer-dock] Starting Master Pipeline for 'Program Master Hub' (method='Render Callback (GPU Direct Texture)', encoder=x264enc, bitrate=4000 kbps)
+22:46:35.559: [obs-gstreamer-master] GPU Backend: Direct3D 11 (Adapter: Direct3D 11) | Available GStreamer H.264 encoders: [amfh264enc, mfh264enc, x264enc]
+22:46:35.682: [obs-gstreamer-master] Launching Master Hardware Encoder Pipeline (gpu_zero_copy=no, encoder=x264enc, appsrc_format=NV12): appsrc name=hub_appsrc is-live=true format=GST_FORMAT_TIME do-timestamp=true caps="video/x-raw, width=1280, height=720, format=NV12, framerate=30/1, colorimetry=bt709" ! x264enc tune=zerolatency speed-preset=ultrafast bframes=0 key-int-max=30 bitrate=4000 ! h264parse config-interval=-1 ! video/x-h264, stream-format=byte-stream, alignment=au ! appsink name=hub_appsink sync=false drop=true max-buffers=1
+22:46:37.029: [obs-gstreamer-dock] Starting RTSP destination on port 8554/live linked to master pipeline 'Program Master Hub'...
+22:46:37.195: [obs-gstreamer-rtspserver] Bound new RTSP server listening on port 8554
+22:46:37.217: [obs-gstreamer-rtspserver] RTSP branch started: rtsp://0.0.0.0:8554/live (name='Default RTSP', waiting for client connection)
+22:46:48.247: [obs-gstreamer-dock] Stopping RTSP branch (8554:/live)
+22:46:48.282: [obs-gstreamer-rtspserver] Stopping RTSP server on port 8554
+22:46:48.289: [obs-gstreamer-rtspserver] Stopped and destroyed branch 'Default RTSP'
+22:46:48.289: [obs-gstreamer-dock] All destinations stopped: tearing down master pipeline for 'Program Master Hub'
+22:47:06.494: [obs-gstreamer-dock] Starting Master Pipeline for 'Program Master Hub' (method='Render Callback (GPU Direct Texture)', encoder=auto, bitrate=4000 kbps)
+22:47:06.538: [obs-gstreamer-master] Wrapped OBS ID3D11Device for zero-copy D3D11Memory pipeline
+22:47:07.152: [obs-gstreamer-master] Launching Master Hardware Encoder Pipeline (gpu_zero_copy=yes, encoder=amfh264enc, appsrc_format=NV12): appsrc name=hub_appsrc is-live=true format=GST_FORMAT_TIME do-timestamp=true caps="video/x-raw(memory:D3D11Memory), width=1280, height=720, format=NV12, framerate=30/1, colorimetry=bt709" ! d3d11convert ! amfh264enc gop-size=30 bitrate=4000 ! h264parse config-interval=-1 ! video/x-h264, stream-format=byte-stream, alignment=au ! appsink name=hub_appsink sync=false drop=true max-buffers=1
+22:47:08.199: [obs-gstreamer-dock] Starting RTSP destination on port 8554/live linked to master pipeline 'Program Master Hub'...
+22:47:08.200: [obs-gstreamer-rtspserver] Bound new RTSP server listening on port 8554
+22:47:08.200: [obs-gstreamer-rtspserver] RTSP branch started: rtsp://0.0.0.0:8554/live (name='Default RTSP', waiting for client connection)
+22:47:42.577: [obs-gstreamer-rtspserver] RTSP client connected on 8554/live (clients=1): subscribing 'Default RTSP' to master pipeline
+22:47:42.578: [obs-gstreamer-master] Subscriber 'Default RTSP' connected
+22:47:42.578: [obs-gstreamer-master] First destination active! Starting master encoder.
+22:47:42.617: [obs-gstreamer-render-callback] Pipeline active: attached render callback
+22:47:42.644: [obs-gstreamer-render-callback] Main output texture available: 1280x720, format=5
+22:47:42.720: [obs-gstreamer-master] Initialized D3D11 NV12 converter (2-slot ring buffer, colorimetry=bt709)
+22:47:42.768: [obs-gstreamer-master] D3D11 NV12 zero-copy frame #1 converted and pushed (1280x720, slot=0, drops=0)
+22:47:42.778: [obs-gstreamer-master] Encoder busy: dropped D3D11 frame #3 (all 2 slots in use, total drops: 1)
+22:47:43.269: [obs-gstreamer-master] Encoded sample #1: 49920 bytes, keyframe=yes (gpu_zero_copy=yes, stagesurf=NONE)
+22:47:43.269: [obs-gstreamer-rtspserver] Keyframe delivered to 'Default RTSP', client playback starting
