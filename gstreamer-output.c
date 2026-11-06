@@ -859,6 +859,7 @@ void gstreamer_output_get_defaults(obs_data_t *settings)
 	obs_data_set_default_bool(settings, "webrtc_output", false);
 	obs_data_set_default_string(settings, "webrtc_http_port", "8888");
 	obs_data_set_default_string(settings, "webrtc_stun_server", "");
+	obs_data_set_default_string(settings, "webrtc_turn_server", "");
 	obs_data_set_default_string(settings, "webrtc_web_root", "");
 	obs_data_set_default_string(settings, "webrtc_signaling_url", "ws://127.0.0.1:8443");
 }
@@ -888,6 +889,9 @@ obs_properties_t *gstreamer_output_get_properties(void *data)
 
 	obs_property_t *stun = obs_properties_add_text(props, "webrtc_stun_server", "WebRTC STUN server", OBS_TEXT_DEFAULT);
 	obs_property_set_long_description(stun, "Optional STUN server such as stun://stun.l.google.com:19302. Leave empty for LAN-only viewing.");
+
+	obs_property_t *turn = obs_properties_add_text(props, "webrtc_turn_server", "WebRTC TURN server", OBS_TEXT_DEFAULT);
+	obs_property_set_long_description(turn, "Optional TURN relay (e.g. turn://user:pass@host:port or turns://user:pass@host:443?transport=tcp). Required for Cloud/WAN without open UDP; leave empty for LAN.");
 
 	obs_property_t *web_root = obs_properties_add_text(props, "webrtc_web_root", "WebRTC web root", OBS_TEXT_DEFAULT);
 	obs_property_set_long_description(web_root, "Folder with viewer page files (index.html, style.css, app.js). Empty = ~/.local/share/obs-gstreamer/webrtc");

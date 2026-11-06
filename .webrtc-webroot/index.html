@@ -338,12 +338,36 @@
 
       <div class="p-4 space-y-4 text-xs">
         <div class="bg-slate-950/70 border border-slate-800 rounded-lg p-3 space-y-2">
-          <div class="text-[11px] font-medium text-slate-400 uppercase tracking-wider">Diagnostics</div>
+          <div class="text-[11px] font-medium text-slate-400 uppercase tracking-wider flex items-center justify-between">
+            <span>Diagnostics</span>
+            <span class="text-[10px] text-emerald-400">Zero-Latency WHEP</span>
+          </div>
           <div class="grid grid-cols-2 gap-2 text-slate-300 font-mono text-[11px]">
             <div><span class="text-slate-500 block text-[10px]">PC STATE</span><span id="stat-pc-state" class="text-amber-400 font-semibold">new</span></div>
             <div><span class="text-slate-500 block text-[10px]">ICE STATE</span><span id="stat-ice-state" class="text-slate-400">new</span></div>
             <div><span class="text-slate-500 block text-[10px]">SIGNALING</span><span id="stat-signaling" class="text-slate-400">stable</span></div>
             <div><span class="text-slate-500 block text-[10px]">TRACKS</span><span id="stat-tracks" class="text-slate-400">none</span></div>
+          </div>
+        </div>
+
+        <!-- WAN / Cloud TURN Relay Configuration -->
+        <div class="bg-slate-950/70 border border-slate-800 rounded-lg p-3 space-y-2">
+          <div class="flex items-center justify-between text-[11px] font-medium text-slate-400 uppercase tracking-wider">
+            <span>ICE / TURN Server (WAN/Cloud)</span>
+          </div>
+          <p class="text-[10px] text-slate-400 leading-tight">
+            <strong>LAN Mode:</strong> Leave TURN blank for direct peer-to-peer UDP (&lt;50ms latency).<br>
+            <strong>Cloud/WAN:</strong> If inbound UDP is blocked, specify your TURN server below.
+          </p>
+          <div class="space-y-1.5 pt-1">
+            <input id="input-turn-url" type="text" placeholder="turn:user:pass@host:port" class="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-[11px] text-slate-200 font-mono placeholder:text-slate-600 focus:outline-none focus:border-indigo-500">
+            <div class="grid grid-cols-2 gap-1.5">
+              <input id="input-turn-user" type="text" placeholder="Username (opt)" class="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-[11px] text-slate-200 font-mono placeholder:text-slate-600 focus:outline-none focus:border-indigo-500">
+              <input id="input-turn-pass" type="password" placeholder="Password (opt)" class="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-[11px] text-slate-200 font-mono placeholder:text-slate-600 focus:outline-none focus:border-indigo-500">
+            </div>
+            <button id="btn-save-turn" class="w-full bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white py-1 rounded text-[11px] font-medium transition border border-slate-700">
+              Save &amp; Reconnect WebRTC
+            </button>
           </div>
         </div>
 

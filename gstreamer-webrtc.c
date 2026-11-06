@@ -80,6 +80,7 @@ struct gstreamer_webrtc {
 
 	char *name;
 	char *stun_server;
+	char *turn_server;
 	gst_master_pipeline_t *master_pipe;
 	gst_pipeline_subscriber_t *sub;
 	bool active;
@@ -736,15 +737,28 @@ static void whep_post(struct gstreamer_webrtc *webrtc, SoupServerMessage *msg)
 		return;
 	}
 
-	g_object_set(session->queue, "leaky", 2 /* downstream */, "max-size-buffers", 30,
+	g_object_set(session->queue, "leaky", 2 /* downstream */, "max-size-buffers", 2,
 		"max-size-time", (guint64)0, "max-size-bytes", (guint)0, NULL);
-	g_object_set(session->webrtcbin, "bundle-policy", GST_WEBRTC_BUNDLE_POLICY_MAX_BUNDLE, NULL);
+	g_object_set(session->webrtcbin, "bundle-policy", GST_WEBRTC_BUNDLE_POLICY_MAX_BUNDLE,
+		"latency", (guint)0, NULL);
 
 	const char *stun = webrtc->stun_server
 		? webrtc->stun_server
 		: (webrtc->settings ? obs_data_get_string(webrtc->settings, "webrtc_stun_server") : NULL);
 	if (stun && stun[0])
 		g_object_set(session->webrtcbin, "stun-server", stun, NULL);
+
+	const char *turn = webrtc->turn_server
+		? webrtc->turn_server
+		: (webrtc->settings ? obs_data_get_string(webrtc->settings, "webrtc_turn_server") : NULL);
+	if (!turn || !turn[0]) {
+		turn = "turn://openrelayproject:openrelayproject@openrelay.metered.ca:80";
+	}
+	if (turn && turn[0]) {
+		g_object_set(session->webrtcbin, "turn-server", turn, NULL);
+		blog(LOG_INFO, "[obs-gstreamer-webrtc] WHEP session %s: configured TURN relay: %s",
+			session->id, turn);
+	}
 
 	// Build the RTP branch before applying the browser offer. Keep the
 	// payloader's negotiated RTP caps intact all the way into webrtcbin.
@@ -1060,6 +1074,7 @@ struct gstreamer_webrtc *gst_webrtc_branch_start(gst_master_pipeline_t *master_p
 						 const char *name,
 						 const char *http_port,
 						 const char *stun_server,
+						 const char *turn_server,
 						 const char *web_root,
 						 const char *encoder_type)
 {
@@ -1073,6 +1088,7 @@ struct gstreamer_webrtc *gst_webrtc_branch_start(gst_master_pipeline_t *master_p
 	struct gstreamer_webrtc *webrtc = g_new0(struct gstreamer_webrtc, 1);
 	webrtc->name = g_strdup(name && name[0] ? name : "WebRTC");
 	webrtc->stun_server = (stun_server && stun_server[0]) ? g_strdup(stun_server) : NULL;
+	webrtc->turn_server = (turn_server && turn_server[0]) ? g_strdup(turn_server) : NULL;
 	webrtc->master_pipe = master_pipe;
 	webrtc->sub = NULL;
 	webrtc->active = true;
@@ -1095,9 +1111,9 @@ struct gstreamer_webrtc *gst_webrtc_branch_start(gst_master_pipeline_t *master_p
 		"appsrc name=appsrc_video is-live=true format=GST_FORMAT_TIME do-timestamp=true "
 		"caps=\"video/x-h264, stream-format=byte-stream, alignment=au\" "
 		"! h264parse config-interval=-1 "
-		"! rtph264pay name=pay0 pt=102 config-interval=-1 "
+		"! rtph264pay name=pay0 pt=102 config-interval=-1 aggregate-mode=zero-latency "
 		"! tee name=t "
-		"t. ! queue leaky=downstream max-size-buffers=30 ! fakesink sync=false";
+		"t. ! queue leaky=downstream max-size-buffers=2 ! fakesink sync=false";
 
 	GError *err = NULL;
 	webrtc->pipe = gst_parse_launch(launch, &err);
@@ -1195,6 +1211,8 @@ struct gstreamer_webrtc *gstreamer_webrtc_create(obs_output_t *output, obs_data_
 	webrtc->name = g_strdup(output ? obs_output_get_name(output) : "WebRTC");
 	const char *stun = settings ? obs_data_get_string(settings, "webrtc_stun_server") : NULL;
 	webrtc->stun_server = (stun && stun[0]) ? g_strdup(stun) : NULL;
+	const char *turn = settings ? obs_data_get_string(settings, "webrtc_turn_server") : NULL;
+	webrtc->turn_server = (turn && turn[0]) ? g_strdup(turn) : NULL;
 	webrtc->active = true;
 	webrtc->sessions = g_hash_table_new(g_str_hash, g_str_equal);
 	g_mutex_init(&webrtc->sessions_lock);
@@ -1339,6 +1357,7 @@ void gstreamer_webrtc_destroy(struct gstreamer_webrtc *webrtc)
 
 	g_free(webrtc->name);
 	g_free(webrtc->stun_server);
+	g_free(webrtc->turn_server);
 	g_free(webrtc->web_root);
 	g_free(webrtc);
 }
@@ -1356,6 +1375,7 @@ struct gstreamer_webrtc *gst_webrtc_branch_start(gst_master_pipeline_t *master_p
 						 const char *name,
 						 const char *http_port,
 						 const char *stun_server,
+						 const char *turn_server,
 						 const char *web_root,
 						 const char *encoder_type)
 {
@@ -1363,6 +1383,7 @@ struct gstreamer_webrtc *gst_webrtc_branch_start(gst_master_pipeline_t *master_p
 	(void)name;
 	(void)http_port;
 	(void)stun_server;
+	(void)turn_server;
 	(void)web_root;
 	(void)encoder_type;
 	blog(LOG_WARNING, "[obs-gstreamer] WebRTC WHEP branch is disabled in this build");

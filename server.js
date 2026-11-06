@@ -290,38 +290,11 @@ function ensureStandaloneWebrtcProxy() {
         host: `${TARGET_HOST}:${TARGET_PORT}`
       }
     }, (proxyRes) => {
-      if (req.method === 'POST' && (req.url === '/whep' || req.url.startsWith('/whep?')) && proxyRes.statusCode === 201) {
-        let sdpChunks = [];
-        proxyRes.on('data', chunk => sdpChunks.push(chunk));
-        proxyRes.on('end', () => {
-          let sdp = Buffer.concat(sdpChunks).toString('utf8');
-          const passiveMatch = sdp.match(/a=candidate:\S+\s+1\s+TCP\s+\d+\s+(169\.254\.\d+\.\d+)\s+(\d+)\s+typ\s+host\s+tcptype\s+passive/i);
-          if (passiveMatch) {
-            openIceTcpTunnel(passiveMatch[1], passiveMatch[2], (tunnelInfo) => {
-              if (tunnelInfo && tunnelInfo.ip && tunnelInfo.port) {
-                const pubCand = `a=candidate:99 1 TCP 2130706431 ${tunnelInfo.ip} ${tunnelInfo.port} typ host tcptype passive\r\n`;
-                sdp = sdp.trim().replace(/\r?\n/g, '\r\n') + '\r\n' + pubCand;
-              } else {
-                sdp = sdp.trim().replace(/\r?\n/g, '\r\n') + '\r\n';
-              }
-              const outBuf = Buffer.from(sdp, 'utf8');
-              res.writeHead(proxyRes.statusCode, { ...proxyRes.headers, 'content-length': String(outBuf.length) });
-              res.end(outBuf);
-            });
-          } else {
-            sdp = sdp.trim().replace(/\r?\n/g, '\r\n') + '\r\n';
-            const outBuf = Buffer.from(sdp, 'utf8');
-            res.writeHead(proxyRes.statusCode, { ...proxyRes.headers, 'content-length': String(outBuf.length) });
-            res.end(outBuf);
-          }
-        });
-      } else {
-        res.writeHead(proxyRes.statusCode, {
-          ...proxyRes.headers,
-          'cache-control': 'no-cache, no-store, must-revalidate'
-        });
-        proxyRes.pipe(res);
-      }
+      res.writeHead(proxyRes.statusCode, {
+        ...proxyRes.headers,
+        'cache-control': 'no-cache, no-store, must-revalidate'
+      });
+      proxyRes.pipe(res);
     });
     proxyReq.on('error', () => {
       res.writeHead(503, { 'Content-Type': 'text/plain' });
@@ -378,49 +351,6 @@ function startWebrtcHttpTunnel() {
   });
 }
 
-let activeIceTunnels = [];
-function openIceTcpTunnel(localIp, localPort, callback) {
-  let done = false;
-  const finish = (info) => {
-    if (done) return;
-    done = true;
-    callback(info);
-  };
-  const timer = setTimeout(() => finish(null), 3500);
-  try {
-    const proc = spawn('ssh', [
-      '-p', '443',
-      '-o', 'StrictHostKeyChecking=no',
-      '-o', 'ServerAliveInterval=30',
-      '-R', `0:${localIp}:${localPort}`,
-      'tcp@a.pinggy.io'
-    ]);
-    activeIceTunnels.push(proc);
-    if (activeIceTunnels.length > 6) {
-      const old = activeIceTunnels.shift();
-      try { old.kill(); } catch (e) {}
-    }
-    const parseOut = (chunk) => {
-      const text = chunk.toString();
-      const match = text.match(/tcp:\/\/([^:\s]+):(\d+)/);
-      if (match) {
-        clearTimeout(timer);
-        const host = match[1];
-        const port = match[2];
-        require('dns').lookup(host, { family: 4 }, (err, address) => {
-          finish({ ip: (!err && address) ? address : host, port, host });
-        });
-      }
-    };
-    proc.stdout.on('data', parseOut);
-    proc.stderr.on('data', parseOut);
-    proc.on('error', () => { clearTimeout(timer); finish(null); });
-    proc.on('close', () => { clearTimeout(timer); finish(null); });
-  } catch (e) {
-    clearTimeout(timer);
-    finish(null);
-  }
-}
 
 function startTCPTunnel() {
   startPinggyTunnel();
@@ -1111,40 +1041,8 @@ const server = http.createServer((req, res) => {
         host: `${TARGET_HOST}:${TARGET_PORT}`
       }
     }, (proxyRes) => {
-      if (req.method === 'POST' && proxyRes.statusCode === 201) {
-        let sdpChunks = [];
-        proxyRes.on('data', chunk => sdpChunks.push(chunk));
-        proxyRes.on('end', () => {
-          let sdp = Buffer.concat(sdpChunks).toString('utf8');
-          const passiveMatch = sdp.match(/a=candidate:\S+\s+1\s+TCP\s+\d+\s+(169\.254\.\d+\.\d+)\s+(\d+)\s+typ\s+host\s+tcptype\s+passive/i);
-          if (passiveMatch) {
-            const localIp = passiveMatch[1];
-            const localPort = passiveMatch[2];
-            openIceTcpTunnel(localIp, localPort, (tunnelInfo) => {
-              if (tunnelInfo && tunnelInfo.ip && tunnelInfo.port) {
-                const pubCand = `a=candidate:99 1 TCP 2130706431 ${tunnelInfo.ip} ${tunnelInfo.port} typ host tcptype passive\r\n`;
-                sdp = sdp.trim().replace(/\r?\n/g, '\r\n') + '\r\n' + pubCand;
-                addLog(`Forwarded WebRTC ICE-TCP candidate ${localIp}:${localPort} -> ${tunnelInfo.ip}:${tunnelInfo.port}`);
-              } else {
-                sdp = sdp.trim().replace(/\r?\n/g, '\r\n') + '\r\n';
-              }
-              const outBuf = Buffer.from(sdp, 'utf8');
-              const headers = { ...proxyRes.headers, 'content-length': String(outBuf.length) };
-              res.writeHead(proxyRes.statusCode, headers);
-              res.end(outBuf);
-            });
-          } else {
-            sdp = sdp.trim().replace(/\r?\n/g, '\r\n') + '\r\n';
-            const outBuf = Buffer.from(sdp, 'utf8');
-            const headers = { ...proxyRes.headers, 'content-length': String(outBuf.length) };
-            res.writeHead(proxyRes.statusCode, headers);
-            res.end(outBuf);
-          }
-        });
-      } else {
-        res.writeHead(proxyRes.statusCode, proxyRes.headers);
-        proxyRes.pipe(res);
-      }
+      res.writeHead(proxyRes.statusCode, proxyRes.headers);
+      proxyRes.pipe(res);
     });
 
     proxyReq.on('error', (err) => {

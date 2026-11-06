@@ -40,6 +40,7 @@ struct gstreamer_webrtc *gst_webrtc_branch_start(gst_master_pipeline_t *master_p
 						 const char *name,
 						 const char *http_port,
 						 const char *stun_server,
+						 const char *turn_server,
 						 const char *web_root,
 						 const char *encoder_type);
 void gst_webrtc_branch_stop(struct gstreamer_webrtc *webrtc);

@@ -640,9 +640,19 @@
     setStreamBadge('connecting', 'Connecting...');
     log('Starting WebRTC handshake with /whep...', 'info');
 
-    pc = new RTCPeerConnection({
-      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
-    });
+    var iceServers = [{ urls: 'stun:stun.l.google.com:19302' }];
+    var turnUrl = localStorage.getItem('webrtc_turn_url') || 'turn:openrelay.metered.ca:80';
+    var turnUser = localStorage.getItem('webrtc_turn_user') || 'openrelayproject';
+    var turnPass = localStorage.getItem('webrtc_turn_pass') || 'openrelayproject';
+    if (turnUrl && turnUrl.trim()) {
+      var serverObj = { urls: turnUrl.trim() };
+      if (turnUser && turnUser.trim()) serverObj.username = turnUser.trim();
+      if (turnPass && turnPass.trim()) serverObj.credential = turnPass.trim();
+      iceServers.push(serverObj);
+      log('Using free TURN relay server: ' + turnUrl, 'info');
+    }
+
+    pc = new RTCPeerConnection({ iceServers: iceServers });
     window.__obsWebRTCPeerConnection = pc;
 
     statPcState.textContent = pc.connectionState;
@@ -673,6 +683,15 @@
     pc.ontrack = function (event) {
       log('WebRTC track received: ' + event.track.kind, 'info');
       statTracks.textContent = event.track.kind;
+
+      // Zero-latency playout & jitter buffer optimization in browser
+      if (pc.getReceivers) {
+        pc.getReceivers().forEach(function (r) {
+          if ('playoutDelayHint' in r) r.playoutDelayHint = 0;
+          if ('jitterBufferTarget' in r) r.jitterBufferTarget = 0;
+        });
+      }
+
       if (!video.srcObject) {
         video.srcObject = event.streams[0] || new MediaStream([event.track]);
       } else {
@@ -690,11 +709,37 @@
       badgeResolution.classList.remove('hidden');
     };
 
+    function waitForIceGathering(pc, timeoutMs) {
+      return new Promise(function (resolve) {
+        if (pc.iceGatheringState === 'complete') {
+          resolve();
+          return;
+        }
+        var timer = setTimeout(function () {
+          log('ICE candidate gathering timeout reached, proceeding with SDP offer', 'info');
+          resolve();
+        }, timeoutMs || 1000);
+
+        function checkState() {
+          if (pc.iceGatheringState === 'complete') {
+            clearTimeout(timer);
+            pc.removeEventListener('icegatheringstatechange', checkState);
+            resolve();
+          }
+        }
+        pc.addEventListener('icegatheringstatechange', checkState);
+      });
+    }
+
     pc.createOffer()
       .then(function (offer) {
         return pc.setLocalDescription(offer);
       })
       .then(function () {
+        return waitForIceGathering(pc, 800);
+      })
+      .then(function () {
+        log('Sending SDP offer to /whep (' + pc.localDescription.sdp.length + ' bytes)...', 'info');
         return fetch('/whep', {
           method: 'POST',
           headers: {
@@ -724,7 +769,7 @@
         });
       })
       .then(function () {
-        log('Remote description set. Waiting for video stream...', 'info');
+        log('Remote description set. WebRTC stream active!', 'info');
       })
       .catch(function (err) {
         log(err.message, 'warn');
@@ -951,6 +996,28 @@
     isManualDisconnect = true;
     cleanupWebRtc();
   });
+
+  // TURN Relay input binding
+  var inputTurnUrl = document.getElementById('input-turn-url');
+  var inputTurnUser = document.getElementById('input-turn-user');
+  var inputTurnPass = document.getElementById('input-turn-pass');
+  var btnSaveTurn = document.getElementById('btn-save-turn');
+
+  if (inputTurnUrl) {
+    inputTurnUrl.value = localStorage.getItem('webrtc_turn_url') || 'turn:openrelay.metered.ca:80';
+    inputTurnUser.value = localStorage.getItem('webrtc_turn_user') || 'openrelayproject';
+    inputTurnPass.value = localStorage.getItem('webrtc_turn_pass') || 'openrelayproject';
+
+    btnSaveTurn.addEventListener('click', function () {
+      localStorage.setItem('webrtc_turn_url', inputTurnUrl.value.trim());
+      localStorage.setItem('webrtc_turn_user', inputTurnUser.value.trim());
+      localStorage.setItem('webrtc_turn_pass', inputTurnPass.value.trim());
+      log('Saved TURN configuration. Reconnecting WebRTC...', 'info');
+      if (activeView === 'webrtc' && !isTestPattern) {
+        connectWhep();
+      }
+    });
+  }
 
   // Start with OBS Desktop (VNC) view by default
   switchTab('vnc');

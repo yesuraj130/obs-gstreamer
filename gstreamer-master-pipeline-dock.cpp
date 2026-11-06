@@ -112,6 +112,7 @@ struct GstDestination {
 	/* WebRTC specifics */
 	std::string webrtc_port;
 	std::string webrtc_stun;
+	std::string webrtc_turn;
 	std::string webrtc_web_root;
 	struct gstreamer_webrtc *webrtc_branch;
 
@@ -131,6 +132,7 @@ struct GstDestination {
 		  rtsp_branch(nullptr),
 		  webrtc_port("8888"),
 		  webrtc_stun(""),
+		  webrtc_turn(""),
 		  webrtc_web_root(""),
 		  webrtc_branch(nullptr),
 		  custom_pipeline("autovideosink sync=false"),
@@ -274,6 +276,7 @@ static void save_dock_config(obs_data_t *save_data)
 			obs_data_set_string(dObj, "rtsp_pipeline", d->rtsp_pipeline.c_str());
 			obs_data_set_string(dObj, "webrtc_port", d->webrtc_port.c_str());
 			obs_data_set_string(dObj, "webrtc_stun", d->webrtc_stun.c_str());
+			obs_data_set_string(dObj, "webrtc_turn", d->webrtc_turn.c_str());
 			obs_data_set_string(dObj, "webrtc_web_root", d->webrtc_web_root.c_str());
 			obs_data_set_string(dObj, "custom_pipeline", d->custom_pipeline.c_str());
 			obs_data_array_push_back(destsArray, dObj);
@@ -355,6 +358,7 @@ static void load_dock_config(obs_data_t *save_data)
 				dest->rtsp_pipeline = read_data_string(dObj, "rtsp_pipeline", DEFAULT_RTSP_PIPELINE);
 				dest->webrtc_port = read_data_string(dObj, "webrtc_port", "8888");
 				dest->webrtc_stun = read_data_string(dObj, "webrtc_stun");
+				dest->webrtc_turn = read_data_string(dObj, "webrtc_turn");
 				dest->webrtc_web_root = read_data_string(dObj, "webrtc_web_root");
 				dest->custom_pipeline = read_data_string(dObj, "custom_pipeline", "autovideosink sync=false");
 
@@ -598,6 +602,7 @@ static bool start_destination(GstMasterHub *hub, GstDestination *dest)
 			dest->name.c_str(),
 			dest->webrtc_port.c_str(),
 			dest->webrtc_stun.c_str(),
+			dest->webrtc_turn.c_str(),
 			dest->webrtc_web_root.c_str(),
 			hub->gpu_encoder_type.c_str()
 		);
@@ -829,9 +834,13 @@ public:
 		webrtcForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
 		m_webrtcPortEdit = new QLineEdit(QString::fromStdString(dest->webrtc_port), this);
 		m_webrtcStunEdit = new QLineEdit(QString::fromStdString(dest->webrtc_stun), this);
+		m_webrtcStunEdit->setPlaceholderText("stun://stun.l.google.com:19302 (Optional; Leave blank on LAN)");
+		m_webrtcTurnEdit = new QLineEdit(QString::fromStdString(dest->webrtc_turn), this);
+		m_webrtcTurnEdit->setPlaceholderText("turn://user:pass@host:port (Required for Cloud/WAN; Leave blank on LAN)");
 		m_webrtcRootEdit = new QLineEdit(QString::fromStdString(dest->webrtc_web_root), this);
 		webrtcForm->addRow("WHEP Port:", m_webrtcPortEdit);
 		webrtcForm->addRow("STUN Server:", m_webrtcStunEdit);
+		webrtcForm->addRow("TURN Server:", m_webrtcTurnEdit);
 		webrtcForm->addRow("Web Root Path:", m_webrtcRootEdit);
 		m_typeStack->addWidget(m_webrtcGroup);
 
@@ -889,6 +898,7 @@ private:
 
 		m_dest->webrtc_port = m_webrtcPortEdit->text().toStdString();
 		m_dest->webrtc_stun = m_webrtcStunEdit->text().toStdString();
+		m_dest->webrtc_turn = m_webrtcTurnEdit->text().toStdString();
 		m_dest->webrtc_web_root = m_webrtcRootEdit->text().toStdString();
 
 		m_dest->custom_pipeline = m_customPipeEdit->toPlainText().toStdString();
@@ -911,6 +921,7 @@ private:
 	QGroupBox *m_webrtcGroup;
 	QLineEdit *m_webrtcPortEdit;
 	QLineEdit *m_webrtcStunEdit;
+	QLineEdit *m_webrtcTurnEdit;
 	QLineEdit *m_webrtcRootEdit;
 
 	QGroupBox *m_customGroup;
