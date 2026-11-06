@@ -7,11 +7,62 @@
 #include <util/platform.h>
 #include <inttypes.h>
 
+#if defined(__GNUC__) && !defined(_WIN32)
+extern void obs_add_main_rendered_callback(void (*draw)(void *param), void *param) __attribute__((weak));
+extern void obs_remove_main_rendered_callback(void (*draw)(void *param), void *param) __attribute__((weak));
+#endif
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
+typedef void (*obs_add_main_rendered_cb_fn)(void (*draw)(void *param), void *param);
+typedef void (*obs_remove_main_rendered_cb_fn)(void (*draw)(void *param), void *param);
+
+static obs_add_main_rendered_cb_fn get_obs_add_main_rendered_callback(void)
+{
+	static obs_add_main_rendered_cb_fn fn = NULL;
+	static bool resolved = false;
+	if (!resolved)
+	{
+#ifdef _WIN32
+		HMODULE hObs = GetModuleHandleW(L"obs.dll");
+		if (!hObs) hObs = GetModuleHandleA("obs.dll");
+		if (hObs)
+			fn = (obs_add_main_rendered_cb_fn)GetProcAddress(hObs, "obs_add_main_rendered_callback");
+#elif defined(__GNUC__)
+		fn = obs_add_main_rendered_callback;
+#endif
+		resolved = true;
+	}
+	return fn;
+}
+
+static obs_remove_main_rendered_cb_fn get_obs_remove_main_rendered_callback(void)
+{
+	static obs_remove_main_rendered_cb_fn fn = NULL;
+	static bool resolved = false;
+	if (!resolved)
+	{
+#ifdef _WIN32
+		HMODULE hObs = GetModuleHandleW(L"obs.dll");
+		if (!hObs) hObs = GetModuleHandleA("obs.dll");
+		if (hObs)
+			fn = (obs_remove_main_rendered_cb_fn)GetProcAddress(hObs, "obs_remove_main_rendered_callback");
+#elif defined(__GNUC__)
+		fn = obs_remove_main_rendered_callback;
+#endif
+		resolved = true;
+	}
+	return fn;
+}
+
 struct gst_filter_callback
 {
 	obs_source_t *filter;
 	obs_source_t *target;
 	gst_master_pipeline_t *pipeline;
+	bool hook_active;
 };
 
 struct filter_private_data
@@ -19,11 +70,13 @@ struct filter_private_data
 	obs_source_t *source;
 	gst_master_pipeline_t *pipeline;
 	gs_texrender_t *texrender;
+	gs_texrender_t *scratch_texrender;
 	uint32_t width;
 	uint32_t height;
 	enum gs_color_format format;
 	bool active;
 	bool rendering;
+	bool rendered_this_frame;
 	uint64_t render_count;
 };
 
@@ -50,6 +103,8 @@ static void *filter_cb_create(obs_data_t *settings, obs_source_t *source)
 	struct filter_private_data *data = bzalloc(sizeof(struct filter_private_data));
 	data->source = source;
 	data->active = false;
+	data->rendering = false;
+	data->rendered_this_frame = false;
 	data->format = GS_UNKNOWN;
 	return data;
 }
@@ -59,13 +114,18 @@ static void filter_cb_destroy(void *p)
 	struct filter_private_data *data = (struct filter_private_data *)p;
 	if (data)
 	{
+		obs_enter_graphics();
 		if (data->texrender)
 		{
-			obs_enter_graphics();
 			gs_texrender_destroy(data->texrender);
 			data->texrender = NULL;
-			obs_leave_graphics();
 		}
+		if (data->scratch_texrender)
+		{
+			gs_texrender_destroy(data->scratch_texrender);
+			data->scratch_texrender = NULL;
+		}
+		obs_leave_graphics();
 		bfree(data);
 	}
 }
@@ -92,6 +152,8 @@ static void filter_cb_video_render(void *p, gs_effect_t *effect)
 		obs_source_skip_video_filter(data->source);
 		return;
 	}
+
+	data->rendered_this_frame = true;
 
 	if (!data->texrender)
 	{
@@ -161,6 +223,55 @@ static void filter_cb_video_render(void *p, gs_effect_t *effect)
 		gs_draw_sprite(texture, 0, draw_w, draw_h);
 }
 
+static void filter_cb_post_rendered_handler(void *param)
+{
+	gst_filter_callback_t *cb = (gst_filter_callback_t *)param;
+	if (!cb || !cb->filter || !cb->target) return;
+
+	struct filter_private_data *data = (struct filter_private_data *)obs_obj_get_data(cb->filter);
+	if (!data || !data->active || !data->pipeline) return;
+
+	// Case 1: Target was already rendered during normal OBS Program/Preview pass this frame
+	if (data->rendered_this_frame)
+	{
+		data->rendered_this_frame = false;
+		return;
+	}
+
+	// Case 2: Target is non-active (not rendered this frame). Render manually offscreen.
+	if (data->width == 0 || data->height == 0) return;
+
+	if (!data->scratch_texrender)
+	{
+		enum gs_color_format tex_fmt = (data->format != GS_UNKNOWN) ? data->format : get_device_native_color_format();
+		data->scratch_texrender = gs_texrender_create(tex_fmt, GS_ZS_NONE);
+		if (!data->scratch_texrender) return;
+	}
+
+	gs_texrender_reset(data->scratch_texrender);
+	if (gs_texrender_begin(data->scratch_texrender, data->width, data->height))
+	{
+		struct vec4 clear_color;
+		vec4_zero(&clear_color);
+		gs_clear(GS_CLEAR_COLOR, &clear_color, 0.0f, 0);
+		gs_ortho(0.0f, (float)data->width, 0.0f, (float)data->height, -100.0f, 100.0f);
+
+		// Calling obs_source_video_render on target automatically triggers its filter callback!
+		obs_source_video_render(cb->target);
+
+		gs_texrender_end(data->scratch_texrender);
+	}
+
+	data->rendered_this_frame = false;
+}
+
+static void filter_cb_render_handler(void *param, uint32_t cx, uint32_t cy)
+{
+	UNUSED_PARAMETER(cx);
+	UNUSED_PARAMETER(cy);
+	filter_cb_post_rendered_handler(param);
+}
+
 static struct obs_source_info gst_filter_callback_info =
 {
 	.id           = "gst_private_filter_callback",
@@ -189,6 +300,33 @@ static void pipeline_state_change(bool active, void *user_data)
 
 	struct filter_private_data *priv = (struct filter_private_data *)obs_obj_get_data(cb->filter);
 	if (priv) priv->active = active;
+
+	obs_add_main_rendered_cb_fn add_rendered = get_obs_add_main_rendered_callback();
+	obs_remove_main_rendered_cb_fn remove_rendered = get_obs_remove_main_rendered_callback();
+
+	if (active && !cb->hook_active)
+	{
+		if (add_rendered)
+		{
+			add_rendered(filter_cb_post_rendered_handler, cb);
+			blog(LOG_INFO, "[obs-gstreamer-filter-callback] Attached post-frame dual rendering hook (obs_add_main_rendered_callback)");
+		}
+		else
+		{
+			obs_add_main_render_callback(filter_cb_render_handler, cb);
+			blog(LOG_INFO, "[obs-gstreamer-filter-callback] Attached in-frame dual rendering hook (obs_add_main_render_callback)");
+		}
+		cb->hook_active = true;
+	}
+	else if (!active && cb->hook_active)
+	{
+		if (add_rendered && remove_rendered)
+			remove_rendered(filter_cb_post_rendered_handler, cb);
+		else
+			obs_remove_main_render_callback(filter_cb_render_handler, cb);
+		cb->hook_active = false;
+		blog(LOG_INFO, "[obs-gstreamer-filter-callback] Detached dual rendering hook (pipeline idle)");
+	}
 }
 
 gst_filter_callback_t *gst_filter_callback_create(gst_source_type_t type, const char *scene_name, const char *item_name, const char *custom_master_pipe, const char *encoder_type, int bitrate_kbps, int keyint_sec, uint32_t fps_num, uint32_t fps_den)
@@ -245,6 +383,8 @@ gst_filter_callback_t *gst_filter_callback_create(gst_source_type_t type, const 
 	{
 		priv->pipeline = cb->pipeline;
 		priv->active = false;
+		priv->rendering = false;
+		priv->rendered_this_frame = false;
 		priv->width = width;
 		priv->height = height;
 
@@ -252,6 +392,7 @@ gst_filter_callback_t *gst_filter_callback_create(gst_source_type_t type, const 
 		enum gs_color_format tex_fmt = get_device_native_color_format();
 		priv->format = tex_fmt;
 		priv->texrender = gs_texrender_create(tex_fmt, GS_ZS_NONE);
+		priv->scratch_texrender = gs_texrender_create(tex_fmt, GS_ZS_NONE);
 		obs_leave_graphics();
 	}
 
@@ -262,6 +403,7 @@ gst_filter_callback_t *gst_filter_callback_create(gst_source_type_t type, const 
 
 	cb->filter = filter;
 	cb->target = target;
+	cb->hook_active = false;
 
 	return cb;
 }
@@ -274,6 +416,18 @@ gst_master_pipeline_t *gst_filter_callback_get_pipeline(gst_filter_callback_t *c
 void gst_filter_callback_destroy(gst_filter_callback_t *cb)
 {
 	if (!cb) return;
+
+	if (cb->hook_active)
+	{
+		obs_add_main_rendered_cb_fn add_rendered = get_obs_add_main_rendered_callback();
+		obs_remove_main_rendered_cb_fn remove_rendered = get_obs_remove_main_rendered_callback();
+		if (add_rendered && remove_rendered)
+			remove_rendered(filter_cb_post_rendered_handler, cb);
+		else
+			obs_remove_main_render_callback(filter_cb_render_handler, cb);
+		cb->hook_active = false;
+		blog(LOG_INFO, "[obs-gstreamer-filter-callback] Detached dual rendering hook on destroy");
+	}
 
 	if (cb->filter)
 	{
