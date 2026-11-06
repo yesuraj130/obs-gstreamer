@@ -77,7 +77,7 @@ struct filter_private_data
 	enum gs_color_format format;
 	bool active;
 	bool rendering;
-	bool rendered_this_frame;
+	uint64_t last_frame_time;
 	uint64_t render_count;
 };
 
@@ -105,7 +105,7 @@ static void *filter_cb_create(obs_data_t *settings, obs_source_t *source)
 	data->source = source;
 	data->active = false;
 	data->rendering = false;
-	data->rendered_this_frame = false;
+	data->last_frame_time = 0;
 	data->format = GS_UNKNOWN;
 	return data;
 }
@@ -154,7 +154,17 @@ static void filter_cb_video_render(void *p, gs_effect_t *effect)
 		return;
 	}
 
-	data->rendered_this_frame = true;
+	uint64_t cur_frame_time = obs_get_video_frame_time();
+	if (cur_frame_time != 0 && data->last_frame_time == cur_frame_time)
+	{
+		// Second render in the exact same frame tick (e.g. Studio Mode Preview, Projector, Multiview).
+		// Tell OBS to skip our filter so it draws the source directly on this secondary display,
+		// without pushing any duplicate frames to GStreamer!
+		obs_source_skip_video_filter(data->source);
+		return;
+	}
+
+	data->last_frame_time = cur_frame_time;
 
 	if (!data->texrender)
 	{
@@ -232,14 +242,15 @@ static void filter_cb_post_rendered_handler(void *param)
 	struct filter_private_data *data = (struct filter_private_data *)obs_obj_get_data(cb->filter);
 	if (!data || !data->active || !data->pipeline) return;
 
-	// Case 1: Target was already rendered during normal OBS Program/Preview pass this frame
-	if (data->rendered_this_frame)
+	uint64_t cur_frame_time = obs_get_video_frame_time();
+
+	// Case 1: Target was already rendered during this frame tick by Program, Studio Mode Preview, or a Projector
+	if (cur_frame_time != 0 && data->last_frame_time == cur_frame_time)
 	{
-		data->rendered_this_frame = false;
 		return;
 	}
 
-	// Case 2: Target is non-active (not rendered this frame). Render manually offscreen.
+	// Case 2: Target is non-active (not rendered anywhere this tick). Render manually offscreen.
 	if (data->width == 0 || data->height == 0) return;
 
 	if (!data->scratch_texrender)
@@ -262,8 +273,6 @@ static void filter_cb_post_rendered_handler(void *param)
 
 		gs_texrender_end(data->scratch_texrender);
 	}
-
-	data->rendered_this_frame = false;
 }
 
 static void filter_cb_render_handler(void *param, uint32_t cx, uint32_t cy)
@@ -403,7 +412,7 @@ gst_filter_callback_t *gst_filter_callback_create(gst_source_type_t type, const 
 		priv->pipeline = cb->pipeline;
 		priv->active = false;
 		priv->rendering = false;
-		priv->rendered_this_frame = false;
+		priv->last_frame_time = 0;
 		priv->width = width;
 		priv->height = height;
 
