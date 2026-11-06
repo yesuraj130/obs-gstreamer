@@ -1,0 +1,577 @@
+01:40:43.063: CPU Name: AMD PRO A4-4350B R4, 5 COMPUTE CORES 2C+3G     
+01:40:43.063: CPU Speed: 2495MHz
+01:40:43.063: Physical Cores: 2, Logical Cores: 2
+01:40:43.063: Physical Memory: 3935MB Total, 1179MB Free
+01:40:43.063: Windows Version: 10.0 Build 19045 (release: 22H2; revision: 6456; 64-bit)
+01:40:43.063: Running as administrator: false
+01:40:43.063: Windows 10/11 Gaming Features:
+01:40:43.063: 	Game DVR: On
+01:40:43.063: 	Game Mode: Probably On (no reg key set)
+01:40:43.067: Sec. Software Status:
+01:40:43.070: 	Microsoft Defender Antivirus: enabled (AV)
+01:40:43.071: 	Windows Firewall: enabled (FW)
+01:40:43.073: Current Date/Time: 2026-11-07, 01:40:43
+01:40:43.073: Browser Hardware Acceleration: true
+01:40:43.073: Hide OBS windows from screen capture: false
+01:40:43.073: Qt Version: 6.11.1 (runtime), 6.11.1 (compiled)
+01:40:43.073: Portable mode: false
+01:40:43.240: OBS 32.2.2 (64-bit, windows)
+01:40:43.240: ---------------------------------
+01:40:43.355: ---------------------------------
+01:40:43.355: audio settings reset:
+01:40:43.355: 	samples per sec: 48000
+01:40:43.355: 	speakers:        1
+01:40:43.355: 	max buffering:   960 milliseconds
+01:40:43.355: 	buffering type:  dynamically increasing
+01:40:43.361: ---------------------------------
+01:40:43.361: Initializing D3D11...
+01:40:43.361: Available Video Adapters: 
+01:40:43.365: 	Adapter 0: AMD Radeon(TM) R4 Graphics
+01:40:43.365: 	  Dedicated VRAM: 121507840 (0.1 GiB)
+01:40:43.366: 	  Shared VRAM:    2063263744 (1.9 GiB)
+01:40:43.366: 	  PCI ID:         1002:98e4
+01:40:43.366: 	  HAGS Status:    Disabled (Default: No, Driver status: Unsupported)
+01:40:43.366: 	  Driver Version: 27.20.20913.2000
+01:40:43.367: 	  output 0:
+01:40:43.367: 	    name=
+01:40:43.367: 	    pos={0, 0}
+01:40:43.367: 	    size={1366, 768}
+01:40:43.367: 	    attached=true
+01:40:43.367: 	    refresh=60
+01:40:43.367: 	    bits_per_color=6
+01:40:43.367: 	    space=RGB_FULL_G22_NONE_P709
+01:40:43.367: 	    primaries=[r=(0.580078, 0.334961), g=(0.330078, 0.565430), b=(0.155273, 0.139648), wp=(0.313477, 0.329102)]
+01:40:43.367: 	    relative_gamut_area=[709=0.654763, P3=0.482672, 2020=0.346285]
+01:40:43.367: 	    sdr_white_nits=80
+01:40:43.367: 	    nit_range=[min=0.500000, max=270.000000, max_full_frame=270.000000]
+01:40:43.367: 	    dpi=96 (100%)
+01:40:43.367: 	    id=\\?\DISPLAY#AUO2E3C#4&fb867bc&0&UID256#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}
+01:40:43.367: 	    alt_id=\\.\DISPLAY1
+01:40:43.368: Loading up D3D11 on adapter AMD Radeon(TM) R4 Graphics (0)
+01:40:43.420: D3D11 loaded successfully, feature level used: b000
+01:40:43.420: DXGI increase maximum frame latency success
+01:40:43.421: D3D11 GPU priority setup failed (not admin?)
+01:40:43.788: ---------------------------------
+01:40:43.788: video settings reset:
+01:40:43.788: 	base resolution:   424x240
+01:40:43.788: 	output resolution: 424x240
+01:40:43.788: 	downscale filter:  Bilinear
+01:40:43.788: 	fps:               30/1
+01:40:43.788: 	format:            NV12
+01:40:43.788: 	YUV mode:          sRGB/Full
+01:40:43.789: NV12 texture support enabled
+01:40:43.789: P010 texture support not available
+01:40:43.792: Audio monitoring device:
+01:40:43.792: 	name: Default
+01:40:43.792: 	id: default
+01:40:43.841: ---------------------------------
+01:40:43.843: dllhell: module loaded
+01:40:43.843: dllhell: added DLL directory: C:\Windows\system32
+01:40:43.843: dllhell: added DLL directory: C:\Windows
+01:40:43.844: dllhell: added DLL directory: C:\Windows\System32\Wbem
+01:40:43.844: dllhell: added DLL directory: C:\Windows\System32\WindowsPowerShell\v1.0\
+01:40:43.844: dllhell: added DLL directory: C:\Windows\System32\OpenSSH\
+01:40:43.844: dllhell: added DLL directory: C:\Program Files\filebrowser\
+01:40:43.844: dllhell: added DLL directory: C:\Program Files\Microsoft VS Code\bin
+01:40:43.844: dllhell: added DLL directory: C:\Program Files\Microsoft VS Code\bin\copilot-shim
+01:40:43.844: dllhell: added DLL directory: C:\Program Files\Git\cmd
+01:40:43.844: dllhell: added DLL directory: C:\Users\HJM-Laptop\AppData\Local\Programs\Python\Python312\Scripts\
+01:40:43.844: dllhell: added DLL directory: C:\Users\HJM-Laptop\AppData\Local\Programs\Python\Python312\
+01:40:43.845: dllhell: added DLL directory: C:\Program Files\gstreamer\1.0\msvc_x86_64\bin
+01:40:43.845: dllhell: added DLL directory: C:\Users\HJM-Laptop\AppData\Local\Programs\Python\Python315\Scripts\
+01:40:43.845: dllhell: added DLL directory: C:\Users\HJM-Laptop\AppData\Local\Programs\Python\Python315\
+01:40:43.845: dllhell: added DLL directory: C:\Users\HJM-Laptop\AppData\Local\Programs\Python\Launcher\
+01:40:43.845: dllhell: added DLL directory: C:\Users\HJM-Laptop\AppData\Local\Microsoft\WindowsApps
+01:40:43.848: No AJA devices found, skipping loading AJA UI plugin
+01:40:43.848: Failed to initialize module 'aja-output-ui.dll'
+01:40:43.851: No AJA devices found, skipping loading AJA plugin
+01:40:43.852: Failed to initialize module 'aja.dll'
+01:40:43.852: Skipping module '../../obs-plugins/64bit/chrome_elf.dll', not an OBS plugin
+01:40:43.856: [CoreAudio encoder]: CoreAudio AAC encoder not installed on the system or couldn't be loaded
+01:40:43.858: Failed to load 'en-US' text for module: 'decklink-captions.dll'
+01:40:43.860: Failed to load 'en-US' text for module: 'decklink-output-ui.dll'
+01:40:43.866: A DeckLink iterator could not be created.  The DeckLink drivers may not be installed
+01:40:43.866: Failed to initialize module 'decklink.dll'
+01:40:43.893: Skipping module '../../obs-plugins/64bit/libcef.dll', not an OBS plugin
+01:40:43.894: Skipping module '../../obs-plugins/64bit/libEGL.dll', not an OBS plugin
+01:40:43.895: Skipping module '../../obs-plugins/64bit/libGLESv2.dll', not an OBS plugin
+01:40:43.898: [Move Transition] loaded version 3.0.1
+01:40:43.899: Failed to get nvARPose.dll version info size
+01:40:43.905: Failed to get C:\Program Files\NVIDIA Corporation\NVIDIA Audio Effects SDK\NVAudioEffects.dll version info size
+01:40:43.905: [NVIDIA Audio Effects:] NVIDIA denoiser disabled, redistributable not found or could not be loaded.
+01:40:43.906: Failed to get C:\Program Files\NVIDIA Corporation\NVIDIA Video Effects\NVVideoEffects.dll version info size
+01:40:43.906: [NVIDIA VIDEO FX]: FX disabled, redistributable not found or could not be loaded.
+01:40:43.951: [obs-browser]: Version 2.26.9
+01:40:43.951: [obs-browser]: CEF Version 127.0.6533.120 (runtime), 127.145.7+g2b7d20b+chromium-127.0.6533.120 (compiled)
+01:40:44.381: [obs-gstreamer] Loading plugin (version: 868f697)
+01:40:44.381: [obs-gstreamer]   Build Date: 2026-11-06 20:03:26 UTC (CI (GitHub Actions #136))
+01:40:44.381: [obs-gstreamer]   Repository: https://github.com/yesuraj130/obs-gstreamer
+01:40:44.574: [obs-gstreamer] GStreamer runtime initialized: GStreamer 1.28.8 (GIT)
+01:40:44.574: [obs-gstreamer] Registered raw output module: hjm-gstreamer-output
+01:40:44.575: [obs-gstreamer] Registered encoded output module: hjm-gstreamer-output-encoded
+01:40:44.575: [obs-gstreamer] Registered source module: gstreamer-source
+01:40:44.575: [obs-gstreamer] Registered source module: gstreamer-source-video
+01:40:44.575: [obs-gstreamer] Registered filter module: gstreamer-filter-video (CPU)
+01:40:44.575: [obs-gstreamer] Registered filter module: gstreamer-filter-video-gpu (GPU)
+01:40:44.575: [obs-gstreamer] Registered filter module: gstreamer-filter-audio
+01:40:44.575: [obs-gstreamer-encoder-callback] Registered master GPU texture encoder & driver
+01:40:44.575: [obs-gstreamer-output-callback] Registered master output callback module
+01:40:44.575: [obs-gstreamer-filter-callback] Registered private filter callback
+01:40:44.612: [obs-gstreamer-dock] Registered GStreamer Master Hub dock early during module load
+01:40:44.612: [obs-gstreamer] Plugin loaded successfully
+01:40:44.616: LoadLibrary failed for 'nvEncodeAPI64.dll': The specified module could not be found.
+01:40:44.616:  (126)
+01:40:44.616: NVENC not supported
+01:40:44.616: Failed to initialize module 'obs-nvenc.dll'
+01:40:44.785: [obs-websocket] [obs_module_load] you can haz websockets (Version: 5.7.4 | RPC Version: 1)
+01:40:44.785: [obs-websocket] [obs_module_load] Qt version (compile-time): 6.11.1 | Qt version (run-time): 6.11.1
+01:40:44.785: [obs-websocket] [obs_module_load] Linked ASIO Version: 103200
+01:40:44.802: [obs-websocket] [obs_module_load] Module loaded.
+01:40:44.810: [Source Clone] loaded version 0.1.5
+01:40:44.821: [vlc-video]: VLC 3.0.18 Vetinari found, VLC video source enabled
+01:40:44.850: ---------------------------------
+01:40:44.850:   Loaded Modules:
+01:40:44.850:     win-wasapi.dll
+01:40:44.850:     win-dshow.dll
+01:40:44.850:     win-capture.dll
+01:40:44.850:     vlc-video.dll
+01:40:44.850:     text-freetype2.dll
+01:40:44.850:     source-clone.dll
+01:40:44.850:     rtmp-services.dll
+01:40:44.850:     obs-x264.dll
+01:40:44.850:     obs-websocket.dll
+01:40:44.850:     obs-webrtc.dll
+01:40:44.850:     obs-vst.dll
+01:40:44.850:     obs-transitions.dll
+01:40:44.850:     obs-text.dll
+01:40:44.850:     obs-qsv11.dll
+01:40:44.850:     obs-outputs.dll
+01:40:44.850:     obs-gstreamer.dll
+01:40:44.850:     obs-filters.dll
+01:40:44.850:     obs-ffmpeg.dll
+01:40:44.850:     obs-browser.dll
+01:40:44.850:     nv-filters.dll
+01:40:44.850:     move-transition.dll
+01:40:44.850:     image-source.dll
+01:40:44.850:     frontend-tools.dll
+01:40:44.850:     droidcam-obs.dll
+01:40:44.850:     decklink-output-ui.dll
+01:40:44.850:     decklink-captions.dll
+01:40:44.850:     coreaudio-encoder.dll
+01:40:44.850:     0dllhell.dll
+01:40:44.850: ---------------------------------
+01:40:44.852: ---------------------------------
+01:40:44.852: Available Encoders:
+01:40:44.852:   Video Encoders:
+01:40:44.852: 	- ffmpeg_svt_av1 (SVT-AV1)
+01:40:44.852: 	- ffmpeg_aom_av1 (AOM AV1)
+01:40:44.852: 	- h264_texture_amf (AMD HW H.264 (AVC))
+01:40:44.852: 	- gstreamer-encoder-callback (GStreamer Master Pipeline GPU Texture Encoder)
+01:40:44.852: 	- hjm-gstreamer-encoder-callback (GStreamer Master Pipeline GPU Texture Encoder)
+01:40:44.852: 	- obs_x264 (x264)
+01:40:44.852:   Audio Encoders:
+01:40:44.852: 	- ffmpeg_aac (FFmpeg AAC)
+01:40:44.852: 	- ffmpeg_opus (FFmpeg Opus)
+01:40:44.852: 	- ffmpeg_pcm_s16le (FFmpeg PCM (16-bit))
+01:40:44.852: 	- ffmpeg_pcm_s24le (FFmpeg PCM (24-bit))
+01:40:44.852: 	- ffmpeg_pcm_f32le (FFmpeg PCM (32-bit float))
+01:40:44.852: 	- ffmpeg_alac (FFmpeg ALAC (24-bit))
+01:40:44.852: 	- ffmpeg_flac (FFmpeg FLAC (16-bit))
+01:40:44.852: ==== Startup complete ===============================================
+01:40:44.854: signal_handler_connect: signal 'file_changed' not found
+01:40:45.005: All scene data cleared
+01:40:45.005: ------------------------------------------------
+01:40:45.018: [obs-scripting]: Loaded lua script: clock-source.lua
+01:40:45.022: [obs-scripting]: Loaded lua script: countdown.lua
+01:40:45.039: [obs-scripting]: Loaded lua script: StopWatch-[6.1].lua
+01:40:45.041: [obs-gstreamer-source] GStreamer Video Source: Source created
+01:40:45.096: [Media Source 'Media']: settings:
+01:40:45.096: 	input:                   E:/New folder/Videos/Ebenesarae _ John Jebaraj _ Tamil Christian song _johnjebaraj  _tamilchristiansongs(720P_HD).mp4
+01:40:45.096: 	input_format:            (null)
+01:40:45.096: 	speed:                   100
+01:40:45.096: 	is_looping:              yes
+01:40:45.096: 	is_linear_alpha:         no
+01:40:45.096: 	is_hw_decoding:          yes
+01:40:45.096: 	is_clear_on_media_end:   no
+01:40:45.096: 	restart_on_activate:     yes
+01:40:45.096: 	close_when_inactive:     yes
+01:40:45.096: 	full_decode:             no
+01:40:45.096: 	ffmpeg_options:          
+01:40:45.496: Switched to scene 'Scene'
+01:40:45.664: [obs-gstreamer-dock] Restored 1 Master Hub(s) from OBS scene collection
+01:40:45.665: ------------------------------------------------
+01:40:45.665: Loaded scenes:
+01:40:45.665: - scene 'Scene':
+01:40:45.665:     - source: 'Color' (color_source_v3)
+01:40:45.665:     - source: 'Media' (ffmpeg_source)
+01:40:45.665:         - monitoring: monitor and output
+01:40:45.665:     - source: 'Browser' (browser_source)
+01:40:45.665:     - source: 'Image' (image_source)
+01:40:45.665:     - source: 'GStreamer Video Source' (gstreamer-source-video)
+01:40:45.665:     - source: 'Lua Clock' (lua_clock_source)
+01:40:45.665:     - source: 'Text (GDI+)' (text_gdiplus_v3)
+01:40:45.665:     - filter: 'Master Pipeline Filter Tap' (gst_private_filter_callback)
+01:40:45.665:     - filter: 'Master Pipeline Filter Tap' (gst_private_filter_callback)
+01:40:45.665: - scene 'Scene 2':
+01:40:45.665:     - source: 'Image' (image_source)
+01:40:45.665: ------------------------------------------------
+01:40:46.283: [obs-gstreamer-dock] Autostarting destination 'Default RTSP' for hub 'Program Master Hub'
+01:40:46.283: [obs-gstreamer-dock] Starting Master Pipeline for 'Program Master Hub' (method='Render Callback (GPU Direct Texture)', encoder=auto, bitrate=500 kbps)
+01:40:46.283: [obs-gstreamer-master] GPU Backend: Direct3D 11 (Adapter: Direct3D 11) | Available GStreamer H.264 encoders: [amfh264enc, mfh264enc, x264enc]
+01:40:46.284: [obs-gstreamer-master] Enabled Direct3D 11 multithread protection on OBS device/context
+01:40:46.359: [obs-gstreamer-master] Created dedicated GStreamer Direct3D 11 device on OBS GPU adapter (full context isolation)
+01:40:47.306: [obs-gstreamer-master] Launching Master Hardware Encoder Pipeline (gpu_zero_copy=yes, encoder=amfh264enc, appsrc_format=BGRA): appsrc name=hub_appsrc is-live=true format=GST_FORMAT_TIME do-timestamp=true caps="video/x-raw(memory:D3D11Memory), width=424, height=240, format=BGRA, framerate=30/1" ! d3d11convert ! video/x-raw(memory:D3D11Memory), format=NV12 ! amfh264enc gop-size=30 bitrate=500 ! h264parse config-interval=1 ! video/x-h264, stream-format=byte-stream, alignment=au ! appsink name=hub_appsink sync=false drop=true max-buffers=1
+01:40:48.182: [obs-gstreamer-dock] Starting RTSP destination on port 8554/live linked to master pipeline 'Program Master Hub'...
+01:40:48.183: [obs-gstreamer-rtspserver] Bound new RTSP server listening on port 8554
+01:40:48.184: [obs-gstreamer-rtspserver] RTSP branch started: rtsp://0.0.0.0:8554/live (name='Default RTSP', waiting for client connection)
+01:42:58.984: [obs-gstreamer-dock] Starting WebRTC destination on port 8888 linked to master pipeline 'Program Master Hub'...
+01:42:58.986: [obs-gstreamer-webrtc] WebRTC web root: C:\Users\HJM-Laptop\AppData\Local\obs-gstreamer\webrtc
+01:42:58.993: [obs-gstreamer-webrtc] WebRTC branch started: http://0.0.0.0:8888/ (name='Default WebRTC', waiting for viewer connection)
+01:42:58.993: [obs-gstreamer-dock] WebRTC branch active on port 8888
+01:43:05.707: [obs-gstreamer-dock] Starting Master Pipeline for 'Master Hub 2' (method='Filter Callback (Source Video Filter Tap)', encoder=auto, bitrate=500 kbps)
+01:43:05.707: [obs-gstreamer-master] Enabled Direct3D 11 multithread protection on OBS device/context
+01:43:05.904: [obs-gstreamer-master] Created dedicated GStreamer Direct3D 11 device on OBS GPU adapter (full context isolation)
+01:43:05.908: [obs-gstreamer-master] Launching Master Hardware Encoder Pipeline (gpu_zero_copy=yes, encoder=amfh264enc, appsrc_format=BGRA): appsrc name=hub_appsrc is-live=true format=GST_FORMAT_TIME do-timestamp=true caps="video/x-raw(memory:D3D11Memory), width=424, height=240, format=BGRA, framerate=30/1" ! d3d11convert ! video/x-raw(memory:D3D11Memory), format=NV12 ! amfh264enc gop-size=30 bitrate=500 ! h264parse config-interval=1 ! video/x-h264, stream-format=byte-stream, alignment=au ! appsink name=hub_appsink sync=false drop=true max-buffers=1
+01:43:05.954: [obs-gstreamer-filter-callback] Initialized filter tap for target 'Scene' (424x240, format=5, waiting for client connection)
+01:43:05.954: [obs-gstreamer-dock] Starting RTSP destination on port 8554/live2 linked to master pipeline 'Master Hub 2'...
+01:43:05.955: [obs-gstreamer-rtspserver] Reusing RTSP server on port 8554 (refcount=2)
+01:43:05.955: [obs-gstreamer-rtspserver] RTSP branch started: rtsp://0.0.0.0:8554/live2 (name='RTSP Main', waiting for client connection)
+01:43:15.537: [obs-gstreamer-dock] Starting Master Pipeline for 'Master Hub 3' (method='Filter Callback (Source Video Filter Tap)', encoder=auto, bitrate=500 kbps)
+01:43:15.537: [obs-gstreamer-master] Enabled Direct3D 11 multithread protection on OBS device/context
+01:43:15.579: [obs-gstreamer-master] Created dedicated GStreamer Direct3D 11 device on OBS GPU adapter (full context isolation)
+01:43:15.581: [obs-gstreamer-master] Launching Master Hardware Encoder Pipeline (gpu_zero_copy=yes, encoder=amfh264enc, appsrc_format=BGRA): appsrc name=hub_appsrc is-live=true format=GST_FORMAT_TIME do-timestamp=true caps="video/x-raw(memory:D3D11Memory), width=448, height=264, format=BGRA, framerate=30/1" ! d3d11convert ! video/x-raw(memory:D3D11Memory), format=NV12 ! amfh264enc gop-size=30 bitrate=500 ! h264parse config-interval=1 ! video/x-h264, stream-format=byte-stream, alignment=au ! appsink name=hub_appsink sync=false drop=true max-buffers=1
+01:43:15.630: [obs-gstreamer-filter-callback] Initialized filter tap for target 'Text (GDI+)' (448x264, format=5, waiting for client connection)
+01:43:15.630: [obs-gstreamer-dock] Starting RTSP destination on port 8554/live3 linked to master pipeline 'Master Hub 3'...
+01:43:15.630: [obs-gstreamer-rtspserver] Reusing RTSP server on port 8554 (refcount=3)
+01:43:15.630: [obs-gstreamer-rtspserver] RTSP branch started: rtsp://0.0.0.0:8554/live3 (name='RTSP Main', waiting for client connection)
+01:43:36.582: [obs-gstreamer-dock] Starting WebRTC destination on port 8887 linked to master pipeline 'Master Hub 3'...
+01:43:36.583: [obs-gstreamer-webrtc] WebRTC web root: C:\Users\HJM-Laptop\AppData\Local\obs-gstreamer\webrtc
+01:43:36.587: [obs-gstreamer-webrtc] WebRTC branch started: http://0.0.0.0:8887/ (name='RTSP Stream 2', waiting for viewer connection)
+01:43:36.587: [obs-gstreamer-dock] WebRTC branch active on port 8887
+01:44:07.534: [obs-gstreamer-dock] Starting WebRTC destination on port 8886 linked to master pipeline 'Master Hub 2'...
+01:44:07.535: [obs-gstreamer-webrtc] WebRTC web root: C:\Users\HJM-Laptop\AppData\Local\obs-gstreamer\webrtc
+01:44:07.537: [obs-gstreamer-webrtc] WebRTC branch started: http://0.0.0.0:8886/ (name='RTSP Stream 2', waiting for viewer connection)
+01:44:07.537: [obs-gstreamer-dock] WebRTC branch active on port 8886
+01:44:16.227: [obs-gstreamer-rtspserver] RTSP client connected on 8554/live (clients=1): subscribing 'Default RTSP' to master pipeline
+01:44:16.239: [obs-gstreamer-master] Subscriber 'Default RTSP' connected
+01:44:16.244: [obs-gstreamer-master] First destination active! Starting master encoder.
+01:44:16.245: [obs-gstreamer-render-callback] Attached post-frame render callback (obs_add_main_rendered_callback)
+01:44:16.255: [obs-gstreamer-render-callback] Main output texture available: 424x240, format=5
+01:44:16.257: [obs-gstreamer-master] Initialized D3D11 zero-copy ring buffer (2 slots, appsrc_format=BGRA)
+01:44:16.277: [obs-gstreamer-master] D3D11 zero-copy frame #1 pushed (424x240, format=BGRA, slot=0, drops=0)
+01:44:16.296: [obs-gstreamer-master] Encoder busy: dropped D3D11 frame #3 (all 2 slots in use, total drops: 1)
+01:44:16.393: [obs-gstreamer-master] Encoded sample #1: 12791 bytes, keyframe=yes (gpu_zero_copy=yes, stagesurf=NONE)
+01:44:16.393: [obs-gstreamer-rtspserver] Keyframe delivered to 'Default RTSP', client playback starting
+01:44:19.491: [obs-gstreamer-rtspserver] RTSP client disconnected on 8554/live (remaining=0)
+01:44:19.491: [obs-gstreamer-rtspserver] All RTSP clients disconnected on 8554/live: unsubscribing 'Default RTSP' from master pipeline
+01:44:19.491: [obs-gstreamer-master] Subscriber 'Default RTSP' disconnected
+01:44:19.491: [obs-gstreamer-master] All destinations inactive. Pausing encoder pipeline (0% CPU/GPU).
+01:44:19.492: [obs-gstreamer-render-callback] Pipeline idle: detached render callback (0% GPU)
+01:44:28.403: [obs-gstreamer-rtspserver] RTSP client connected on 8554/live2 (clients=1): subscribing 'RTSP Main' to master pipeline
+01:44:28.404: [obs-gstreamer-master] Subscriber 'RTSP Main' connected
+01:44:28.404: [obs-gstreamer-master] First destination active! Starting master encoder.
+01:44:28.404: [obs-gstreamer-filter-callback] Client connected: Attached private filter tap to 'Scene'
+01:44:28.404: [obs-gstreamer-filter-callback] Attached post-frame dual rendering hook (obs_add_main_rendered_callback)
+01:44:28.437: [obs-gstreamer-filter-callback] Captured zero-copy filter texture #1 (424x240, format=5)
+01:44:28.441: [obs-gstreamer-master] Initialized D3D11 zero-copy ring buffer (2 slots, appsrc_format=BGRA)
+01:44:28.445: [obs-gstreamer-master] D3D11 zero-copy frame #1 pushed (424x240, format=BGRA, slot=0, drops=0)
+01:44:28.496: [obs-gstreamer-master] Encoder busy: dropped D3D11 frame #3 (all 2 slots in use, total drops: 1)
+01:44:28.537: [obs-gstreamer-master] Encoded sample #1: 11416 bytes, keyframe=yes (gpu_zero_copy=yes, stagesurf=NONE)
+01:44:28.537: [obs-gstreamer-rtspserver] Keyframe delivered to 'RTSP Main', client playback starting
+01:44:38.397: [obs-gstreamer-filter-callback] Captured zero-copy filter texture #300 (424x240, format=5)
+01:44:38.410: User switched to scene 'Scene 2'
+01:44:38.432: [obs-gstreamer-master] D3D11 zero-copy frame #300 pushed (424x240, format=BGRA, slot=1, drops=1)
+01:44:38.467: [obs-gstreamer-master] Encoded sample #300: 1989 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+01:44:48.463: [obs-gstreamer-filter-callback] Captured zero-copy filter texture #600 (424x240, format=5)
+01:44:48.565: [obs-gstreamer-master] D3D11 zero-copy frame #600 pushed (424x240, format=BGRA, slot=1, drops=3)
+01:44:48.600: [obs-gstreamer-master] Encoded sample #600: 1782 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+01:44:58.463: [obs-gstreamer-filter-callback] Captured zero-copy filter texture #900 (424x240, format=5)
+01:44:58.563: [obs-gstreamer-master] D3D11 zero-copy frame #900 pushed (424x240, format=BGRA, slot=1, drops=3)
+01:44:58.599: [obs-gstreamer-master] Encoded sample #900: 1370 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+01:45:08.463: [obs-gstreamer-filter-callback] Captured zero-copy filter texture #1200 (424x240, format=5)
+01:45:08.563: [obs-gstreamer-master] D3D11 zero-copy frame #1200 pushed (424x240, format=BGRA, slot=1, drops=3)
+01:45:08.600: [obs-gstreamer-master] Encoded sample #1200: 873 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+01:45:11.636: [obs-gstreamer-rtspserver] RTSP client connected on 8554/live (clients=1): subscribing 'Default RTSP' to master pipeline
+01:45:11.636: [obs-gstreamer-master] Subscriber 'Default RTSP' connected
+01:45:11.636: [obs-gstreamer-master] First destination active! Starting master encoder.
+01:45:11.637: [obs-gstreamer-render-callback] Attached post-frame render callback (obs_add_main_rendered_callback)
+01:45:11.649: [obs-gstreamer-rtspserver] Keyframe delivered to 'Default RTSP', client playback starting
+01:45:18.431: [obs-gstreamer-master] D3D11 zero-copy frame #300 pushed (424x240, format=BGRA, slot=1, drops=0)
+01:45:18.465: [obs-gstreamer-filter-callback] Captured zero-copy filter texture #1500 (424x240, format=5)
+01:45:18.466: [obs-gstreamer-master] Encoded sample #300: 953 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+01:45:18.564: [obs-gstreamer-master] D3D11 zero-copy frame #1500 pushed (424x240, format=BGRA, slot=1, drops=3)
+01:45:18.600: [obs-gstreamer-master] Encoded sample #1500: 2043 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+01:45:28.496: [obs-gstreamer-master] D3D11 zero-copy frame #600 pushed (424x240, format=BGRA, slot=1, drops=0)
+01:45:28.530: [obs-gstreamer-filter-callback] Captured zero-copy filter texture #1800 (424x240, format=5)
+01:45:28.534: [obs-gstreamer-master] Encoded sample #600: 692 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+01:45:28.631: [obs-gstreamer-master] D3D11 zero-copy frame #1800 pushed (424x240, format=BGRA, slot=1, drops=3)
+01:45:28.668: [obs-gstreamer-master] Encoded sample #1800: 2741 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+01:45:38.509: [obs-gstreamer-master] D3D11 zero-copy frame #900 pushed (424x240, format=BGRA, slot=1, drops=0)
+01:45:38.540: [obs-gstreamer-filter-callback] Captured zero-copy filter texture #2100 (424x240, format=5)
+01:45:38.541: [obs-gstreamer-master] Encoded sample #900: 688 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+01:45:38.630: [obs-gstreamer-master] D3D11 zero-copy frame #2100 pushed (424x240, format=BGRA, slot=1, drops=3)
+01:45:38.666: [obs-gstreamer-master] Encoded sample #2100: 1940 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+01:45:39.541: [obs-gstreamer-rtspserver] RTSP client connected on 8554/live3 (clients=1): subscribing 'RTSP Main' to master pipeline
+01:45:39.541: [obs-gstreamer-master] Subscriber 'RTSP Main' connected
+01:45:39.541: [obs-gstreamer-master] First destination active! Starting master encoder.
+01:45:39.542: [obs-gstreamer-filter-callback] Client connected: Attached private filter tap to 'Text (GDI+)'
+01:45:39.542: [obs-gstreamer-filter-callback] Attached post-frame dual rendering hook (obs_add_main_rendered_callback)
+01:45:39.580: [obs-gstreamer-filter-callback] Captured zero-copy filter texture #1 (448x264, format=5)
+01:45:39.582: [obs-gstreamer-master] Initialized D3D11 zero-copy ring buffer (2 slots, appsrc_format=BGRA)
+01:45:39.582: [obs-gstreamer-master] D3D11 zero-copy frame #1 pushed (448x264, format=BGRA, slot=0, drops=0)
+01:45:39.600: [obs-gstreamer-master] Encoder busy: dropped D3D11 frame #3 (all 2 slots in use, total drops: 1)
+01:45:39.839: [obs-gstreamer-master] Encoded sample #1: 7246 bytes, keyframe=yes (gpu_zero_copy=yes, stagesurf=NONE)
+01:45:39.839: [obs-gstreamer-rtspserver] Keyframe delivered to 'RTSP Main', client playback starting
+01:45:44.364: [obs-gstreamer-master] Encoder busy: dropped D3D11 frame #1074 (all 2 slots in use, total drops: 1)
+01:45:48.636: [obs-gstreamer-filter-callback] Captured zero-copy filter texture #2400 (424x240, format=5)
+01:45:48.801: [obs-gstreamer-master] D3D11 zero-copy frame #1200 pushed (424x240, format=BGRA, slot=1, drops=6)
+01:45:48.848: [obs-gstreamer-master] Encoded sample #1200: 692 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+01:45:48.936: [obs-gstreamer-master] D3D11 zero-copy frame #2400 pushed (424x240, format=BGRA, slot=1, drops=9)
+01:45:48.981: [obs-gstreamer-master] Encoded sample #2400: 1960 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+01:45:49.601: [obs-gstreamer-filter-callback] Captured zero-copy filter texture #300 (448x264, format=5)
+01:45:50.001: [obs-gstreamer-master] D3D11 zero-copy frame #300 pushed (448x264, format=BGRA, slot=1, drops=12)
+01:45:50.039: [obs-gstreamer-master] Encoded sample #300: 520 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+01:45:59.564: adding 21 milliseconds of audio buffering, total audio buffering is now 21 milliseconds (source: Media)
+01:45:59.564: 
+01:45:59.875: [obs-gstreamer-filter-callback] Captured zero-copy filter texture #2700 (424x240, format=5)
+01:46:01.112: [obs-gstreamer-filter-callback] Captured zero-copy filter texture #600 (448x264, format=5)
+01:46:01.266: [obs-gstreamer-master] D3D11 zero-copy frame #2700 pushed (424x240, format=BGRA, slot=1, drops=33)
+01:46:01.684: [obs-gstreamer-master] Encoded sample #2700: 1249 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+01:46:01.823: [obs-gstreamer-master] D3D11 zero-copy frame #1500 pushed (424x240, format=BGRA, slot=1, drops=45)
+01:46:02.082: [obs-gstreamer-master] Encoded sample #1500: 796 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+01:46:02.401: adding 170 milliseconds of audio buffering, total audio buffering is now 192 milliseconds (source: Media)
+01:46:02.401: 
+01:46:03.361: adding 21 milliseconds of audio buffering, total audio buffering is now 213 milliseconds (source: Media)
+01:46:03.361: 
+01:46:03.660: adding 42 milliseconds of audio buffering, total audio buffering is now 256 milliseconds (source: Media)
+01:46:03.660: 
+01:46:05.473: [obs-gstreamer-master] D3D11 zero-copy frame #600 pushed (448x264, format=BGRA, slot=1, drops=72)
+01:46:05.712: [obs-gstreamer-master] Encoded sample #600: 8153 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+01:46:09.003: [obs-gstreamer-master] Encoder busy: dropped D3D11 frame #1559 (all 2 slots in use, total drops: 120)
+01:46:11.610: [obs-gstreamer-master] Encoder busy: dropped D3D11 frame #2816 (all 2 slots in use, total drops: 120)
+01:46:12.467: [obs-gstreamer-master] Encoder busy: dropped D3D11 frame #701 (all 2 slots in use, total drops: 120)
+01:46:15.147: [obs-gstreamer-filter-callback] Captured zero-copy filter texture #3000 (424x240, format=5)
+01:46:16.100: [obs-gstreamer-filter-callback] Captured zero-copy filter texture #900 (448x264, format=5)
+01:46:20.237: [obs-gstreamer-master] D3D11 zero-copy frame #3000 pushed (424x240, format=BGRA, slot=1, drops=153)
+01:46:20.272: [obs-gstreamer-master] Encoded sample #3000: 796 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+01:46:20.599: [obs-gstreamer-master] D3D11 zero-copy frame #1800 pushed (424x240, format=BGRA, slot=1, drops=165)
+01:46:20.650: [obs-gstreamer-master] Encoded sample #1800: 692 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+01:46:21.265: [obs-gstreamer-master] D3D11 zero-copy frame #900 pushed (448x264, format=BGRA, slot=1, drops=153)
+01:46:21.310: [obs-gstreamer-master] Encoded sample #900: 2132 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+01:46:26.178: [obs-gstreamer-filter-callback] Captured zero-copy filter texture #3300 (424x240, format=5)
+01:46:27.351: [obs-gstreamer-filter-callback] Captured zero-copy filter texture #1200 (448x264, format=5)
+01:46:30.342: [obs-gstreamer-master] Encoder busy: dropped D3D11 frame #1965 (all 2 slots in use, total drops: 240)
+01:46:34.470: [obs-gstreamer-master] D3D11 zero-copy frame #3300 pushed (424x240, format=BGRA, slot=1, drops=226)
+01:46:34.506: [obs-gstreamer-master] Encoded sample #3300: 1856 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+01:46:35.369: [obs-gstreamer-master] D3D11 zero-copy frame #2100 pushed (424x240, format=BGRA, slot=1, drops=246)
+01:46:35.406: [obs-gstreamer-master] Encoded sample #2100: 692 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+01:46:35.635: [obs-gstreamer-master] D3D11 zero-copy frame #1200 pushed (448x264, format=BGRA, slot=1, drops=224)
+01:46:35.673: [obs-gstreamer-master] Encoded sample #1200: 343 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+01:46:37.201: [obs-gstreamer-filter-callback] Captured zero-copy filter texture #3600 (424x240, format=5)
+01:46:38.289: [obs-gstreamer-filter-callback] Captured zero-copy filter texture #1500 (448x264, format=5)
+01:46:45.127: [obs-gstreamer-master] D3D11 zero-copy frame #3600 pushed (424x240, format=BGRA, slot=1, drops=226)
+01:46:45.181: [obs-gstreamer-master] Encoded sample #3600: 3043 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+01:46:45.735: [obs-gstreamer-master] D3D11 zero-copy frame #2400 pushed (424x240, format=BGRA, slot=1, drops=246)
+01:46:45.771: [obs-gstreamer-master] Encoded sample #2400: 691 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+01:46:46.024: [obs-gstreamer-master] D3D11 zero-copy frame #1500 pushed (448x264, format=BGRA, slot=1, drops=224)
+01:46:46.048: [obs-gstreamer-master] Encoded sample #1500: 115 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+01:46:46.757: adding 170 milliseconds of audio buffering, total audio buffering is now 426 milliseconds (source: Media)
+01:46:46.757: 
+01:46:47.597: [obs-gstreamer-filter-callback] Captured zero-copy filter texture #3900 (424x240, format=5)
+01:46:48.824: [obs-gstreamer-master] Encoder busy: dropped D3D11 frame #3684 (all 2 slots in use, total drops: 240)
+01:46:48.946: [obs-gstreamer-master] Encoder busy: dropped D3D11 frame #1557 (all 2 slots in use, total drops: 240)
+01:46:49.176: [obs-gstreamer-filter-callback] Captured zero-copy filter texture #1800 (448x264, format=5)
+01:46:59.041: adding 64 milliseconds of audio buffering, total audio buffering is now 490 milliseconds (source: Media)
+01:46:59.041: 
+01:47:01.119: [obs-gstreamer-filter-callback] Captured zero-copy filter texture #4200 (424x240, format=5)
+01:47:01.134: [obs-gstreamer-master] Encoder busy: dropped D3D11 frame #2643 (all 2 slots in use, total drops: 360)
+01:47:02.333: [obs-gstreamer-filter-callback] Captured zero-copy filter texture #2100 (448x264, format=5)
+01:47:03.411: [obs-gstreamer-master] D3D11 zero-copy frame #3900 pushed (424x240, format=BGRA, slot=1, drops=356)
+01:47:03.490: [obs-gstreamer-master] Encoded sample #3900: 2070 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+01:47:03.941: [obs-gstreamer-master] D3D11 zero-copy frame #2700 pushed (424x240, format=BGRA, slot=1, drops=372)
+01:47:04.048: [obs-gstreamer-master] Encoded sample #2700: 688 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+01:47:04.234: [obs-gstreamer-master] D3D11 zero-copy frame #1800 pushed (448x264, format=BGRA, slot=1, drops=351)
+01:47:04.397: [obs-gstreamer-master] Encoded sample #1800: 60 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+01:47:04.912: [obs-gstreamer-master] Encoder busy: dropped D3D11 frame #3941 (all 2 slots in use, total drops: 360)
+01:47:05.924: [obs-gstreamer-master] Encoder busy: dropped D3D11 frame #1837 (all 2 slots in use, total drops: 360)
+01:47:10.085: [obs-gstreamer] WHEP POST /whep: started
+01:47:10.191: [obs-gstreamer-webrtc] WHEP session viewer1: configured TURN relay: turn://openrelayproject:openrelayproject@openrelay.metered.ca:80
+01:47:10.192: [obs-gstreamer] WHEP POST viewer1: RTP branch linked before offer
+01:47:10.194: [obs-gstreamer] WHEP POST viewer1: branch synced before remote offer
+01:47:10.195: [obs-gstreamer-webrtc] WebRTC viewer 'viewer1' connected (viewers=1): subscribing 'RTSP Stream 2' to master pipeline
+01:47:10.195: [obs-gstreamer-master] Subscriber 'RTSP Stream 2' connected
+01:47:10.195: [obs-gstreamer] WHEP POST viewer1: branch added (unlinked), negotiating
+01:47:10.195: [obs-gstreamer] WHEP POST: offer parsed (5095 bytes), starting negotiation
+01:47:10.196: [obs-gstreamer] WebRTC session viewer1 negotiating (1 active)
+01:47:10.251: [obs-gstreamer-webrtc] Keyframe delivered to 'RTSP Stream 2', WebRTC viewer playback starting
+01:47:10.252: [obs-gstreamer] WebRTC RTP payloader packet 1
+01:47:10.337: [obs-gstreamer] WHEP session viewer1: branch synced to PLAYING
+01:47:10.337: [obs-gstreamer] WHEP session viewer1: transceivers after offer: 1
+01:47:10.337: [obs-gstreamer] WHEP session viewer1: signaling state before answer: 3
+01:47:10.370: [obs-gstreamer] WHEP session viewer1: create-answer reply: application/x-gst-promise, answer=(GstWebRTCSessionDescription)NULL;
+01:47:10.370: [obs-gstreamer] WebRTC RTP viewer1 packet 1
+01:47:10.631: [obs-gstreamer] WHEP session viewer1: local description set, waiting for ICE
+01:47:11.801: [obs-gstreamer-filter-callback] Captured zero-copy filter texture #4500 (424x240, format=5)
+01:47:12.765: [obs-gstreamer-filter-callback] Captured zero-copy filter texture #2400 (448x264, format=5)
+01:47:12.783: [obs-gstreamer] WHEP session viewer1: ICE gathering complete, sending 201 answer
+01:47:14.569: [obs-gstreamer-master] D3D11 zero-copy frame #4200 pushed (424x240, format=BGRA, slot=1, drops=383)
+01:47:14.625: [obs-gstreamer-master] Encoded sample #4200: 2045 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+01:47:15.034: [obs-gstreamer-master] D3D11 zero-copy frame #3000 pushed (424x240, format=BGRA, slot=1, drops=398)
+01:47:15.089: [obs-gstreamer-master] Encoded sample #3000: 688 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+01:47:15.233: [obs-gstreamer-master] D3D11 zero-copy frame #2100 pushed (448x264, format=BGRA, slot=1, drops=374)
+01:47:15.279: [obs-gstreamer-master] Encoded sample #2100: 101 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+01:47:20.505: [obs-gstreamer] WebRTC RTP payloader packet 300
+01:47:22.897: [obs-gstreamer-filter-callback] Captured zero-copy filter texture #4800 (424x240, format=5)
+01:47:24.375: [obs-gstreamer-filter-callback] Captured zero-copy filter texture #2700 (448x264, format=5)
+01:47:28.591: [obs-gstreamer-master] Encoder busy: dropped D3D11 frame #3226 (all 2 slots in use, total drops: 480)
+01:47:31.403: [obs-gstreamer-master] D3D11 zero-copy frame #4500 pushed (424x240, format=BGRA, slot=1, drops=477)
+01:47:31.457: [obs-gstreamer-master] Encoded sample #4500: 2761 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+01:47:31.733: [obs-gstreamer-master] D3D11 zero-copy frame #3300 pushed (424x240, format=BGRA, slot=1, drops=488)
+01:47:31.788: [obs-gstreamer-master] Encoded sample #3300: 692 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+01:47:31.968: [obs-gstreamer-master] D3D11 zero-copy frame #2400 pushed (448x264, format=BGRA, slot=1, drops=465)
+01:47:32.043: [obs-gstreamer-master] Encoded sample #2400: 101 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+01:47:34.320: [obs-gstreamer-master] Encoder busy: dropped D3D11 frame #4558 (all 2 slots in use, total drops: 480)
+01:47:35.112: [obs-gstreamer-master] Encoder busy: dropped D3D11 frame #2441 (all 2 slots in use, total drops: 480)
+01:47:38.261: [obs-gstreamer-filter-callback] Captured zero-copy filter texture #5100 (424x240, format=5)
+01:47:39.826: [obs-gstreamer-filter-callback] Captured zero-copy filter texture #3000 (448x264, format=5)
+01:47:46.174: [obs-gstreamer] WebRTC RTP payloader packet 600
+01:47:46.334: [obs-gstreamer-master] Encoder busy: dropped D3D11 frame #3456 (all 2 slots in use, total drops: 600)
+01:47:50.902: [obs-gstreamer-master] D3D11 zero-copy frame #4800 pushed (424x240, format=BGRA, slot=1, drops=578)
+01:47:50.983: [obs-gstreamer-master] Encoded sample #4800: 2125 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+01:47:51.635: [obs-gstreamer-filter-callback] Captured zero-copy filter texture #5400 (424x240, format=5)
+01:47:51.766: [obs-gstreamer-master] D3D11 zero-copy frame #2700 pushed (448x264, format=BGRA, slot=1, drops=575)
+01:47:51.768: [obs-gstreamer-master] D3D11 zero-copy frame #3600 pushed (424x240, format=BGRA, slot=1, drops=605)
+01:47:51.814: [obs-gstreamer-master] Encoded sample #3600: 688 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+01:47:51.826: [obs-gstreamer-master] Encoded sample #2700: 91 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+01:47:52.599: [obs-gstreamer-filter-callback] Captured zero-copy filter texture #3300 (448x264, format=5)
+01:47:56.979: [obs-gstreamer] WHEP POST /whep: started
+01:47:57.088: [obs-gstreamer-webrtc] WHEP session viewer2: configured TURN relay: turn://openrelayproject:openrelayproject@openrelay.metered.ca:80
+01:47:57.089: [obs-gstreamer] WHEP POST viewer2: RTP branch linked before offer
+01:47:57.123: [obs-gstreamer] WHEP POST viewer2: branch synced before remote offer
+01:47:57.123: [obs-gstreamer-webrtc] WebRTC viewer 'viewer2' connected (total viewers=2)
+01:47:57.123: [obs-gstreamer] WHEP POST viewer2: branch added (unlinked), negotiating
+01:47:57.123: [obs-gstreamer] WHEP POST: offer parsed (5095 bytes), starting negotiation
+01:47:57.124: [obs-gstreamer] WebRTC session viewer2 negotiating (2 active)
+01:47:57.142: [obs-gstreamer] WHEP session viewer2: branch synced to PLAYING
+01:47:57.142: [obs-gstreamer] WHEP session viewer2: transceivers after offer: 1
+01:47:57.142: [obs-gstreamer] WHEP session viewer2: signaling state before answer: 3
+01:47:57.160: [obs-gstreamer] WHEP session viewer2: create-answer reply: application/x-gst-promise, answer=(GstWebRTCSessionDescription)NULL;
+01:47:57.160: [obs-gstreamer] WebRTC RTP viewer2 packet 1
+01:47:58.125: [obs-gstreamer] WHEP session viewer2: local description set, waiting for ICE
+01:47:58.583: [obs-gstreamer] WebRTC RTP payloader packet 900
+01:48:00.365: [obs-gstreamer] WHEP session viewer2: ICE gathering complete, sending 201 answer
+01:48:02.768: [obs-gstreamer-master] D3D11 zero-copy frame #5100 pushed (424x240, format=BGRA, slot=1, drops=595)
+01:48:02.824: [obs-gstreamer-master] Encoded sample #5100: 2624 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+01:48:02.936: [obs-gstreamer-filter-callback] Captured zero-copy filter texture #5700 (424x240, format=5)
+01:48:03.734: [obs-gstreamer-master] D3D11 zero-copy frame #3000 pushed (448x264, format=BGRA, slot=1, drops=595)
+01:48:03.735: [obs-gstreamer-master] D3D11 zero-copy frame #3900 pushed (424x240, format=BGRA, slot=1, drops=625)
+01:48:03.775: [obs-gstreamer-master] Encoded sample #3000: 61 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+01:48:03.783: [obs-gstreamer-master] Encoded sample #3900: 688 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+01:48:03.899: [obs-gstreamer-filter-callback] Captured zero-copy filter texture #3600 (448x264, format=5)
+01:48:08.872: [obs-gstreamer] WebRTC RTP payloader packet 1200
+01:48:12.969: [obs-gstreamer-master] D3D11 zero-copy frame #5400 pushed (424x240, format=BGRA, slot=1, drops=596)
+01:48:13.013: [obs-gstreamer-master] Encoded sample #5400: 2049 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+01:48:13.102: [obs-gstreamer-filter-callback] Captured zero-copy filter texture #6000 (424x240, format=5)
+01:48:13.904: [obs-gstreamer-master] D3D11 zero-copy frame #3300 pushed (448x264, format=BGRA, slot=1, drops=595)
+01:48:13.941: [obs-gstreamer-master] D3D11 zero-copy frame #4200 pushed (424x240, format=BGRA, slot=1, drops=626)
+01:48:13.953: [obs-gstreamer-master] Encoded sample #3300: 62 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+01:48:13.979: [obs-gstreamer-master] Encoded sample #4200: 692 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+01:48:14.068: [obs-gstreamer-filter-callback] Captured zero-copy filter texture #3900 (448x264, format=5)
+01:48:17.390: [obs-gstreamer-master] Encoder busy: dropped D3D11 frame #5512 (all 2 slots in use, total drops: 600)
+01:48:17.471: [obs-gstreamer-master] Encoder busy: dropped D3D11 frame #3385 (all 2 slots in use, total drops: 600)
+01:48:20.561: [obs-gstreamer] WebRTC RTP payloader packet 1500
+01:48:24.636: [obs-gstreamer-filter-callback] Captured zero-copy filter texture #6300 (424x240, format=5)
+01:48:25.850: [obs-gstreamer-filter-callback] Captured zero-copy filter texture #4200 (448x264, format=5)
+01:48:26.528: [obs-gstreamer-master] D3D11 zero-copy frame #5700 pushed (424x240, format=BGRA, slot=1, drops=645)
+01:48:26.780: [obs-gstreamer-master] Encoded sample #5700: 2600 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+01:48:28.342: [obs-gstreamer-master] D3D11 zero-copy frame #3600 pushed (448x264, format=BGRA, slot=1, drops=663)
+01:48:28.446: [obs-gstreamer-master] Encoded sample #3600: 105 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+01:48:28.678: [obs-gstreamer-master] D3D11 zero-copy frame #4500 pushed (424x240, format=BGRA, slot=1, drops=702)
+01:48:28.861: [obs-gstreamer-master] Encoded sample #4500: 689 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+01:48:33.909: [obs-gstreamer-master] Encoder busy: dropped D3D11 frame #4621 (all 2 slots in use, total drops: 720)
+01:48:35.337: [obs-gstreamer] WebRTC RTP payloader packet 1800
+01:48:36.067: [obs-gstreamer-filter-callback] Captured zero-copy filter texture #6600 (424x240, format=5)
+01:48:37.032: [obs-gstreamer-filter-callback] Captured zero-copy filter texture #4500 (448x264, format=5)
+01:48:37.719: [obs-gstreamer-rtspserver] RTSP client disconnected on 8554/live2 (remaining=0)
+01:48:37.720: [obs-gstreamer-rtspserver] All RTSP clients disconnected on 8554/live2: unsubscribing 'RTSP Main' from master pipeline
+01:48:37.720: [obs-gstreamer-master] Subscriber 'RTSP Main' disconnected
+01:48:37.720: [obs-gstreamer-master] All destinations inactive. Pausing encoder pipeline (0% CPU/GPU).
+01:48:37.720: [obs-gstreamer-filter-callback] Detached dual rendering hook (pipeline idle)
+01:48:37.720: [obs-gstreamer-filter-callback] All clients disconnected: Removed private filter tap from 'Scene'
+01:48:40.366: [obs-gstreamer-master] D3D11 zero-copy frame #3900 pushed (448x264, format=BGRA, slot=1, drops=700)
+01:48:40.403: [obs-gstreamer-master] Encoded sample #3900: 181 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+01:48:40.433: [obs-gstreamer-master] D3D11 zero-copy frame #4800 pushed (424x240, format=BGRA, slot=1, drops=732)
+01:48:40.472: [obs-gstreamer-master] Encoded sample #4800: 688 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+01:48:45.338: [obs-gstreamer] WebRTC RTP payloader packet 2100
+01:48:47.032: [obs-gstreamer-filter-callback] Captured zero-copy filter texture #4800 (448x264, format=5)
+01:48:50.366: [obs-gstreamer-master] D3D11 zero-copy frame #4200 pushed (448x264, format=BGRA, slot=1, drops=700)
+01:48:50.402: [obs-gstreamer-master] Encoded sample #4200: 116 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+01:48:50.433: [obs-gstreamer-master] D3D11 zero-copy frame #5100 pushed (424x240, format=BGRA, slot=1, drops=732)
+01:48:50.470: [obs-gstreamer-master] Encoded sample #5100: 696 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+01:48:55.335: [obs-gstreamer] WebRTC RTP payloader packet 2400
+01:48:57.032: [obs-gstreamer-filter-callback] Captured zero-copy filter texture #5100 (448x264, format=5)
+01:49:00.366: [obs-gstreamer-master] D3D11 zero-copy frame #4500 pushed (448x264, format=BGRA, slot=1, drops=700)
+01:49:00.410: [obs-gstreamer-master] Encoded sample #4500: 161 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+01:49:00.434: [obs-gstreamer-master] D3D11 zero-copy frame #5400 pushed (424x240, format=BGRA, slot=1, drops=732)
+01:49:00.468: [obs-gstreamer-master] Encoded sample #5400: 690 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+01:49:05.336: [obs-gstreamer] WebRTC RTP payloader packet 2700
+01:49:07.032: [obs-gstreamer-filter-callback] Captured zero-copy filter texture #5400 (448x264, format=5)
+01:49:10.790: [obs-gstreamer-master] D3D11 zero-copy frame #4800 pushed (448x264, format=BGRA, slot=1, drops=710)
+01:49:10.989: [obs-gstreamer-master] Encoded sample #4800: 116 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+01:49:11.056: [obs-gstreamer-master] D3D11 zero-copy frame #5700 pushed (424x240, format=BGRA, slot=1, drops=745)
+01:49:11.283: [obs-gstreamer-master] Encoded sample #5700: 630 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+01:49:14.592: [obs-gstreamer-rtspserver] RTSP client disconnected on 8554/live (remaining=0)
+01:49:14.593: [obs-gstreamer-rtspserver] All RTSP clients disconnected on 8554/live: unsubscribing 'Default RTSP' from master pipeline
+01:49:14.593: [obs-gstreamer-master] Subscriber 'Default RTSP' disconnected
+01:49:14.593: [obs-gstreamer-master] All destinations inactive. Pausing encoder pipeline (0% CPU/GPU).
+01:49:14.593: [obs-gstreamer-render-callback] Pipeline idle: detached render callback (0% GPU)
+01:49:16.106: [obs-gstreamer] WebRTC RTP payloader packet 3000
+01:49:17.400: [obs-gstreamer-filter-callback] Captured zero-copy filter texture #5700 (448x264, format=5)
+01:49:18.849: [obs-gstreamer-rtspserver] RTSP client disconnected on 8554/live3 (remaining=0)
+01:49:18.849: [obs-gstreamer-rtspserver] All RTSP clients disconnected on 8554/live3: unsubscribing 'RTSP Main' from master pipeline
+01:49:18.849: [obs-gstreamer-master] Subscriber 'RTSP Main' disconnected
+01:49:21.373: [obs-gstreamer-master] D3D11 zero-copy frame #5100 pushed (448x264, format=BGRA, slot=1, drops=717)
+01:49:21.409: [obs-gstreamer-master] Encoded sample #5100: 73 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+01:49:26.335: [obs-gstreamer] WebRTC RTP payloader packet 3300
+01:49:27.466: [obs-gstreamer-filter-callback] Captured zero-copy filter texture #6000 (448x264, format=5)
+01:49:31.366: [obs-gstreamer-master] D3D11 zero-copy frame #5400 pushed (448x264, format=BGRA, slot=1, drops=717)
+01:49:31.411: [obs-gstreamer-master] Encoded sample #5400: 80 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+01:49:36.578: [obs-gstreamer] WebRTC RTP payloader packet 3600
+01:49:37.668: [obs-gstreamer-filter-callback] Captured zero-copy filter texture #6300 (448x264, format=5)
+01:49:41.602: [obs-gstreamer-master] D3D11 zero-copy frame #5700 pushed (448x264, format=BGRA, slot=1, drops=718)
+01:49:41.639: [obs-gstreamer-master] Encoded sample #5700: 239 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+01:49:47.068: [obs-gstreamer] WebRTC RTP payloader packet 3900
+01:49:48.201: [obs-gstreamer-filter-callback] Captured zero-copy filter texture #6600 (448x264, format=5)
+01:49:52.199: [obs-gstreamer-master] D3D11 zero-copy frame #6000 pushed (448x264, format=BGRA, slot=1, drops=719)
+01:49:52.235: [obs-gstreamer-master] Encoded sample #6000: 87 bytes, keyframe=no (gpu_zero_copy=yes, stagesurf=NONE)
+01:49:52.605: ==== Shutting down ==================================================
+01:49:52.705: [obs-gstreamer-dock] Saved 3 Master Hub(s) to OBS scene collection
+01:49:57.203: [obs-gstreamer] WebRTC RTP payloader packet 4200
+01:49:58.266: [obs-gstreamer-filter-callback] Captured zero-copy filter texture #6900 (448x264, format=5)
+01:49:59.280: [obs-scripting]: Unloaded lua script: clock-source.lua
+01:49:59.283: [obs-scripting]: Unloaded lua script: countdown.lua
+01:49:59.288: [obs-scripting]: Unloaded lua script: StopWatch-[6.1].lua
+01:49:59.438: Not all sources were cleared when clearing scene data:
+01:49:59.438: 
+01:49:59.438: - Color
+01:49:59.438: - GStreamer Video Source
+01:49:59.438: - Image
+01:49:59.438: - Media
+01:49:59.438: - Browser
+01:49:59.438: - Lua Clock
+01:49:59.438: - Text (GDI+)
+01:49:59.438: 
+01:49:59.803: [obs-gstreamer-master] Encoder busy: dropped D3D11 frame #6223 (all 2 slots in use, total drops: 720)
+01:49:59.855: Tried to call obs_frontend_remove_event_callback with no callbacks!
+01:50:00.026: [obs-websocket] [obs_module_unload] Shutting down...
+01:50:00.054: Tried to call obs_frontend_remove_event_callback with no callbacks!
+01:50:00.054: [obs-websocket] [obs_module_unload] Finished shutting down.
+01:50:00.059: [obs-gstreamer] Unloading plugin...
+01:50:00.059: [obs-gstreamer-rtspserver] RTSP server on port 8554 dereferenced (refcount=2)
+01:50:00.059: [obs-gstreamer-rtspserver] Stopped and destroyed branch 'RTSP Main'
+01:50:00.059: [obs-gstreamer-rtspserver] RTSP server on port 8554 dereferenced (refcount=1)
+01:50:00.059: [obs-gstreamer-rtspserver] Stopped and destroyed branch 'RTSP Main'
+01:50:00.059: [obs-gstreamer-rtspserver] Stopping RTSP server on port 8554
+01:50:00.059: [obs-gstreamer-rtspserver] Stopped and destroyed branch 'Default RTSP'
+01:50:00.060: [obs-gstreamer-dock] Stopping RTSP branch (8554:/live)
+01:50:00.060: [obs-gstreamer-rtspserver] Stopped and destroyed branch 'Default RTSP'
