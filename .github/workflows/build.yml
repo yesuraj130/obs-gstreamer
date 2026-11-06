@@ -324,7 +324,7 @@ jobs:
             --buildtype release `
             -Dcpp_std=c++17 `
             -Ddock=enabled `
-            -Dwebrtc=disabled `
+            -Dwebrtc=auto `
             -Dpkg_config_path="$sdkPkgFwd,$gstPkgFwd" `
             -Dc_args="-I$sdkIncludeFwd/include/obs -I$sdkIncludeFwd/include" `
             -Dcpp_args="-I$sdkIncludeFwd/include/obs -I$sdkIncludeFwd/include $qtArgs"
