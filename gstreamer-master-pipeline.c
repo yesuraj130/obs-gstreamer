@@ -850,7 +850,7 @@ static GstElement *create_master_encoder_pipeline(gst_master_pipeline_t *hub, co
 				"caps=\"video/x-raw(memory:D3D11Memory), width=%u, height=%u, "
 				"format=%s, framerate=%u/%u\" ! "
 				"d3d11convert ! video/x-raw(memory:D3D11Memory), format=NV12 ! "
-				"%s ! h264parse config-interval=-1 ! "
+				"%s ! h264parse config-interval=1 ! "
 				"video/x-h264, stream-format=byte-stream, alignment=au ! "
 				"appsink name=hub_appsink sync=false drop=true max-buffers=1",
 				hub->width, hub->height,
@@ -870,7 +870,7 @@ static GstElement *create_master_encoder_pipeline(gst_master_pipeline_t *hub, co
 				"appsrc name=hub_appsrc is-live=true format=GST_FORMAT_TIME do-timestamp=true "
 				"caps=\"video/x-raw(memory:GLMemory), width=%u, height=%u, "
 				"format=NV12, framerate=%u/%u, texture-target=2D, colorimetry=%s\" ! "
-				"%s ! h264parse config-interval=-1 ! "
+				"%s ! h264parse config-interval=1 ! "
 				"video/x-h264, stream-format=byte-stream, alignment=au ! "
 				"appsink name=hub_appsink sync=false drop=true max-buffers=1",
 				hub->width, hub->height, hub->fps_num, hub->fps_den, hub->colorimetry_str,
@@ -883,7 +883,7 @@ static GstElement *create_master_encoder_pipeline(gst_master_pipeline_t *hub, co
 		pipe_desc = g_strdup_printf(
 			"appsrc name=hub_appsrc is-live=true format=GST_FORMAT_TIME do-timestamp=true "
 			"caps=\"video/x-raw, width=%u, height=%u, format=NV12, framerate=%u/%u, colorimetry=%s\" ! "
-			"%s ! h264parse config-interval=-1 ! video/x-h264, stream-format=byte-stream, alignment=au ! "
+			"%s ! h264parse config-interval=1 ! video/x-h264, stream-format=byte-stream, alignment=au ! "
 			"appsink name=hub_appsink sync=false drop=true max-buffers=1",
 			hub->width, hub->height, hub->fps_num, hub->fps_den, hub->colorimetry_str,
 			enc_str);

@@ -385,7 +385,7 @@ bool gstreamer_output_start(void *p)
 		const char *mount = obs_data_get_string(data->settings, "rtsp_mount");
 		const char *service = obs_data_get_string(data->settings, "rtsp_service");
 		const char *pipeline = obs_data_get_string(data->settings, "rtsp_pipeline");
-		const char *default_pipe = "( appsrc name=appsrc_video is-live=true format=GST_FORMAT_TIME do-timestamp=true ! queue max-size-buffers=5 leaky=downstream ! video/x-raw, format=%s, width=%d, height=%d, framerate=%d/%d ! videoconvert ! x264enc tune=zerolatency speed-preset=veryfast bitrate=3000 key-int-max=30 ! video/x-h264, stream-format=byte-stream, alignment=au ! h264parse config-interval=-1 ! rtph264pay name=pay0 pt=96 config-interval=1 )";
+		const char *default_pipe = "( appsrc name=appsrc_video is-live=true format=GST_FORMAT_TIME do-timestamp=true ! queue max-size-buffers=5 leaky=downstream ! video/x-raw, format=%s, width=%d, height=%d, framerate=%d/%d ! videoconvert ! x264enc tune=zerolatency speed-preset=veryfast bitrate=3000 key-int-max=30 ! video/x-h264, stream-format=byte-stream, alignment=au ! h264parse config-interval=1 ! rtph264pay name=pay0 pt=96 config-interval=1 )";
 		const char *chosen_pipe = (pipeline && pipeline[0]) ? pipeline : default_pipe;
 		char *launch = NULL;
 		if (strstr(chosen_pipe, "%s")) {
@@ -855,7 +855,7 @@ void gstreamer_output_get_defaults(obs_data_t *settings)
 	obs_data_set_default_bool(settings, "rtsp_server", false);
 	obs_data_set_default_string(settings, "rtsp_mount", "/live");
 	obs_data_set_default_string(settings, "rtsp_service", "8554");
-	obs_data_set_default_string(settings, "rtsp_pipeline", "( appsrc name=appsrc_video is-live=true format=GST_FORMAT_TIME do-timestamp=true ! queue max-size-buffers=5 leaky=downstream ! video/x-raw, format=%s, width=%d, height=%d, framerate=%d/%d ! videoconvert ! x264enc tune=zerolatency speed-preset=veryfast bitrate=3000 key-int-max=30 ! video/x-h264, stream-format=byte-stream, alignment=au ! h264parse config-interval=-1 ! rtph264pay name=pay0 pt=96 config-interval=1 )");
+	obs_data_set_default_string(settings, "rtsp_pipeline", "( appsrc name=appsrc_video is-live=true format=GST_FORMAT_TIME do-timestamp=true ! queue max-size-buffers=5 leaky=downstream ! video/x-raw, format=%s, width=%d, height=%d, framerate=%d/%d ! videoconvert ! x264enc tune=zerolatency speed-preset=veryfast bitrate=3000 key-int-max=30 ! video/x-h264, stream-format=byte-stream, alignment=au ! h264parse config-interval=1 ! rtph264pay name=pay0 pt=96 config-interval=1 )");
 	obs_data_set_default_bool(settings, "webrtc_output", false);
 	obs_data_set_default_string(settings, "webrtc_http_port", "8888");
 	obs_data_set_default_string(settings, "webrtc_stun_server", "");

@@ -79,13 +79,13 @@ bool obs_frontend_add_dock_by_id(const char *id, const char *title, void *dock) 
 	"appsrc name=hub_appsrc is-live=true format=GST_FORMAT_TIME do-timestamp=true " \
 	"caps=\"video/x-raw, format=NV12, width=%u, height=%u, framerate=%u/%u\" ! " \
 	"x264enc tune=zerolatency speed-preset=ultrafast bframes=0 key-int-max=30 bitrate=4000 ! " \
-	"h264parse config-interval=-1 ! video/x-h264, stream-format=byte-stream, alignment=au ! " \
+	"h264parse config-interval=1 ! video/x-h264, stream-format=byte-stream, alignment=au ! " \
 	"appsink name=hub_appsink sync=false drop=true max-buffers=1"
 
 #define DEFAULT_RTSP_PIPELINE \
 	"( appsrc name=appsrc_video is-live=true format=GST_FORMAT_TIME do-timestamp=true " \
 	"caps=\"video/x-h264, stream-format=byte-stream, alignment=au\" ! " \
-	"h264parse config-interval=-1 ! rtph264pay name=pay0 pt=96 config-interval=1 )"
+	"h264parse config-interval=1 ! rtph264pay name=pay0 pt=96 config-interval=1 )"
 
 /* --------------------------------------------------------------------------
  * Destination Data Structures & Types
