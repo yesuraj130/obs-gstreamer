@@ -107,7 +107,7 @@
       tabNavWebrtc.className = 'px-3.5 py-1.5 rounded-md font-medium transition flex items-center gap-2 bg-indigo-600 text-white shadow-sm';
       tabNavVnc.className = 'px-3.5 py-1.5 rounded-md font-medium transition flex items-center gap-2 text-slate-400 hover:text-slate-200';
       badgeSourceMode.textContent = isTestPattern ? 'Test Pattern' : 'WebRTC Live';
-      if (!isTestPattern) {
+      if (!isTestPattern && (!pc || (pc.connectionState !== 'connected' && pc.connectionState !== 'connecting'))) {
         connectWhep();
       }
     }
@@ -307,6 +307,44 @@
   var externalVncAddr = document.getElementById('external-vnc-addr');
   var externalVncDot = document.getElementById('external-vnc-dot');
 
+  var externalWebrtcBadge = document.getElementById('external-webrtc-badge');
+  var externalWebrtcAddr = document.getElementById('external-webrtc-addr');
+  var externalWebrtcDot = document.getElementById('external-webrtc-dot');
+  var linkWebrtcNewWindow = document.getElementById('link-webrtc-new-window');
+
+  var playerWebrtcBadge = document.getElementById('player-webrtc-badge');
+  var playerWebrtcAddr = document.getElementById('player-webrtc-addr');
+  var playerWebrtcDot = document.getElementById('player-webrtc-dot');
+  var playerWebrtcOpen = document.getElementById('player-webrtc-open');
+
+  function updateWebrtcTunnelBadges(publicUrl) {
+    if (publicUrl && publicUrl.startsWith('http')) {
+      if (externalWebrtcAddr && externalWebrtcAddr.textContent !== 'Copied to Clipboard!') {
+        externalWebrtcAddr.textContent = publicUrl;
+      }
+      if (externalWebrtcDot) externalWebrtcDot.className = 'w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse shrink-0';
+      if (linkWebrtcNewWindow) {
+        linkWebrtcNewWindow.href = publicUrl;
+        linkWebrtcNewWindow.classList.remove('hidden');
+        linkWebrtcNewWindow.classList.add('flex');
+      }
+      if (playerWebrtcAddr && playerWebrtcAddr.textContent !== 'Copied to Clipboard!') {
+        playerWebrtcAddr.textContent = publicUrl;
+      }
+      if (playerWebrtcDot) playerWebrtcDot.className = 'w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse shrink-0';
+      if (playerWebrtcOpen) {
+        playerWebrtcOpen.href = publicUrl;
+        playerWebrtcOpen.classList.remove('hidden');
+        playerWebrtcOpen.classList.add('flex');
+      }
+    } else {
+      if (externalWebrtcAddr) externalWebrtcAddr.textContent = 'Exposing public URL...';
+      if (externalWebrtcDot) externalWebrtcDot.className = 'w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse shrink-0';
+      if (playerWebrtcAddr) playerWebrtcAddr.textContent = 'Exposing public URL...';
+      if (playerWebrtcDot) playerWebrtcDot.className = 'w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse shrink-0';
+    }
+  }
+
   if (externalVncBadge) {
     externalVncBadge.addEventListener('click', function () {
       var text = externalVncAddr.textContent;
@@ -315,6 +353,32 @@
           var original = externalVncAddr.textContent;
           externalVncAddr.textContent = 'Copied to Clipboard!';
           setTimeout(function () { externalVncAddr.textContent = original; }, 1500);
+        });
+      }
+    });
+  }
+
+  if (externalWebrtcBadge) {
+    externalWebrtcBadge.addEventListener('click', function () {
+      var text = externalWebrtcAddr.textContent;
+      if (text && text.startsWith('http')) {
+        navigator.clipboard.writeText(text).then(function () {
+          var original = externalWebrtcAddr.textContent;
+          externalWebrtcAddr.textContent = 'Copied to Clipboard!';
+          setTimeout(function () { externalWebrtcAddr.textContent = original; }, 1500);
+        });
+      }
+    });
+  }
+
+  if (playerWebrtcBadge) {
+    playerWebrtcBadge.addEventListener('click', function () {
+      var text = playerWebrtcAddr.textContent;
+      if (text && text.startsWith('http')) {
+        navigator.clipboard.writeText(text).then(function () {
+          var original = playerWebrtcAddr.textContent;
+          playerWebrtcAddr.textContent = 'Copied to Clipboard!';
+          setTimeout(function () { playerWebrtcAddr.textContent = original; }, 1500);
         });
       }
     });
@@ -334,6 +398,10 @@
           navVncDot.className = 'w-2 h-2 rounded-full bg-amber-400 animate-pulse';
           vncStatusText.textContent = 'Desktop Starting...';
           showStartupConsole(data);
+        }
+
+        if (data && data.webrtcPublicUrl) {
+          updateWebrtcTunnelBadges(data.webrtcPublicUrl);
         }
 
         var btnClaimPlayit = document.getElementById('btn-claim-playit');
@@ -374,10 +442,16 @@
     fetch('/api/status')
       .then(function (res) { return res.json(); })
       .then(function (data) {
+        if (data && data.publicUrl) {
+          updateWebrtcTunnelBadges(data.publicUrl);
+        }
         if (data && data.online) {
           navWebrtcDot.className = 'w-2 h-2 rounded-full bg-emerald-400 animate-pulse';
           lblPortStatus.className = 'text-emerald-400 font-semibold';
-          lblPortStatus.textContent = '127.0.0.1:8888 (STREAMING)';
+          lblPortStatus.textContent = data.publicUrl ? ('PUBLIC: ' + data.publicUrl) : '127.0.0.1:8888 (STREAMING)';
+          if (data.publicUrl && lblEndpoint) {
+            lblEndpoint.textContent = data.publicUrl + ' (/whep)';
+          }
 
           // If stream just became available while in player view, connect immediately!
           if (activeView === 'webrtc' && !isTestPattern && (!pc || pc.connectionState === 'closed')) {
@@ -496,6 +570,11 @@
       } catch (e) {}
       pc = null;
     }
+    if (window.__whepResourceUrl) {
+      var delUrl = window.__whepResourceUrl;
+      window.__whepResourceUrl = null;
+      fetch(delUrl, { method: 'DELETE' }).catch(function () {});
+    }
     if (loopbackSender) {
       try { loopbackSender.close(); } catch (e) {}
       loopbackSender = null;
@@ -590,7 +669,6 @@
     };
 
     pc.addTransceiver('video', { direction: 'recvonly' });
-    try { pc.addTransceiver('audio', { direction: 'recvonly' }); } catch (e) {}
 
     pc.ontrack = function (event) {
       log('WebRTC track received: ' + event.track.kind, 'info');
@@ -628,18 +706,21 @@
       })
       .then(function (response) {
         var contentType = response.headers.get('content-type') || '';
+        var loc = response.headers.get('location');
+        if (loc) window.__whepResourceUrl = loc;
         if (!response.ok) {
           return response.text().then(function (body) {
             throw new Error('OBS GStreamer stream offline (status ' + response.status + ')');
           });
         }
         return response.text().then(function (answerSdp) {
-          var trimmed = (answerSdp || '').trim();
-          if (contentType.includes('text/html') || trimmed.startsWith('<') || !trimmed.startsWith('v=')) {
+          var check = (answerSdp || '').trim();
+          if (contentType.includes('text/html') || check.startsWith('<') || !check.startsWith('v=')) {
             throw new Error('Stream offline (gateway returned HTML instead of SDP answer)');
           }
-          log('Received SDP answer (' + trimmed.length + ' bytes). Setting remote description...', 'info');
-          return pc.setRemoteDescription({ type: 'answer', sdp: trimmed });
+          var validSdp = check.replace(/\r?\n/g, '\r\n') + '\r\n';
+          log('Received SDP answer (' + validSdp.length + ' bytes). Setting remote description...', 'info');
+          return pc.setRemoteDescription({ type: 'answer', sdp: validSdp });
         });
       })
       .then(function () {

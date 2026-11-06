@@ -281,9 +281,10 @@ static const char *default_app_js =
 "      }\n"
 "      return response.text();\n"
 "    }).then(function (answerSdp) {\n"
-"      console.log('[obs-webrtc] answer SDP bytes:', answerSdp.length);\n"
+"      var validSdp = (answerSdp || '').trim().replace(/\\r?\\n/g, '\\r\\n') + '\\r\\n';\n"
+"      console.log('[obs-webrtc] answer SDP bytes:', validSdp.length);\n"
 "      attempts = 0;\n"
-"      return pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });\n"
+"      return pc.setRemoteDescription({ type: 'answer', sdp: validSdp });\n"
 "    }).catch(function (err) {\n"
 "      setStatus('error: ' + err.message);\n"
 "      reconnect();\n"
@@ -397,40 +398,72 @@ static void webrtcbin_connection_state_changed(GstElement *webrtcbin, GParamSpec
 	}
 }
 
+struct cleanup_elements_ctx {
+	GstElement *queue;
+	GstElement *webrtcbin;
+};
+
+static gpointer cleanup_elements_thread(gpointer data)
+{
+	struct cleanup_elements_ctx *c = data;
+	if (c->webrtcbin) {
+		gst_element_set_state(c->webrtcbin, GST_STATE_NULL);
+		gst_object_unref(c->webrtcbin);
+	}
+	if (c->queue) {
+		gst_element_set_state(c->queue, GST_STATE_NULL);
+		gst_object_unref(c->queue);
+	}
+	g_free(c);
+	return NULL;
+}
+
 static void remove_session_locked(struct gstreamer_webrtc *webrtc, struct whep_session *session)
 {
-	// Detach from pipeline while holding lock so concurrent lookups are safe.
+	// 1. Disconnect any signal callbacks on webrtcbin
 	if (session->webrtcbin) {
 		g_signal_handlers_disconnect_by_data(session->webrtcbin, webrtc);
 	}
-	if (session->queue)
-		gst_element_set_state(session->queue, GST_STATE_NULL);
-	if (session->webrtcbin)
-		gst_element_set_state(session->webrtcbin, GST_STATE_NULL);
-	if (session->sinkpad) {
-		gst_element_release_request_pad(session->webrtcbin, session->sinkpad);
-		gst_object_unref(session->sinkpad);
-		session->sinkpad = NULL;
-	}
+
+	// 2. Unlink and release the tee request pad first so live data stops flowing into the queue
 	if (session->tee_pad) {
+		GstPad *queue_sink = session->queue ? gst_element_get_static_pad(session->queue, "sink") : NULL;
+		if (queue_sink) {
+			gst_pad_unlink(session->tee_pad, queue_sink);
+			gst_object_unref(queue_sink);
+		}
 		gst_element_release_request_pad(webrtc->tee, session->tee_pad);
 		gst_object_unref(session->tee_pad);
 		session->tee_pad = NULL;
 	}
 
-	GstPad *queue_src = session->queue ? gst_element_get_static_pad(session->queue, "src") : NULL;
-	GstPad *peer = queue_src ? gst_pad_get_peer(queue_src) : NULL;
-	if (peer) {
-		gst_pad_unlink(queue_src, peer);
-		gst_object_unref(peer);
+	// 3. Unlink queue from webrtcbin and release webrtcbin sink pad
+	if (session->sinkpad) {
+		GstPad *queue_src = session->queue ? gst_element_get_static_pad(session->queue, "src") : NULL;
+		if (queue_src) {
+			gst_pad_unlink(queue_src, session->sinkpad);
+			gst_object_unref(queue_src);
+		}
+		gst_element_release_request_pad(session->webrtcbin, session->sinkpad);
+		gst_object_unref(session->sinkpad);
+		session->sinkpad = NULL;
 	}
-	if (queue_src)
-		gst_object_unref(queue_src);
 
-	if (session->queue)
+	// 4. Remove from bin and transition to NULL on a helper thread so the GLib main loop / HTTP server never blocks
+	struct cleanup_elements_ctx *c = g_new0(struct cleanup_elements_ctx, 1);
+	if (session->queue) {
+		c->queue = gst_object_ref(session->queue);
 		gst_bin_remove(GST_BIN(webrtc->pipe), session->queue);
-	if (session->webrtcbin)
+		session->queue = NULL;
+	}
+	if (session->webrtcbin) {
+		c->webrtcbin = gst_object_ref(session->webrtcbin);
 		gst_bin_remove(GST_BIN(webrtc->pipe), session->webrtcbin);
+		session->webrtcbin = NULL;
+	}
+	GThread *t = g_thread_new("webrtc-teardown", cleanup_elements_thread, c);
+	if (t)
+		g_thread_unref(t);
 
 	blog(LOG_INFO, "[obs-gstreamer] WebRTC session %s removed", session->id);
 	g_hash_table_steal(webrtc->sessions, session->id);
@@ -656,6 +689,32 @@ static void whep_post(struct gstreamer_webrtc *webrtc, SoupServerMessage *msg)
 
 	g_mutex_lock(&webrtc->sessions_lock);
 	guint count = g_hash_table_size(webrtc->sessions);
+	if (count >= MAX_SESSIONS) {
+		GHashTableIter iter;
+		gpointer key, value;
+		struct whep_session *evict = NULL;
+		g_hash_table_iter_init(&iter, webrtc->sessions);
+		while (g_hash_table_iter_next(&iter, &key, &value)) {
+			struct whep_session *s = value;
+			GstWebRTCPeerConnectionState st = GST_WEBRTC_PEER_CONNECTION_STATE_NEW;
+			if (s->webrtcbin)
+				g_object_get(s->webrtcbin, "connection-state", &st, NULL);
+			if (st != GST_WEBRTC_PEER_CONNECTION_STATE_CONNECTED) {
+				evict = s;
+				break;
+			}
+		}
+		if (!evict) {
+			g_hash_table_iter_init(&iter, webrtc->sessions);
+			if (g_hash_table_iter_next(&iter, &key, &value))
+				evict = value;
+		}
+		if (evict) {
+			blog(LOG_INFO, "[obs-gstreamer] WHEP POST: evicting stale session %s to free slot", evict->id);
+			remove_session_locked(webrtc, evict);
+			count = g_hash_table_size(webrtc->sessions);
+		}
+	}
 	g_mutex_unlock(&webrtc->sessions_lock);
 	if (count >= MAX_SESSIONS) {
 		blog(LOG_WARNING, "[obs-gstreamer] WHEP POST: session limit reached (%d) -> 503", MAX_SESSIONS);
@@ -818,16 +877,34 @@ static void whep_delete(struct gstreamer_webrtc *webrtc, SoupServerMessage *msg,
 	while (*id == '/')
 		id++;
 
+	gst_pipeline_subscriber_t *sub_to_unsub = NULL;
+	gst_master_pipeline_t *master_pipe = NULL;
+
 	g_mutex_lock(&webrtc->sessions_lock);
 	struct whep_session *session = g_hash_table_lookup(webrtc->sessions, id);
-	g_mutex_unlock(&webrtc->sessions_lock);
-
 	if (!session) {
+		g_mutex_unlock(&webrtc->sessions_lock);
 		soup_server_message_set_status(msg, SOUP_STATUS_NOT_FOUND, NULL);
 		return;
 	}
 
-	session_teardown_async(webrtc, id);
+	remove_session_locked(webrtc, session);
+	guint remaining = g_hash_table_size(webrtc->sessions);
+	blog(LOG_INFO, "[obs-gstreamer-webrtc] WebRTC viewer '%s' disconnected (remaining=%u)",
+		id, remaining);
+	if (remaining == 0 && webrtc->sub && webrtc->master_pipe) {
+		sub_to_unsub = webrtc->sub;
+		webrtc->sub = NULL;
+		master_pipe = webrtc->master_pipe;
+	}
+	g_mutex_unlock(&webrtc->sessions_lock);
+
+	if (sub_to_unsub && master_pipe) {
+		blog(LOG_INFO, "[obs-gstreamer-webrtc] All WebRTC viewers disconnected: unsubscribing '%s' from master pipeline",
+			webrtc->name ? webrtc->name : "WebRTC");
+		gst_master_pipeline_unsubscribe(master_pipe, sub_to_unsub);
+	}
+
 	SoupMessageHeaders *headers = soup_server_message_get_response_headers(msg);
 	soup_message_headers_append(headers, "Access-Control-Allow-Origin", "*");
 	soup_server_message_set_status(msg, SOUP_STATUS_OK, NULL);

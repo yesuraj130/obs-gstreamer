@@ -273,9 +273,159 @@ function pollPlayitTunnel() {
   }, 3000);
 }
 
+const STANDALONE_WEBRTC_PORT = 8889;
+let standaloneServerStarted = false;
+
+function ensureStandaloneWebrtcProxy() {
+  if (standaloneServerStarted) return;
+  standaloneServerStarted = true;
+  const standaloneSrv = http.createServer((req, res) => {
+    const proxyReq = http.request({
+      host: TARGET_HOST,
+      port: TARGET_PORT,
+      path: req.url,
+      method: req.method,
+      headers: {
+        ...req.headers,
+        host: `${TARGET_HOST}:${TARGET_PORT}`
+      }
+    }, (proxyRes) => {
+      if (req.method === 'POST' && (req.url === '/whep' || req.url.startsWith('/whep?')) && proxyRes.statusCode === 201) {
+        let sdpChunks = [];
+        proxyRes.on('data', chunk => sdpChunks.push(chunk));
+        proxyRes.on('end', () => {
+          let sdp = Buffer.concat(sdpChunks).toString('utf8');
+          const passiveMatch = sdp.match(/a=candidate:\S+\s+1\s+TCP\s+\d+\s+(169\.254\.\d+\.\d+)\s+(\d+)\s+typ\s+host\s+tcptype\s+passive/i);
+          if (passiveMatch) {
+            openIceTcpTunnel(passiveMatch[1], passiveMatch[2], (tunnelInfo) => {
+              if (tunnelInfo && tunnelInfo.ip && tunnelInfo.port) {
+                const pubCand = `a=candidate:99 1 TCP 2130706431 ${tunnelInfo.ip} ${tunnelInfo.port} typ host tcptype passive\r\n`;
+                sdp = sdp.trim().replace(/\r?\n/g, '\r\n') + '\r\n' + pubCand;
+              } else {
+                sdp = sdp.trim().replace(/\r?\n/g, '\r\n') + '\r\n';
+              }
+              const outBuf = Buffer.from(sdp, 'utf8');
+              res.writeHead(proxyRes.statusCode, { ...proxyRes.headers, 'content-length': String(outBuf.length) });
+              res.end(outBuf);
+            });
+          } else {
+            sdp = sdp.trim().replace(/\r?\n/g, '\r\n') + '\r\n';
+            const outBuf = Buffer.from(sdp, 'utf8');
+            res.writeHead(proxyRes.statusCode, { ...proxyRes.headers, 'content-length': String(outBuf.length) });
+            res.end(outBuf);
+          }
+        });
+      } else {
+        res.writeHead(proxyRes.statusCode, {
+          ...proxyRes.headers,
+          'cache-control': 'no-cache, no-store, must-revalidate'
+        });
+        proxyRes.pipe(res);
+      }
+    });
+    proxyReq.on('error', () => {
+      res.writeHead(503, { 'Content-Type': 'text/plain' });
+      res.end('OBS GStreamer WebRTC server (port 8888) is offline.');
+    });
+    req.pipe(proxyReq);
+  });
+  standaloneSrv.listen(STANDALONE_WEBRTC_PORT, '127.0.0.1', () => {});
+}
+
+let webrtcHttpTunnel = {
+  url: '',
+  status: 'connecting'
+};
+let webrtcHttpProc = null;
+
+function startWebrtcHttpTunnel() {
+  ensureStandaloneWebrtcProxy();
+  if (webrtcHttpProc) {
+    try { webrtcHttpProc.kill(); } catch (e) {}
+    webrtcHttpProc = null;
+  }
+  exec('which ssh >/dev/null 2>&1 && echo "1" || echo "0"', (err, stdout) => {
+    if (!stdout || stdout.trim() !== '1') return;
+    try {
+      const proc = spawn('ssh', [
+        '-p', '443',
+        '-o', 'StrictHostKeyChecking=no',
+        '-o', 'ServerAliveInterval=30',
+        '-o', 'ServerAliveCountMax=3',
+        '-R', `0:localhost:${STANDALONE_WEBRTC_PORT}`,
+        'a.pinggy.io'
+      ]);
+      webrtcHttpProc = proc;
+      const parseOut = (chunk) => {
+        const text = chunk.toString();
+        const match = text.match(/https:\/\/([a-zA-Z0-9_\-]+\.(?:free\.pinggy\.link|run\.pinggy-free\.link|a\.free\.pinggy\.link|pinggy\.link))/i);
+        if (match && !webrtcHttpTunnel.url) {
+          webrtcHttpTunnel.url = `https://${match[1]}`;
+          webrtcHttpTunnel.status = 'online';
+          addLog(`Public Standalone WebRTC Player URL online: ${webrtcHttpTunnel.url}`);
+        }
+      };
+      proc.stdout.on('data', parseOut);
+      proc.stderr.on('data', parseOut);
+      proc.on('close', () => {
+        webrtcHttpProc = null;
+        webrtcHttpTunnel.url = '';
+        webrtcHttpTunnel.status = 'offline';
+        setTimeout(startWebrtcHttpTunnel, 10000);
+      });
+      proc.on('error', () => {});
+    } catch (e) {}
+  });
+}
+
+let activeIceTunnels = [];
+function openIceTcpTunnel(localIp, localPort, callback) {
+  let done = false;
+  const finish = (info) => {
+    if (done) return;
+    done = true;
+    callback(info);
+  };
+  const timer = setTimeout(() => finish(null), 3500);
+  try {
+    const proc = spawn('ssh', [
+      '-p', '443',
+      '-o', 'StrictHostKeyChecking=no',
+      '-o', 'ServerAliveInterval=30',
+      '-R', `0:${localIp}:${localPort}`,
+      'tcp@a.pinggy.io'
+    ]);
+    activeIceTunnels.push(proc);
+    if (activeIceTunnels.length > 6) {
+      const old = activeIceTunnels.shift();
+      try { old.kill(); } catch (e) {}
+    }
+    const parseOut = (chunk) => {
+      const text = chunk.toString();
+      const match = text.match(/tcp:\/\/([^:\s]+):(\d+)/);
+      if (match) {
+        clearTimeout(timer);
+        const host = match[1];
+        const port = match[2];
+        require('dns').lookup(host, { family: 4 }, (err, address) => {
+          finish({ ip: (!err && address) ? address : host, port, host });
+        });
+      }
+    };
+    proc.stdout.on('data', parseOut);
+    proc.stderr.on('data', parseOut);
+    proc.on('error', () => { clearTimeout(timer); finish(null); });
+    proc.on('close', () => { clearTimeout(timer); finish(null); });
+  } catch (e) {
+    clearTimeout(timer);
+    finish(null);
+  }
+}
+
 function startTCPTunnel() {
   startPinggyTunnel();
   startPlayit();
+  startWebrtcHttpTunnel();
 }
 
 // Start public tunnels on server init
@@ -722,6 +872,7 @@ const server = http.createServer((req, res) => {
         online: isOnline,
         targetHost: TARGET_HOST,
         targetPort: TARGET_PORT,
+        publicUrl: webrtcHttpTunnel.url || '',
         message: isOnline ? 'GStreamer WebRTC server is listening' : 'GStreamer WebRTC stream offline (not broadcasting on port 8888)',
         timestamp: new Date().toISOString()
       }));
@@ -786,6 +937,7 @@ const server = http.createServer((req, res) => {
                 novncPort: NOVNC_PORT,
                 vncPassword: 'vncpassword',
                 tcpTunnel: tcpTunnelInfo,
+                webrtcPublicUrl: webrtcHttpTunnel.url || '',
                 currentResolution: currentResolutionMode,
                 logs: setupLogs.slice(-120),
                 timestamp: new Date().toISOString()
@@ -948,7 +1100,7 @@ const server = http.createServer((req, res) => {
   }
 
   // Proxy WHEP / signaling requests to GStreamer WebRTC server on port 8888
-  if (req.url === '/whep' || req.url.startsWith('/whep?')) {
+  if (req.url === '/whep' || req.url.startsWith('/whep?') || req.url.startsWith('/whep/')) {
     const proxyReq = http.request({
       host: TARGET_HOST,
       port: TARGET_PORT,
@@ -959,8 +1111,40 @@ const server = http.createServer((req, res) => {
         host: `${TARGET_HOST}:${TARGET_PORT}`
       }
     }, (proxyRes) => {
-      res.writeHead(proxyRes.statusCode, proxyRes.headers);
-      proxyRes.pipe(res);
+      if (req.method === 'POST' && proxyRes.statusCode === 201) {
+        let sdpChunks = [];
+        proxyRes.on('data', chunk => sdpChunks.push(chunk));
+        proxyRes.on('end', () => {
+          let sdp = Buffer.concat(sdpChunks).toString('utf8');
+          const passiveMatch = sdp.match(/a=candidate:\S+\s+1\s+TCP\s+\d+\s+(169\.254\.\d+\.\d+)\s+(\d+)\s+typ\s+host\s+tcptype\s+passive/i);
+          if (passiveMatch) {
+            const localIp = passiveMatch[1];
+            const localPort = passiveMatch[2];
+            openIceTcpTunnel(localIp, localPort, (tunnelInfo) => {
+              if (tunnelInfo && tunnelInfo.ip && tunnelInfo.port) {
+                const pubCand = `a=candidate:99 1 TCP 2130706431 ${tunnelInfo.ip} ${tunnelInfo.port} typ host tcptype passive\r\n`;
+                sdp = sdp.trim().replace(/\r?\n/g, '\r\n') + '\r\n' + pubCand;
+                addLog(`Forwarded WebRTC ICE-TCP candidate ${localIp}:${localPort} -> ${tunnelInfo.ip}:${tunnelInfo.port}`);
+              } else {
+                sdp = sdp.trim().replace(/\r?\n/g, '\r\n') + '\r\n';
+              }
+              const outBuf = Buffer.from(sdp, 'utf8');
+              const headers = { ...proxyRes.headers, 'content-length': String(outBuf.length) };
+              res.writeHead(proxyRes.statusCode, headers);
+              res.end(outBuf);
+            });
+          } else {
+            sdp = sdp.trim().replace(/\r?\n/g, '\r\n') + '\r\n';
+            const outBuf = Buffer.from(sdp, 'utf8');
+            const headers = { ...proxyRes.headers, 'content-length': String(outBuf.length) };
+            res.writeHead(proxyRes.statusCode, headers);
+            res.end(outBuf);
+          }
+        });
+      } else {
+        res.writeHead(proxyRes.statusCode, proxyRes.headers);
+        proxyRes.pipe(res);
+      }
     });
 
     proxyReq.on('error', (err) => {
@@ -1008,7 +1192,10 @@ const server = http.createServer((req, res) => {
     else if (fullPath.endsWith('.svg')) contentType = 'image/svg+xml';
     else if (fullPath.endsWith('.png')) contentType = 'image/png';
 
-    res.writeHead(200, { 'Content-Type': contentType });
+    res.writeHead(200, {
+      'Content-Type': contentType,
+      'Cache-Control': 'no-cache, no-store, must-revalidate'
+    });
     fs.createReadStream(fullPath).pipe(res);
   });
 });
