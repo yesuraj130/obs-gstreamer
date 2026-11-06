@@ -38,7 +38,7 @@
 #include <libsoup/soup.h>
 
 #define MAX_SESSIONS 16
-#define ANSWER_TIMEOUT_SECONDS 5
+#define ANSWER_TIMEOUT_SECONDS 10
 
 struct packet_counter {
 	const char *label;
@@ -546,8 +546,20 @@ static gboolean idle_reply(gpointer user_data)
 		ctx->sdp ? ctx->sdp : "", ctx->sdp ? strlen(ctx->sdp) : 0);
 	compat_soup_server_message_unpause(ctx->webrtc ? ctx->webrtc->server : NULL, ctx->msg);
 	g_object_unref(ctx->msg);
-	if (ctx->status != SOUP_STATUS_CREATED)
+	if (ctx->status == SOUP_STATUS_CREATED) {
+		if (ctx->webrtc && ctx->webrtc->master_pipe) {
+			gst_master_pipeline_request_keyframe(ctx->webrtc->master_pipe);
+		} else if (ctx->webrtc && ctx->webrtc->pay0) {
+			GstEvent *event = gst_video_event_new_upstream_force_key_unit(GST_CLOCK_TIME_NONE, TRUE, 0);
+			GstPad *pay_src_pad = gst_element_get_static_pad(ctx->webrtc->pay0, "src");
+			if (pay_src_pad) {
+				gst_pad_push_event(pay_src_pad, event);
+				gst_object_unref(pay_src_pad);
+			}
+		}
+	} else {
 		session_teardown_async(ctx->webrtc, ctx->id);
+	}
 	g_free(location);
 
 	g_free(ctx->id);
@@ -796,10 +808,7 @@ static void whep_post(struct gstreamer_webrtc *webrtc, SoupServerMessage *msg)
 	const char *turn = webrtc->turn_server
 		? webrtc->turn_server
 		: (webrtc->settings ? obs_data_get_string(webrtc->settings, "webrtc_turn_server") : NULL);
-	if (!turn || !turn[0]) {
-		turn = "turn://openrelayproject:openrelayproject@openrelay.metered.ca:80";
-	}
-	if (turn && turn[0]) {
+	if (turn && turn[0] && g_strcmp0(turn, "none") != 0) {
 		g_object_set(session->webrtcbin, "turn-server", turn, NULL);
 		blog(LOG_INFO, "[obs-gstreamer-webrtc] WHEP session %s: configured TURN relay: %s",
 			session->id, turn);
@@ -1190,7 +1199,6 @@ struct gstreamer_webrtc *gst_webrtc_branch_start(gst_master_pipeline_t *master_p
 
 	webrtc->loop_context = g_main_context_new();
 	webrtc->loop = g_main_loop_new(webrtc->loop_context, FALSE);
-	webrtc->loop_thread = g_thread_new("obs_gst_webrtc_loop", webrtc_loop_thread_func, webrtc);
 
 	GstBus *bus = gst_element_get_bus(webrtc->pipe);
 	GSource *bus_source = gst_bus_create_watch(bus);
@@ -1225,6 +1233,8 @@ struct gstreamer_webrtc *gst_webrtc_branch_start(gst_master_pipeline_t *master_p
 	soup_server_add_handler(webrtc->server, "/whep", whep_handler, webrtc, NULL);
 	soup_server_add_handler(webrtc->server, NULL, static_file_handler, webrtc, NULL);
 	g_main_context_pop_thread_default(webrtc->loop_context);
+
+	webrtc->loop_thread = g_thread_new("obs_gst_webrtc_loop", webrtc_loop_thread_func, webrtc);
 
 	if (gst_element_set_state(webrtc->pipe, GST_STATE_PLAYING) == GST_STATE_CHANGE_FAILURE) {
 		blog(LOG_ERROR, "[obs-gstreamer-webrtc] Failed to start WebRTC pipeline for '%s'", webrtc->name);
@@ -1334,7 +1344,6 @@ struct gstreamer_webrtc *gstreamer_webrtc_create(obs_output_t *output, obs_data_
 
 	webrtc->loop_context = g_main_context_new();
 	webrtc->loop = g_main_loop_new(webrtc->loop_context, FALSE);
-	webrtc->loop_thread = g_thread_new("obs_gst_webrtc_loop", webrtc_loop_thread_func, webrtc);
 
 	GstBus *bus = gst_element_get_bus(webrtc->pipe);
 	GSource *bus_source = gst_bus_create_watch(bus);
@@ -1370,6 +1379,8 @@ struct gstreamer_webrtc *gstreamer_webrtc_create(obs_output_t *output, obs_data_
 	soup_server_add_handler(webrtc->server, "/whep", whep_handler, webrtc, NULL);
 	soup_server_add_handler(webrtc->server, NULL, static_file_handler, webrtc, NULL);
 	g_main_context_pop_thread_default(webrtc->loop_context);
+
+	webrtc->loop_thread = g_thread_new("obs_gst_webrtc_loop", webrtc_loop_thread_func, webrtc);
 
 	if (gst_element_set_state(webrtc->pipe, GST_STATE_PLAYING) == GST_STATE_CHANGE_FAILURE) {
 		if (error)
