@@ -63,6 +63,7 @@ struct gst_filter_callback
 	obs_source_t *target;
 	gst_master_pipeline_t *pipeline;
 	bool hook_active;
+	bool filter_attached;
 };
 
 struct filter_private_data
@@ -296,7 +297,7 @@ void gstreamer_filter_callback_unregister(void)
 static void pipeline_state_change(bool active, void *user_data)
 {
 	gst_filter_callback_t *cb = (gst_filter_callback_t *)user_data;
-	if (!cb || !cb->filter) return;
+	if (!cb || !cb->filter || !cb->target) return;
 
 	struct filter_private_data *priv = (struct filter_private_data *)obs_obj_get_data(cb->filter);
 	if (priv) priv->active = active;
@@ -304,28 +305,46 @@ static void pipeline_state_change(bool active, void *user_data)
 	obs_add_main_rendered_cb_fn add_rendered = get_obs_add_main_rendered_callback();
 	obs_remove_main_rendered_cb_fn remove_rendered = get_obs_remove_main_rendered_callback();
 
-	if (active && !cb->hook_active)
+	if (active && !cb->filter_attached)
 	{
-		if (add_rendered)
+		obs_source_filter_add(cb->target, cb->filter);
+		obs_source_inc_active(cb->target);
+		cb->filter_attached = true;
+		blog(LOG_INFO, "[obs-gstreamer-filter-callback] Client connected: Attached private filter tap to '%s'",
+			obs_source_get_name_safe(cb->target, "unnamed"));
+
+		if (!cb->hook_active)
 		{
-			add_rendered(filter_cb_post_rendered_handler, cb);
-			blog(LOG_INFO, "[obs-gstreamer-filter-callback] Attached post-frame dual rendering hook (obs_add_main_rendered_callback)");
+			if (add_rendered)
+			{
+				add_rendered(filter_cb_post_rendered_handler, cb);
+				blog(LOG_INFO, "[obs-gstreamer-filter-callback] Attached post-frame dual rendering hook (obs_add_main_rendered_callback)");
+			}
+			else
+			{
+				obs_add_main_render_callback(filter_cb_render_handler, cb);
+				blog(LOG_INFO, "[obs-gstreamer-filter-callback] Attached in-frame dual rendering hook (obs_add_main_render_callback)");
+			}
+			cb->hook_active = true;
 		}
-		else
-		{
-			obs_add_main_render_callback(filter_cb_render_handler, cb);
-			blog(LOG_INFO, "[obs-gstreamer-filter-callback] Attached in-frame dual rendering hook (obs_add_main_render_callback)");
-		}
-		cb->hook_active = true;
 	}
-	else if (!active && cb->hook_active)
+	else if (!active && cb->filter_attached)
 	{
-		if (add_rendered && remove_rendered)
-			remove_rendered(filter_cb_post_rendered_handler, cb);
-		else
-			obs_remove_main_render_callback(filter_cb_render_handler, cb);
-		cb->hook_active = false;
-		blog(LOG_INFO, "[obs-gstreamer-filter-callback] Detached dual rendering hook (pipeline idle)");
+		if (cb->hook_active)
+		{
+			if (add_rendered && remove_rendered)
+				remove_rendered(filter_cb_post_rendered_handler, cb);
+			else
+				obs_remove_main_render_callback(filter_cb_render_handler, cb);
+			cb->hook_active = false;
+			blog(LOG_INFO, "[obs-gstreamer-filter-callback] Detached dual rendering hook (pipeline idle)");
+		}
+
+		obs_source_filter_remove(cb->target, cb->filter);
+		obs_source_dec_active(cb->target);
+		cb->filter_attached = false;
+		blog(LOG_INFO, "[obs-gstreamer-filter-callback] All clients disconnected: Removed private filter tap from '%s'",
+			obs_source_get_name_safe(cb->target, "unnamed"));
 	}
 }
 
@@ -396,14 +415,13 @@ gst_filter_callback_t *gst_filter_callback_create(gst_source_type_t type, const 
 		obs_leave_graphics();
 	}
 
-	obs_source_filter_add(target, filter);
-	obs_source_inc_active(target);
-	blog(LOG_INFO, "[obs-gstreamer-filter-callback] Keeping capture target '%s' active while filter tap is attached (%ux%u, format=%d)",
-		obs_source_get_name_safe(target, "unnamed"), width, height, (int)(priv ? priv->format : GS_UNKNOWN));
-
 	cb->filter = filter;
 	cb->target = target;
 	cb->hook_active = false;
+	cb->filter_attached = false;
+
+	blog(LOG_INFO, "[obs-gstreamer-filter-callback] Initialized filter tap for target '%s' (%ux%u, format=%d, waiting for client connection)",
+		obs_source_get_name_safe(target, "unnamed"), width, height, (int)(priv ? priv->format : GS_UNKNOWN));
 
 	return cb;
 }
@@ -439,13 +457,14 @@ void gst_filter_callback_destroy(gst_filter_callback_t *cb)
 		}
 	}
 
-	if (cb->target)
+	if (cb->filter_attached && cb->target && cb->filter)
 	{
+		obs_source_filter_remove(cb->target, cb->filter);
 		obs_source_dec_active(cb->target);
-		blog(LOG_INFO, "[obs-gstreamer-filter-callback] Released active capture target '%s'",
+		cb->filter_attached = false;
+		blog(LOG_INFO, "[obs-gstreamer-filter-callback] Released active capture target '%s' and removed filter",
 			obs_source_get_name_safe(cb->target, "unnamed"));
 	}
-	if (cb->target && cb->filter) obs_source_filter_remove(cb->target, cb->filter);
 
 	if (cb->pipeline)
 	{
