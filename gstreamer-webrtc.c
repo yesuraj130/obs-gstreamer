@@ -93,6 +93,9 @@ struct gstreamer_webrtc {
 
 	char *web_root;
 	SoupServer *server;
+	GMainContext *loop_context;
+	GMainLoop *loop;
+	GThread *loop_thread;
 
 	GMutex sessions_lock;
 	GHashTable *sessions;
@@ -312,12 +315,54 @@ static const char *default_app_js =
 // Helpers
 // ---------------------------------------------------------------------------
 
+static gpointer webrtc_loop_thread_func(gpointer user_data)
+{
+	struct gstreamer_webrtc *webrtc = user_data;
+	g_main_context_push_thread_default(webrtc->loop_context);
+	g_main_loop_run(webrtc->loop);
+	g_main_context_pop_thread_default(webrtc->loop_context);
+	return NULL;
+}
+
+static guint webrtc_idle_add(struct gstreamer_webrtc *webrtc, GSourceFunc function, gpointer data)
+{
+	GSource *source = g_idle_source_new();
+	g_source_set_callback(source, function, data, NULL);
+	guint id = g_source_attach(source, (webrtc && webrtc->loop_context) ? webrtc->loop_context : NULL);
+	g_source_unref(source);
+	return id;
+}
+
+static guint webrtc_timeout_add_seconds(struct gstreamer_webrtc *webrtc, guint interval, GSourceFunc function, gpointer data)
+{
+	GSource *source = g_timeout_source_new_seconds(interval);
+	g_source_set_callback(source, function, data, NULL);
+	guint id = g_source_attach(source, (webrtc && webrtc->loop_context) ? webrtc->loop_context : NULL);
+	g_source_unref(source);
+	return id;
+}
+
+static void webrtc_source_remove(struct gstreamer_webrtc *webrtc, guint tag)
+{
+	if (!tag)
+		return;
+	if (webrtc && webrtc->loop_context) {
+		GSource *source = g_main_context_find_source_by_id(webrtc->loop_context, tag);
+		if (source)
+			g_source_destroy(source);
+	} else {
+		g_source_remove(tag);
+	}
+}
+
 static void session_free(gpointer data)
 {
 	struct whep_session *session = data;
 
-	if (session->timeout_id)
-		g_source_remove(session->timeout_id);
+	if (session->timeout_id) {
+		webrtc_source_remove(session->webrtc, session->timeout_id);
+		session->timeout_id = 0;
+	}
 	if (session->sinkpad) {
 		gst_object_unref(session->sinkpad);
 		session->sinkpad = NULL;
@@ -376,7 +421,7 @@ static void session_teardown_async(struct gstreamer_webrtc *webrtc, const char *
 	struct idle_teardown *ctx = g_new0(struct idle_teardown, 1);
 	ctx->webrtc = webrtc;
 	ctx->id = g_strdup(id);
-	g_idle_add(idle_teardown, ctx);
+	webrtc_idle_add(webrtc, idle_teardown, ctx);
 }
 
 static void webrtcbin_connection_state_changed(GstElement *webrtcbin, GParamSpec *pspec, gpointer user_data)
@@ -584,7 +629,7 @@ static void on_gathering_complete(GstElement *webrtcbin, GParamSpec *pspec, gpoi
 	reply->id = g_strdup(session->id);
 	reply->sdp = sdp_text;
 	reply->status = SOUP_STATUS_CREATED;
-	g_idle_add(idle_reply, reply);
+	webrtc_idle_add(ctx->webrtc, idle_reply, reply);
 	g_mutex_unlock(&ctx->webrtc->sessions_lock);
 
 	g_free(ctx);
@@ -660,7 +705,7 @@ static void on_answer_created(GstPromise *promise, gpointer user_data)
 			reply_ctx->id = g_strdup(session->id);
 			reply_ctx->sdp = NULL;
 			reply_ctx->status = SOUP_STATUS_INTERNAL_SERVER_ERROR;
-			g_idle_add(idle_reply, reply_ctx);
+			webrtc_idle_add(ctx->webrtc, idle_reply, reply_ctx);
 		}
 		g_mutex_unlock(&ctx->webrtc->sessions_lock);
 		g_free(ctx);
@@ -873,7 +918,7 @@ static void whep_post(struct gstreamer_webrtc *webrtc, SoupServerMessage *msg)
 	struct timeout_ctx *tctx = g_new0(struct timeout_ctx, 1);
 	tctx->webrtc = webrtc;
 	tctx->id = g_strdup(session->id);
-	session->timeout_id = g_timeout_add_seconds(ANSWER_TIMEOUT_SECONDS, answer_timeout, tctx);
+	session->timeout_id = webrtc_timeout_add_seconds(webrtc, ANSWER_TIMEOUT_SECONDS, answer_timeout, tctx);
 	compat_soup_server_message_pause(webrtc->server, msg);
 
 	GstPromise *promise = gst_promise_new_with_change_func(on_remote_description_set, ctx, NULL);
@@ -1143,26 +1188,43 @@ struct gstreamer_webrtc *gst_webrtc_branch_start(gst_master_pipeline_t *master_p
 		}
 	}
 
+	webrtc->loop_context = g_main_context_new();
+	webrtc->loop = g_main_loop_new(webrtc->loop_context, FALSE);
+	webrtc->loop_thread = g_thread_new("obs_gst_webrtc_loop", webrtc_loop_thread_func, webrtc);
+
 	GstBus *bus = gst_element_get_bus(webrtc->pipe);
-	webrtc->bus_watch_id = gst_bus_add_watch(bus, bus_callback, webrtc);
+	GSource *bus_source = gst_bus_create_watch(bus);
+	g_source_set_callback(bus_source, (GSourceFunc)bus_callback, webrtc, NULL);
+	webrtc->bus_watch_id = g_source_attach(bus_source, webrtc->loop_context);
+	g_source_unref(bus_source);
 	gst_object_unref(bus);
 
+	g_main_context_push_thread_default(webrtc->loop_context);
+#if !SOUP_CHECK_VERSION(3, 0, 0)
+	webrtc->server = soup_server_new(SOUP_SERVER_ASYNC_CONTEXT, webrtc->loop_context, NULL);
+#else
 	webrtc->server = soup_server_new(NULL, NULL);
+#endif
 	GError *listen_err = NULL;
 	int port_num = port ? atoi(port) : 8888;
 	if (port_num <= 0 || port_num > 65535)
 		port_num = 8888;
-	if (!soup_server_listen_local(webrtc->server, port_num, 0, &listen_err)) {
-		blog(LOG_ERROR, "[obs-gstreamer-webrtc] Failed to listen on HTTP port %s: %s",
-			port, listen_err ? listen_err->message : "unknown error");
-		if (listen_err)
-			g_error_free(listen_err);
-		gstreamer_webrtc_destroy(webrtc);
-		return NULL;
+	if (!soup_server_listen_all(webrtc->server, port_num, 0, &listen_err)) {
+		g_clear_error(&listen_err);
+		if (!soup_server_listen_local(webrtc->server, port_num, 0, &listen_err)) {
+			g_main_context_pop_thread_default(webrtc->loop_context);
+			blog(LOG_ERROR, "[obs-gstreamer-webrtc] Failed to listen on HTTP port %s: %s",
+				port, listen_err ? listen_err->message : "unknown error");
+			if (listen_err)
+				g_error_free(listen_err);
+			gstreamer_webrtc_destroy(webrtc);
+			return NULL;
+		}
 	}
 
 	soup_server_add_handler(webrtc->server, "/whep", whep_handler, webrtc, NULL);
 	soup_server_add_handler(webrtc->server, NULL, static_file_handler, webrtc, NULL);
+	g_main_context_pop_thread_default(webrtc->loop_context);
 
 	if (gst_element_set_state(webrtc->pipe, GST_STATE_PLAYING) == GST_STATE_CHANGE_FAILURE) {
 		blog(LOG_ERROR, "[obs-gstreamer-webrtc] Failed to start WebRTC pipeline for '%s'", webrtc->name);
@@ -1270,27 +1332,44 @@ struct gstreamer_webrtc *gstreamer_webrtc_create(obs_output_t *output, obs_data_
 		&webrtc->pay_counter, NULL);
 	gst_object_unref(pay_src);
 
+	webrtc->loop_context = g_main_context_new();
+	webrtc->loop = g_main_loop_new(webrtc->loop_context, FALSE);
+	webrtc->loop_thread = g_thread_new("obs_gst_webrtc_loop", webrtc_loop_thread_func, webrtc);
+
 	GstBus *bus = gst_element_get_bus(webrtc->pipe);
-	webrtc->bus_watch_id = gst_bus_add_watch(bus, bus_callback, webrtc);
+	GSource *bus_source = gst_bus_create_watch(bus);
+	g_source_set_callback(bus_source, (GSourceFunc)bus_callback, webrtc, NULL);
+	webrtc->bus_watch_id = g_source_attach(bus_source, webrtc->loop_context);
+	g_source_unref(bus_source);
 	gst_object_unref(bus);
 
+	g_main_context_push_thread_default(webrtc->loop_context);
+#if !SOUP_CHECK_VERSION(3, 0, 0)
+	webrtc->server = soup_server_new(SOUP_SERVER_ASYNC_CONTEXT, webrtc->loop_context, NULL);
+#else
 	webrtc->server = soup_server_new(NULL, NULL);
+#endif
 	GError *listen_err = NULL;
 	int port_num = port ? atoi(port) : 8888;
 	if (port_num <= 0 || port_num > 65535)
 		port_num = 8888;
-	if (!soup_server_listen_local(webrtc->server, port_num, 0, &listen_err)) {
-		if (error)
-			*error = g_strdup_printf("failed to listen on HTTP port %s: %s", port,
-				listen_err ? listen_err->message : "unknown error");
-		if (listen_err)
-			g_error_free(listen_err);
-		gstreamer_webrtc_destroy(webrtc);
-		return NULL;
+	if (!soup_server_listen_all(webrtc->server, port_num, 0, &listen_err)) {
+		g_clear_error(&listen_err);
+		if (!soup_server_listen_local(webrtc->server, port_num, 0, &listen_err)) {
+			g_main_context_pop_thread_default(webrtc->loop_context);
+			if (error)
+				*error = g_strdup_printf("failed to listen on HTTP port %s: %s", port,
+					listen_err ? listen_err->message : "unknown error");
+			if (listen_err)
+				g_error_free(listen_err);
+			gstreamer_webrtc_destroy(webrtc);
+			return NULL;
+		}
 	}
 
 	soup_server_add_handler(webrtc->server, "/whep", whep_handler, webrtc, NULL);
 	soup_server_add_handler(webrtc->server, NULL, static_file_handler, webrtc, NULL);
+	g_main_context_pop_thread_default(webrtc->loop_context);
 
 	if (gst_element_set_state(webrtc->pipe, GST_STATE_PLAYING) == GST_STATE_CHANGE_FAILURE) {
 		if (error)
@@ -1322,13 +1401,29 @@ void gstreamer_webrtc_destroy(struct gstreamer_webrtc *webrtc)
 	}
 
 	if (webrtc->bus_watch_id) {
-		g_source_remove(webrtc->bus_watch_id);
+		webrtc_source_remove(webrtc, webrtc->bus_watch_id);
 		webrtc->bus_watch_id = 0;
 	}
 
 	if (webrtc->server) {
 		soup_server_disconnect(webrtc->server);
 		g_clear_object(&webrtc->server);
+	}
+
+	if (webrtc->loop) {
+		g_main_loop_quit(webrtc->loop);
+	}
+	if (webrtc->loop_thread) {
+		g_thread_join(webrtc->loop_thread);
+		webrtc->loop_thread = NULL;
+	}
+	if (webrtc->loop) {
+		g_main_loop_unref(webrtc->loop);
+		webrtc->loop = NULL;
+	}
+	if (webrtc->loop_context) {
+		g_main_context_unref(webrtc->loop_context);
+		webrtc->loop_context = NULL;
 	}
 
 	if (webrtc->pipe) {
