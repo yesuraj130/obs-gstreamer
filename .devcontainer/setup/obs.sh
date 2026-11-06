@@ -6,12 +6,11 @@ export DEBIAN_PRIORITY=critical
 export LANGUAGE=C.UTF-8
 export LC_ALL=C.UTF-8
 
-# Add official OBS Studio PPA to install latest OBS 32.X (upgraded from 30.X)
+# Target OBS Studio 32.2.2 (requires Qt 6 and obs-frontend-api with obs_frontend_add_dock_by_id)
+OBS_VERSION="32.2.2"
 if ! grep -rq "obsproject/obs-studio" /etc/apt/sources.list /etc/apt/sources.list.d/ 2>/dev/null; then
-    sudo DEBIAN_FRONTEND=noninteractive apt-get update
-    sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends software-properties-common
-    sudo add-apt-repository -y ppa:obsproject/obs-studio
-    sudo DEBIAN_FRONTEND=noninteractive apt-get update
+    apt-get update
+    apt-get install -y --no-install-recommends software-properties-common curl wget ca-certificates
 fi
 
 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \

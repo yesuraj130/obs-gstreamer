@@ -5,6 +5,8 @@ export DEBIAN_FRONTEND=noninteractive
 export DEBIAN_PRIORITY=critical
 export LANGUAGE=C.UTF-8
 export LC_ALL=C.UTF-8
+# Target GStreamer 1.28 release series
+GST_TARGET_VERSION="1.28"
 
 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
     gstreamer1.0-tools \
