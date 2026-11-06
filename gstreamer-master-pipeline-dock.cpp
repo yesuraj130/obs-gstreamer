@@ -1054,8 +1054,8 @@ public:
 		encoderForm->addRow("Hardware Encoder:", m_encoderCombo);
 
 		m_bitrateSpin = new QSpinBox(this);
-		m_bitrateSpin->setRange(500, 50000);
-		m_bitrateSpin->setSingleStep(500);
+		m_bitrateSpin->setRange(10, 100000);
+		m_bitrateSpin->setSingleStep(50);
 		m_bitrateSpin->setValue(hub->bitrate_kbps);
 		m_bitrateSpin->setSuffix(" kbps");
 		encoderForm->addRow("Master Bitrate:", m_bitrateSpin);
