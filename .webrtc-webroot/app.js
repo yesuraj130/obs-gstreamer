@@ -678,7 +678,26 @@
       statSignaling.textContent = pc.signalingState;
     };
 
-    pc.addTransceiver('video', { direction: 'recvonly' });
+    var videoTransceiver = pc.addTransceiver('video', { direction: 'recvonly' });
+    if (typeof RTCRtpReceiver !== 'undefined' && RTCRtpReceiver.getCapabilities) {
+      var caps = RTCRtpReceiver.getCapabilities('video');
+      if (caps && caps.codecs) {
+        var h265Codecs = caps.codecs.filter(function (c) {
+          return c.mimeType && (c.mimeType.toLowerCase() === 'video/h265' || c.mimeType.toLowerCase() === 'video/hevc');
+        });
+        if (h265Codecs.length > 0) {
+          var otherCodecs = caps.codecs.filter(function (c) {
+            return !c.mimeType || (c.mimeType.toLowerCase() !== 'video/h265' && c.mimeType.toLowerCase() !== 'video/hevc');
+          });
+          try {
+            videoTransceiver.setCodecPreferences(h265Codecs.concat(otherCodecs));
+            log('Preferred H265/HEVC in browser WebRTC capabilities', 'info');
+          } catch (e) {
+            log('setCodecPreferences warning: ' + e.message, 'warn');
+          }
+        }
+      }
+    }
 
     pc.ontrack = function (event) {
       log('WebRTC track received: ' + event.track.kind, 'info');
