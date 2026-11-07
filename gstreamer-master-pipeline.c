@@ -381,6 +381,9 @@ static gchar *build_encoder_element_str(const char *enc_name, int gop_size, int 
 	if (element_has_property(enc_name, "zerolatency"))
 		g_string_append(str, " zerolatency=true");
 
+	if (element_has_property(enc_name, "target-usage"))
+		g_string_append(str, " target-usage=6");
+
 	/* AMF encoders already have b-frames=0 and rc-lookahead=0 set above if supported;
 	 * avoid forcing usage=ultra-low-latency as older AMD APUs (VCE 1/2/3) return
 	 * AMF_NOT_SUPPORTED and fail caps negotiation (-4). */
@@ -453,12 +456,14 @@ static GstBusSyncReply master_bus_sync_handler(GstBus *bus, GstMessage *msg, gpo
 		if (err) g_error_free(err);
 		g_free(debug_info);
 		g_atomic_int_set(&hub->pipeline_failed, 1);
+		uint32_t active_slots = (hub->ring_slots >= 2 && hub->ring_slots <= GST_MASTER_MAX_RING_SLOTS)
+			? hub->ring_slots : GST_MASTER_DEFAULT_RING_SLOTS;
 #if HAVE_GST_D3D11
-		for (int i = 0; i < GST_MASTER_NV12_RING_SLOTS; i++)
+		for (uint32_t i = 0; i < active_slots; i++)
 			g_atomic_int_set(&hub->d3d11_slots[i].in_use, 0);
 #endif
 #if HAVE_GST_GL
-		for (int i = 0; i < GST_MASTER_NV12_RING_SLOTS; i++)
+		for (uint32_t i = 0; i < active_slots; i++)
 		{
 			g_atomic_int_set(&hub->gl_slots[i].in_use, 0);
 			g_atomic_int_set(&hub->gl_slots[i].plane_refs, 0);
@@ -846,7 +851,7 @@ static GstElement *create_master_encoder_pipeline(gst_master_pipeline_t *hub, co
 			GstVideoFormat obs_fmt = get_obs_compositing_format();
 			hub->appsrc_format = (obs_fmt == GST_VIDEO_FORMAT_RGBA) ? GST_VIDEO_FORMAT_RGBA : GST_VIDEO_FORMAT_BGRA;
 			pipe_desc = g_strdup_printf(
-				"appsrc name=hub_appsrc is-live=true format=GST_FORMAT_TIME do-timestamp=true "
+				"appsrc name=hub_appsrc is-live=true format=GST_FORMAT_TIME do-timestamp=true leaky-type=downstream max-buffers=1 "
 				"caps=\"video/x-raw(memory:D3D11Memory), width=%u, height=%u, "
 				"format=%s, framerate=%u/%u\" ! "
 				"d3d11convert ! video/x-raw(memory:D3D11Memory), format=NV12 ! "
@@ -867,7 +872,7 @@ static GstElement *create_master_encoder_pipeline(gst_master_pipeline_t *hub, co
 		    (is_gl_memory_encoder(chosen_enc) || is_dmabuf_memory_encoder(chosen_enc)))
 		{
 			pipe_desc = g_strdup_printf(
-				"appsrc name=hub_appsrc is-live=true format=GST_FORMAT_TIME do-timestamp=true "
+				"appsrc name=hub_appsrc is-live=true format=GST_FORMAT_TIME do-timestamp=true leaky-type=downstream max-buffers=1 "
 				"caps=\"video/x-raw(memory:GLMemory), width=%u, height=%u, "
 				"format=NV12, framerate=%u/%u, texture-target=2D, colorimetry=%s\" ! "
 				"%s ! h264parse config-interval=1 ! "
@@ -881,7 +886,7 @@ static GstElement *create_master_encoder_pipeline(gst_master_pipeline_t *hub, co
 #endif
 
 		pipe_desc = g_strdup_printf(
-			"appsrc name=hub_appsrc is-live=true format=GST_FORMAT_TIME do-timestamp=true "
+			"appsrc name=hub_appsrc is-live=true format=GST_FORMAT_TIME do-timestamp=true leaky-type=downstream max-buffers=1 "
 			"caps=\"video/x-raw, width=%u, height=%u, format=NV12, framerate=%u/%u, colorimetry=%s\" ! "
 			"%s ! h264parse config-interval=1 ! video/x-h264, stream-format=byte-stream, alignment=au ! "
 			"appsink name=hub_appsink sync=false drop=true max-buffers=1",
@@ -1009,7 +1014,9 @@ static void d3d11_nv12_slot_release_notify(gpointer user_data)
 static void destroy_d3d11_nv12_converter(gst_master_pipeline_t *hub)
 {
 	if (!hub) return;
-	for (int i = 0; i < GST_MASTER_NV12_RING_SLOTS; i++)
+	uint32_t slots = (hub->ring_slots >= 2 && hub->ring_slots <= GST_MASTER_MAX_RING_SLOTS)
+		? hub->ring_slots : GST_MASTER_DEFAULT_RING_SLOTS;
+	for (uint32_t i = 0; i < slots; i++)
 	{
 		gst_d3d11_nv12_slot_t *slot = &hub->d3d11_slots[i];
 		if (slot->gst_texture && slot->gst_texture != slot->texture)
@@ -1044,7 +1051,10 @@ static bool init_d3d11_nv12_converter(gst_master_pipeline_t *hub)
 		? DXGI_FORMAT_R8G8B8A8_UNORM
 		: DXGI_FORMAT_B8G8R8A8_UNORM;
 
-	for (int i = 0; i < GST_MASTER_NV12_RING_SLOTS; i++)
+	uint32_t slots = (hub->ring_slots >= 2 && hub->ring_slots <= GST_MASTER_MAX_RING_SLOTS)
+		? hub->ring_slots : GST_MASTER_DEFAULT_RING_SLOTS;
+
+	for (uint32_t i = 0; i < slots; i++)
 	{
 		gst_d3d11_nv12_slot_t *slot = &hub->d3d11_slots[i];
 		D3D11_TEXTURE2D_DESC tex_desc = {0};
@@ -1062,7 +1072,7 @@ static bool init_d3d11_nv12_converter(gst_master_pipeline_t *hub)
 		HRESULT hr = ID3D11Device_CreateTexture2D(obs_device, &tex_desc, NULL, &slot->texture);
 		if (FAILED(hr))
 		{
-			blog(LOG_ERROR, "[obs-gstreamer-master] Failed to create D3D11 texture slot %d (format=%d): 0x%08lx",
+			blog(LOG_ERROR, "[obs-gstreamer-master] Failed to create D3D11 texture slot %u (format=%d): 0x%08lx",
 				i, (int)tex_dxgi_format, (unsigned long)hr);
 			return false;
 		}
@@ -1082,7 +1092,7 @@ static bool init_d3d11_nv12_converter(gst_master_pipeline_t *hub)
 					&gst_IID_ID3D11Texture2D, (void **)&slot->gst_texture);
 				if (FAILED(hr))
 				{
-					blog(LOG_ERROR, "[obs-gstreamer-master] Failed to open shared texture slot %d on GStreamer device: 0x%08lx",
+					blog(LOG_ERROR, "[obs-gstreamer-master] Failed to open shared texture slot %u on GStreamer device: 0x%08lx",
 						i, (unsigned long)hr);
 					return false;
 				}
@@ -1098,8 +1108,8 @@ static bool init_d3d11_nv12_converter(gst_master_pipeline_t *hub)
 	}
 
 	hub->d3d11_nv12_ready = true;
-	blog(LOG_INFO, "[obs-gstreamer-master] Initialized D3D11 zero-copy ring buffer (%d slots, appsrc_format=%s)",
-		GST_MASTER_NV12_RING_SLOTS, gst_video_format_to_string(hub->appsrc_format));
+	blog(LOG_INFO, "[obs-gstreamer-master] Initialized D3D11 zero-copy ring buffer (%u slots, appsrc_format=%s)",
+		slots, gst_video_format_to_string(hub->appsrc_format));
 	return true;
 }
 
@@ -1126,11 +1136,14 @@ static bool push_d3d11_texture(gst_master_pipeline_t *hub, gs_texture_t *texture
 	if (!hub->d3d11_nv12_ready && !init_d3d11_nv12_converter(hub))
 		return false;
 
+	uint32_t slots = (hub->ring_slots >= 2 && hub->ring_slots <= GST_MASTER_MAX_RING_SLOTS)
+		? hub->ring_slots : GST_MASTER_DEFAULT_RING_SLOTS;
+
 	/* Multi-slot ring buffer check: locate any available slot starting from next_slot */
 	int free_idx = -1;
-	for (int i = 0; i < GST_MASTER_NV12_RING_SLOTS; i++)
+	for (uint32_t i = 0; i < slots; i++)
 	{
-		uint32_t candidate = (hub->d3d11_next_slot + i) % GST_MASTER_NV12_RING_SLOTS;
+		uint32_t candidate = (hub->d3d11_next_slot + i) % slots;
 		if (g_atomic_int_get(&hub->d3d11_slots[candidate].in_use) == 0)
 		{
 			free_idx = (int)candidate;
@@ -1144,8 +1157,8 @@ static bool push_d3d11_texture(gst_master_pipeline_t *hub, gs_texture_t *texture
 		uint64_t drops = hub->texture_drop_count;
 		if (drops == 1 || drops % 120 == 0)
 		{
-			blog(LOG_WARNING, "[obs-gstreamer-master] Encoder busy: dropped D3D11 frame #%" PRIu64 " (all %d slots in use, total drops: %" PRIu64 ")",
-				hub->texture_push_count + 1, GST_MASTER_NV12_RING_SLOTS, drops);
+			blog(LOG_WARNING, "[obs-gstreamer-master] Encoder busy: dropped D3D11 frame #%" PRIu64 " (all %u slots in use, total drops: %" PRIu64 ")",
+				hub->texture_push_count + 1, slots, drops);
 		}
 		return true;
 	}
@@ -1155,7 +1168,7 @@ static bool push_d3d11_texture(gst_master_pipeline_t *hub, gs_texture_t *texture
 
 	/* Claim slot and advance ring pointer */
 	g_atomic_int_set(&slot->in_use, 1);
-	hub->d3d11_next_slot = (slot_idx + 1) % GST_MASTER_NV12_RING_SLOTS;
+	hub->d3d11_next_slot = (slot_idx + 1) % slots;
 
 	ID3D11Texture2D *d3d_texture = (ID3D11Texture2D *)gs_texture_get_obj(texture);
 	if (!d3d_texture)
@@ -1283,7 +1296,9 @@ static void destroy_gl_nv12_converter(gst_master_pipeline_t *hub)
 	if (hub->gl_context)
 	{
 		GstGLFuncs *gl = hub->gl_context->gl_vtable;
-		for (int i = 0; i < GST_MASTER_NV12_RING_SLOTS; i++)
+		uint32_t slots = (hub->ring_slots >= 2 && hub->ring_slots <= GST_MASTER_MAX_RING_SLOTS)
+			? hub->ring_slots : GST_MASTER_DEFAULT_RING_SLOTS;
+		for (uint32_t i = 0; i < slots; i++)
 		{
 			gst_gl_nv12_slot_t *slot = &hub->gl_slots[i];
 			if (slot->fbo_y) { gl->DeleteFramebuffers(1, &slot->fbo_y); slot->fbo_y = 0; }
@@ -1412,7 +1427,10 @@ static bool init_gl_nv12_converter(gst_master_pipeline_t *hub)
 	if (!hub->gl_nv12_prog_y || !hub->gl_nv12_prog_uv)
 		return false;
 
-	for (int i = 0; i < GST_MASTER_NV12_RING_SLOTS; i++)
+	uint32_t slots = (hub->ring_slots >= 2 && hub->ring_slots <= GST_MASTER_MAX_RING_SLOTS)
+		? hub->ring_slots : GST_MASTER_DEFAULT_RING_SLOTS;
+
+	for (uint32_t i = 0; i < slots; i++)
 	{
 		gst_gl_nv12_slot_t *slot = &hub->gl_slots[i];
 
@@ -1450,8 +1468,8 @@ static bool init_gl_nv12_converter(gst_master_pipeline_t *hub)
 	}
 
 	hub->gl_nv12_ready = true;
-	blog(LOG_INFO, "[obs-gstreamer-master] Initialized OpenGL NV12 converter (%d-slot ring buffer, colorimetry=%s)",
-		GST_MASTER_NV12_RING_SLOTS, hub->colorimetry_str);
+	blog(LOG_INFO, "[obs-gstreamer-master] Initialized OpenGL NV12 converter (%u-slot ring buffer, colorimetry=%s)",
+		slots, hub->colorimetry_str);
 	return true;
 }
 
@@ -1475,11 +1493,14 @@ static bool push_gl_texture(gst_master_pipeline_t *hub, gs_texture_t *texture, u
 	if (!hub->gl_nv12_ready && !init_gl_nv12_converter(hub))
 		return false;
 
+	uint32_t slots = (hub->ring_slots >= 2 && hub->ring_slots <= GST_MASTER_MAX_RING_SLOTS)
+		? hub->ring_slots : GST_MASTER_DEFAULT_RING_SLOTS;
+
 	/* Multi-slot ring buffer check: locate any available slot starting from next_slot */
 	int free_idx = -1;
-	for (int i = 0; i < GST_MASTER_NV12_RING_SLOTS; i++)
+	for (uint32_t i = 0; i < slots; i++)
 	{
-		uint32_t candidate = (hub->gl_next_slot + i) % GST_MASTER_NV12_RING_SLOTS;
+		uint32_t candidate = (hub->gl_next_slot + i) % slots;
 		if (g_atomic_int_get(&hub->gl_slots[candidate].in_use) == 0)
 		{
 			free_idx = (int)candidate;
@@ -1493,8 +1514,8 @@ static bool push_gl_texture(gst_master_pipeline_t *hub, gs_texture_t *texture, u
 		uint64_t drops = hub->texture_drop_count;
 		if (drops == 1 || drops % 120 == 0)
 		{
-			blog(LOG_WARNING, "[obs-gstreamer-master] Encoder busy: dropped OpenGL frame #%" PRIu64 " (all %d slots in use, total drops: %" PRIu64 ")",
-				hub->texture_push_count + 1, GST_MASTER_NV12_RING_SLOTS, drops);
+			blog(LOG_WARNING, "[obs-gstreamer-master] Encoder busy: dropped OpenGL frame #%" PRIu64 " (all %u slots in use, total drops: %" PRIu64 ")",
+				hub->texture_push_count + 1, slots, drops);
 		}
 		return true;
 	}
@@ -1504,7 +1525,7 @@ static bool push_gl_texture(gst_master_pipeline_t *hub, gs_texture_t *texture, u
 
 	g_atomic_int_set(&slot->in_use, 1);
 	g_atomic_int_set(&slot->plane_refs, 2); /* 2 planes: Y and UV */
-	hub->gl_next_slot = (slot_idx + 1) % GST_MASTER_NV12_RING_SLOTS;
+	hub->gl_next_slot = (slot_idx + 1) % slots;
 
 	const guint *tex_ptr = (const guint *)gs_texture_get_obj(texture);
 	if (!tex_ptr || *tex_ptr == 0)
@@ -2029,6 +2050,7 @@ gst_master_pipeline_t *gst_master_pipeline_create(const char *custom_master_pipe
 	hub->state_cb = state_cb;
 	hub->state_user_data = user_data;
 	hub->gpu_input = false;
+	hub->ring_slots = GST_MASTER_DEFAULT_RING_SLOTS;
 
 	const char *chosen_enc = gst_master_pipeline_select_encoder(encoder_type, gpu_input);
 	hub->selected_encoder = bstrdup(chosen_enc);
@@ -2181,6 +2203,14 @@ gst_master_pipeline_t *gst_master_pipeline_create(const char *custom_master_pipe
 	if (state_cb) state_cb(false, user_data);
 
 	return hub;
+}
+
+void gst_master_pipeline_set_ring_slots(gst_master_pipeline_t *hub, uint32_t ring_slots)
+{
+	if (!hub) return;
+	if (ring_slots < 2) ring_slots = 2;
+	if (ring_slots > GST_MASTER_MAX_RING_SLOTS) ring_slots = GST_MASTER_MAX_RING_SLOTS;
+	hub->ring_slots = ring_slots;
 }
 
 void gst_master_pipeline_destroy(gst_master_pipeline_t *hub)

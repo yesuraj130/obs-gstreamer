@@ -71,6 +71,7 @@ struct gst_render_callback
 	bool hook_active;
 	bool main_texture_null_logged;
 	bool main_texture_logged;
+	uint64_t last_frame_time;
 };
 
 static void render_callback_handler(void *param, uint32_t cx, uint32_t cy)
@@ -79,6 +80,15 @@ static void render_callback_handler(void *param, uint32_t cx, uint32_t cy)
 	UNUSED_PARAMETER(cy);
 	gst_render_callback_t *cb = (gst_render_callback_t *)param;
 	if (!cb || !cb->hook_active || !cb->pipeline) return;
+
+	uint64_t cur_frame_time = obs_get_video_frame_time();
+	if (cur_frame_time != 0 && cb->last_frame_time == cur_frame_time)
+	{
+		/* Secondary render pass in the exact same frame tick (e.g. Studio Mode Preview, Projector, Multiview) */
+		return;
+	}
+	cb->last_frame_time = cur_frame_time;
+	uint64_t pts = cur_frame_time ? cur_frame_time : os_gettime_ns();
 
 	if (cb->source_type == GST_SOURCE_MAIN_OUTPUT)
 	{
@@ -92,7 +102,7 @@ static void render_callback_handler(void *param, uint32_t cx, uint32_t cy)
 					(int)gs_texture_get_color_format(tex));
 				cb->main_texture_logged = true;
 			}
-			gst_master_pipeline_push_texture(cb->pipeline, tex, os_gettime_ns());
+			gst_master_pipeline_push_texture(cb->pipeline, tex, pts);
 		} else if (!cb->main_texture_null_logged) {
 			blog(LOG_WARNING, "[obs-gstreamer-render-callback] Main output texture is not available");
 			cb->main_texture_null_logged = true;
@@ -126,7 +136,7 @@ static void render_callback_handler(void *param, uint32_t cx, uint32_t cy)
 	gs_texture_t *tex = gs_texrender_get_texture(cb->texrender);
 	if (tex)
 	{
-		gst_master_pipeline_push_texture(cb->pipeline, tex, os_gettime_ns());
+		gst_master_pipeline_push_texture(cb->pipeline, tex, pts);
 	}
 }
 

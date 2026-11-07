@@ -76,7 +76,7 @@ bool obs_frontend_add_dock_by_id(const char *id, const char *title, void *dock) 
 #include <memory>
 
 #define DEFAULT_MASTER_PIPELINE \
-	"appsrc name=hub_appsrc is-live=true format=GST_FORMAT_TIME do-timestamp=true " \
+	"appsrc name=hub_appsrc is-live=true format=GST_FORMAT_TIME do-timestamp=true leaky-type=downstream max-buffers=1 " \
 	"caps=\"video/x-raw, format=NV12, width=%u, height=%u, framerate=%u/%u\" ! " \
 	"x264enc tune=zerolatency speed-preset=ultrafast bframes=0 key-int-max=30 bitrate=4000 ! " \
 	"h264parse config-interval=1 ! video/x-h264, stream-format=byte-stream, alignment=au ! " \
@@ -151,6 +151,7 @@ struct GstMasterHub {
 	std::string gpu_encoder_type; /* "auto", "nvenc", "vaapi", "vtenc", "x264enc" */
 	int bitrate_kbps;
 	int keyint_sec;
+	int ring_buffer_slots;
 	std::string master_pipeline;
 
 	bool is_active;
@@ -171,6 +172,7 @@ struct GstMasterHub {
 		  gpu_encoder_type("auto"),
 		  bitrate_kbps(4000),
 		  keyint_sec(1),
+		  ring_buffer_slots(2),
 		  master_pipeline(""),
 		  is_active(false),
 		  active_render_cb(nullptr),
@@ -211,6 +213,7 @@ static void export_dock_status_json()
 		hubObj["capture_method"] = QString::fromStdString(hub->capture_method);
 		hubObj["gpu_encoder_type"] = QString::fromStdString(hub->gpu_encoder_type);
 		hubObj["bitrate_kbps"] = hub->bitrate_kbps;
+		hubObj["ring_buffer_slots"] = hub->ring_buffer_slots;
 		hubObj["is_active"] = hub->is_active || is_hub_pipeline_active(hub.get());
 
 		QJsonArray destsArray;
@@ -262,6 +265,7 @@ static void save_dock_config(obs_data_t *save_data)
 		obs_data_set_string(hubObj, "gpu_encoder_type", hub->gpu_encoder_type.c_str());
 		obs_data_set_int(hubObj, "bitrate_kbps", hub->bitrate_kbps);
 		obs_data_set_int(hubObj, "keyint_sec", hub->keyint_sec);
+		obs_data_set_int(hubObj, "ring_buffer_slots", hub->ring_buffer_slots);
 		obs_data_set_string(hubObj, "master_pipeline", hub->master_pipeline.c_str());
 
 		obs_data_array_t *destsArray = obs_data_array_create();
@@ -332,6 +336,11 @@ static void load_dock_config(obs_data_t *save_data)
 		hub->keyint_sec = obs_data_has_user_value(hubObj, "keyint_sec")
 			? (int)obs_data_get_int(hubObj, "keyint_sec")
 			: 1;
+		hub->ring_buffer_slots = obs_data_has_user_value(hubObj, "ring_buffer_slots")
+			? (int)obs_data_get_int(hubObj, "ring_buffer_slots")
+			: 2;
+		if (hub->ring_buffer_slots < 2) hub->ring_buffer_slots = 2;
+		if (hub->ring_buffer_slots > GST_MASTER_MAX_RING_SLOTS) hub->ring_buffer_slots = GST_MASTER_MAX_RING_SLOTS;
 		hub->master_pipeline = read_data_string(hubObj, "master_pipeline");
 
 		obs_data_array_t *destsArray = obs_data_get_array(hubObj, "destinations");
@@ -507,27 +516,28 @@ static gst_master_pipeline_t *ensure_master_pipeline(GstMasterHub *hub)
 	blog(LOG_INFO, "[obs-gstreamer-dock] Starting Master Pipeline for '%s' (method='%s', encoder=%s, bitrate=%d kbps)",
 		hub->name.c_str(), hub->capture_method.c_str(), encoder_type, hub->bitrate_kbps);
 
+	gst_master_pipeline_t *pipe = nullptr;
 	if (hub->capture_method == "Encoder Callback (GPU Hardware Texture Encoder)") {
 		hub->active_encoder_cb = gst_encoder_callback_create(
 			stype, target_scene, target_source, custom_pipe, encoder_type,
 			hub->bitrate_kbps, hub->keyint_sec, fps_num, fps_den
 		);
 		if (hub->active_encoder_cb)
-			return gst_encoder_callback_get_pipeline(hub->active_encoder_cb);
+			pipe = gst_encoder_callback_get_pipeline(hub->active_encoder_cb);
 	} else if (hub->capture_method == "Filter Callback (Source Video Filter Tap)") {
 		hub->active_filter_cb = gst_filter_callback_create(
 			stype, target_scene, target_source, custom_pipe, encoder_type,
 			hub->bitrate_kbps, hub->keyint_sec, fps_num, fps_den
 		);
 		if (hub->active_filter_cb)
-			return gst_filter_callback_get_pipeline(hub->active_filter_cb);
+			pipe = gst_filter_callback_get_pipeline(hub->active_filter_cb);
 	} else if (hub->capture_method == "Output Callback (Raw Video/Audio Frames)") {
 		hub->active_output_cb = gst_output_callback_create(
 			stype, target_scene, target_source, custom_pipe, encoder_type,
 			hub->bitrate_kbps, hub->keyint_sec, fps_num, fps_den
 		);
 		if (hub->active_output_cb)
-			return gst_output_callback_get_pipeline(hub->active_output_cb);
+			pipe = gst_output_callback_get_pipeline(hub->active_output_cb);
 	} else {
 		/* Default: Render Callback (GPU Direct Texture) */
 		hub->active_render_cb = gst_render_callback_create(
@@ -535,7 +545,13 @@ static gst_master_pipeline_t *ensure_master_pipeline(GstMasterHub *hub)
 			hub->bitrate_kbps, hub->keyint_sec, fps_num, fps_den
 		);
 		if (hub->active_render_cb)
-			return gst_render_callback_get_pipeline(hub->active_render_cb);
+			pipe = gst_render_callback_get_pipeline(hub->active_render_cb);
+	}
+
+	if (pipe) {
+		uint32_t configured_slots = hub->ring_buffer_slots >= 2 ? (uint32_t)hub->ring_buffer_slots : GST_MASTER_DEFAULT_RING_SLOTS;
+		gst_master_pipeline_set_ring_slots(pipe, configured_slots);
+		return pipe;
 	}
 
 	blog(LOG_ERROR, "[obs-gstreamer-dock] Failed to create Master Pipeline callback for '%s'", hub->name.c_str());
@@ -1066,6 +1082,12 @@ public:
 		m_keyintSpin->setSuffix(" sec");
 		encoderForm->addRow("Keyframe Interval:", m_keyintSpin);
 
+		m_ringSlotsSpin = new QSpinBox(this);
+		m_ringSlotsSpin->setRange(2, 8);
+		m_ringSlotsSpin->setValue(hub->ring_buffer_slots >= 2 ? hub->ring_buffer_slots : 2);
+		m_ringSlotsSpin->setToolTip("Number of D3D11/OpenGL GPU textures in zero-copy ring buffer (default: 2, ping-pong). Increasing to 3 or 4 provides extra absorption cushion against jitter/drops.");
+		encoderForm->addRow("Ring Buffer Slots:", m_ringSlotsSpin);
+
 		m_customPipeEdit = new QPlainTextEdit(QString::fromStdString(hub->master_pipeline), this);
 		m_customPipeEdit->setPlaceholderText("Optional: Custom GStreamer Master Pipeline string (leave empty for auto GPU encoder)");
 		m_customPipeEdit->setMaximumHeight(45);
@@ -1440,6 +1462,7 @@ private:
 		m_hub->gpu_encoder_type = m_encoderCombo->currentData().toString().toStdString();
 		m_hub->bitrate_kbps = m_bitrateSpin->value();
 		m_hub->keyint_sec = m_keyintSpin->value();
+		m_hub->ring_buffer_slots = m_ringSlotsSpin->value();
 		m_hub->master_pipeline = m_customPipeEdit->toPlainText().toStdString();
 
 		export_dock_status_json();
@@ -1455,6 +1478,7 @@ private:
 	QComboBox *m_encoderCombo;
 	QSpinBox *m_bitrateSpin;
 	QSpinBox *m_keyintSpin;
+	QSpinBox *m_ringSlotsSpin;
 	QPlainTextEdit *m_customPipeEdit;
 	QListWidget *m_destList;
 
