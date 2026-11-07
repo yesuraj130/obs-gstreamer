@@ -435,7 +435,7 @@ static GstFlowReturn audio_new_sample(GstAppSink *appsink, gpointer user_data)
 	#define DEFAULT_INTERNAL_VIDEO_PIPELINE "videoconvert name=video ! video/x-raw, format={I420,NV12,BGRA,BGRx,RGBx,RGBA,YUY2,YVYU,UYVY} ! appsink name=video_appsink"
 #endif
 
-#define DEFAULT_INTERNAL_AUDIO_PIPELINE "audioconvert name=audio ! audioresample ! audio/x-raw, format={U8,S16LE,S32LE,F32LE}, channels={1,2,3,4,5,6,8}, layout=interleaved ! appsink name=audio_appsink"
+#define DEFAULT_INTERNAL_AUDIO_PIPELINE "audioconvert name=audio ! audioresample ! audio/x-raw, format={U8,S16LE,S32LE,F32LE}, channels={1,2,3,4,5,6,8}, layout=interleaved ! appsink name=audio_appsink async=false"
 #define DEFAULT_INTERNAL_PIPELINE DEFAULT_INTERNAL_VIDEO_PIPELINE " " DEFAULT_INTERNAL_AUDIO_PIPELINE
 
 static char *sanitize_pipeline_string(const char *input)
@@ -573,8 +573,8 @@ static void create_pipeline(struct gstreamer_source_data *data, obs_data_t *sett
 			gst_app_sink_set_callbacks(GST_APP_SINK(a_sink), &audio_cbs, data, NULL);
 
 			bool sync_audio = obs_data_get_bool(settings, "sync_appsink_audio");
-			g_object_set(a_sink, "sync", sync_audio ? TRUE : FALSE, "max-buffers", 8, "drop", TRUE, NULL);
-			blog(LOG_INFO, "[obs-gstreamer-source] %s: Audio appsink configured (sync=%s)", source_name ? source_name : "gstreamer-source", sync_audio ? "true" : "false");
+			g_object_set(a_sink, "async", FALSE, "sync", sync_audio ? TRUE : FALSE, "max-buffers", 8, "drop", TRUE, NULL);
+			blog(LOG_INFO, "[obs-gstreamer-source] %s: Audio appsink configured (async=false, sync=%s)", source_name ? source_name : "gstreamer-source", sync_audio ? "true" : "false");
 		}
 		gst_object_unref(a_sink); // Bin holds primary reference; safe to unref lookup
 	}
