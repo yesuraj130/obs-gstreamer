@@ -256,10 +256,15 @@ struct gst_hub_branch *gst_rtsp_branch_start(gst_master_pipeline_t *pipeline,
 	gst_rtsp_media_factory_set_shared(factory, TRUE);
 	gst_rtsp_media_factory_set_protocols(factory, GST_RTSP_LOWER_TRANS_UDP | GST_RTSP_LOWER_TRANS_UDP_MCAST | GST_RTSP_LOWER_TRANS_TCP);
 
+	const char *pipe_codec = gst_master_pipeline_get_codec(pipeline);
+	bool is_hevc = (pipe_codec && g_strcmp0(pipe_codec, "h265") == 0) ||
+	               (encoder_type && (strstr(encoder_type, "h265") || strstr(encoder_type, "hevc")));
+
 	const char *launch_str = NULL;
-	if (rtsp_pipeline && rtsp_pipeline[0]) {
+	if (rtsp_pipeline && rtsp_pipeline[0] &&
+	    !(is_hevc && strstr(rtsp_pipeline, "rtph264pay") != NULL)) {
 		launch_str = rtsp_pipeline;
-	} else if (encoder_type && (strstr(encoder_type, "h265") || strstr(encoder_type, "hevc"))) {
+	} else if (is_hevc) {
 		launch_str = "( appsrc name=appsrc_video is-live=true format=GST_FORMAT_TIME do-timestamp=true "
 		             "caps=\"video/x-h265, stream-format=byte-stream, alignment=au\" ! "
 		             "h265parse config-interval=1 ! rtph265pay name=pay0 pt=96 config-interval=1 )";
@@ -329,7 +334,9 @@ struct gst_hub_branch *gst_custom_branch_start(gst_master_pipeline_t *pipeline,
 		? custom_pipeline
 		: "autovideosink sync=false";
 
-	bool is_hevc = encoder_type && (strstr(encoder_type, "h265") != NULL || strstr(encoder_type, "hevc") != NULL);
+	const char *pipe_codec = gst_master_pipeline_get_codec(pipeline);
+	bool is_hevc = (pipe_codec && g_strcmp0(pipe_codec, "h265") == 0) ||
+	               (encoder_type && (strstr(encoder_type, "h265") != NULL || strstr(encoder_type, "hevc") != NULL));
 	const char *caps_str = is_hevc
 		? "video/x-h265, stream-format=byte-stream, alignment=au"
 		: "video/x-h264, stream-format=byte-stream, alignment=au";

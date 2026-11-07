@@ -85,6 +85,7 @@ struct gstreamer_webrtc {
 	gst_pipeline_subscriber_t *sub;
 	bool active;
 	bool waiting_for_keyframe;
+	bool is_h265;
 
 	GstElement *pipe;
 	GstElement *appsrc;
@@ -823,8 +824,10 @@ static void whep_post(struct gstreamer_webrtc *webrtc, SoupServerMessage *msg)
 	GstWebRTCRTPTransceiver *transceiver = NULL;
 	g_object_get(session->sinkpad, "transceiver", &transceiver, NULL);
 	if (transceiver) {
-		GstCaps *codec_caps = gst_caps_from_string(
-			"application/x-rtp,media=video,encoding-name=H264,clock-rate=90000");
+		const char *rtp_caps_str = webrtc->is_h265
+			? "application/x-rtp,media=video,encoding-name=H265,clock-rate=90000"
+			: "application/x-rtp,media=video,encoding-name=H264,clock-rate=90000";
+		GstCaps *codec_caps = gst_caps_from_string(rtp_caps_str);
 		g_object_set(transceiver, "direction",
 			GST_WEBRTC_RTP_TRANSCEIVER_DIRECTION_SENDONLY,
 			"codec-preferences", codec_caps, NULL);
@@ -1161,16 +1164,29 @@ struct gstreamer_webrtc *gst_webrtc_branch_start(gst_master_pipeline_t *master_p
 	seed_web_root(webrtc->web_root);
 	blog(LOG_INFO, "[obs-gstreamer-webrtc] WebRTC web root: %s", webrtc->web_root);
 
-	const char *launch =
-		"appsrc name=appsrc_video is-live=true format=GST_FORMAT_TIME do-timestamp=true "
-		"caps=\"video/x-h264, stream-format=byte-stream, alignment=au\" "
-		"! h264parse config-interval=1 "
-		"! rtph264pay name=pay0 pt=102 config-interval=1 aggregate-mode=zero-latency "
-		"! tee name=t "
-		"t. ! queue leaky=downstream max-size-buffers=2 ! fakesink sync=false";
+	const char *pipe_codec = gst_master_pipeline_get_codec(master_pipe);
+	webrtc->is_h265 = (pipe_codec && g_strcmp0(pipe_codec, "h265") == 0) ||
+	                  (encoder_type && (strstr(encoder_type, "h265") || strstr(encoder_type, "hevc")));
+
+	gchar *launch = webrtc->is_h265
+		? g_strdup(
+			"appsrc name=appsrc_video is-live=true format=GST_FORMAT_TIME do-timestamp=true "
+			"caps=\"video/x-h265, stream-format=byte-stream, alignment=au\" "
+			"! h265parse config-interval=1 "
+			"! rtph265pay name=pay0 pt=102 config-interval=1 aggregate-mode=zero-latency "
+			"! tee name=t "
+			"t. ! queue leaky=downstream max-size-buffers=2 ! fakesink sync=false")
+		: g_strdup(
+			"appsrc name=appsrc_video is-live=true format=GST_FORMAT_TIME do-timestamp=true "
+			"caps=\"video/x-h264, stream-format=byte-stream, alignment=au\" "
+			"! h264parse config-interval=1 "
+			"! rtph264pay name=pay0 pt=102 config-interval=1 aggregate-mode=zero-latency "
+			"! tee name=t "
+			"t. ! queue leaky=downstream max-size-buffers=2 ! fakesink sync=false");
 
 	GError *err = NULL;
 	webrtc->pipe = gst_parse_launch(launch, &err);
+	g_free(launch);
 	if (err || !webrtc->pipe) {
 		blog(LOG_ERROR, "[obs-gstreamer-webrtc] Failed to create WebRTC pipeline for '%s': %s",
 			webrtc->name, err ? err->message : "unknown error");

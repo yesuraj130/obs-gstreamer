@@ -355,6 +355,14 @@ static gchar *build_encoder_element_str(const char *enc_name, int gop_size, int 
 		return g_string_free(str, FALSE);
 	}
 
+	if (g_strcmp0(enc_name, "x265enc") == 0)
+	{
+		g_string_append_printf(str,
+			" tune=zerolatency speed-preset=ultrafast key-int-max=%d bitrate=%d",
+			gop_size, bitrate_kbps);
+		return g_string_free(str, FALSE);
+	}
+
 	/* Hardware encoders: inspect supported properties dynamically so gst_parse_launch never fails */
 	if (element_has_property(enc_name, "gop-size"))
 		g_string_append_printf(str, " gop-size=%d", gop_size);
@@ -2215,6 +2223,11 @@ void gst_master_pipeline_set_ring_slots(gst_master_pipeline_t *hub, uint32_t rin
 	if (ring_slots < 2) ring_slots = 2;
 	if (ring_slots > GST_MASTER_MAX_RING_SLOTS) ring_slots = GST_MASTER_MAX_RING_SLOTS;
 	hub->ring_slots = ring_slots;
+}
+
+const char *gst_master_pipeline_get_codec(gst_master_pipeline_t *hub)
+{
+	return (hub && hub->video_codec) ? hub->video_codec : "h264";
 }
 
 void gst_master_pipeline_destroy(gst_master_pipeline_t *hub)

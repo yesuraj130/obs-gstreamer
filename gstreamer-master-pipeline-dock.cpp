@@ -573,16 +573,23 @@ static bool start_destination(GstMasterHub *hub, GstDestination *dest)
 		return false;
 	}
 
+	std::string effective_codec = hub->video_codec;
+	std::string effective_enc = hub->gpu_encoder_type;
+	if (effective_enc == "auto") {
+		const char *sel = gst_master_pipeline_select_encoder("auto", effective_codec.c_str(), true);
+		if (sel) effective_enc = sel;
+	}
+
 	if (dest->type == DEST_TYPE_RTSP) {
-		blog(LOG_INFO, "[obs-gstreamer-dock] Starting RTSP destination on port %s%s linked to master pipeline '%s'...",
-			dest->rtsp_port.c_str(), dest->rtsp_mount.c_str(), hub->name.c_str());
+		blog(LOG_INFO, "[obs-gstreamer-dock] Starting RTSP destination on port %s%s linked to master pipeline '%s' (codec=%s)...",
+			dest->rtsp_port.c_str(), dest->rtsp_mount.c_str(), hub->name.c_str(), effective_codec.c_str());
 
 		dest->rtsp_branch = gst_rtsp_branch_start(
 			master_pipe,
 			dest->name.c_str(),
 			dest->rtsp_port.c_str(),
 			dest->rtsp_mount.c_str(),
-			hub->gpu_encoder_type.c_str(),
+			effective_enc.c_str(),
 			dest->rtsp_pipeline.c_str()
 		);
 
@@ -615,8 +622,8 @@ static bool start_destination(GstMasterHub *hub, GstDestination *dest)
 
 		return true;
 	} else if (dest->type == DEST_TYPE_WEBRTC) {
-		blog(LOG_INFO, "[obs-gstreamer-dock] Starting WebRTC destination on port %s linked to master pipeline '%s'...",
-			dest->webrtc_port.c_str(), hub->name.c_str());
+		blog(LOG_INFO, "[obs-gstreamer-dock] Starting WebRTC destination on port %s linked to master pipeline '%s' (codec=%s)...",
+			dest->webrtc_port.c_str(), hub->name.c_str(), effective_codec.c_str());
 
 		dest->webrtc_branch = gst_webrtc_branch_start(
 			master_pipe,
@@ -625,7 +632,7 @@ static bool start_destination(GstMasterHub *hub, GstDestination *dest)
 			dest->webrtc_stun.c_str(),
 			dest->webrtc_turn.c_str(),
 			dest->webrtc_web_root.c_str(),
-			hub->gpu_encoder_type.c_str()
+			effective_enc.c_str()
 		);
 
 		if (!dest->webrtc_branch) {
@@ -1046,39 +1053,10 @@ public:
 		encoderForm->addRow("Video Codec:", m_codecCombo);
 
 		m_encoderCombo = new QComboBox(this);
-		const char *autoEnc = gst_master_pipeline_select_encoder("auto", hub->video_codec.c_str(), true);
-		m_encoderCombo->addItem(
-			QString("Auto Detect GPU (%1)").arg(autoEnc ? autoEnc : "auto"),
-			"auto");
-		if (gst_master_pipeline_element_available("nvd3d11h264enc") ||
-		    gst_master_pipeline_element_available("nvh264enc") ||
-		    gst_master_pipeline_element_available("nvcudah264enc"))
-			m_encoderCombo->addItem("NVIDIA NVENC (Detected)", "nvh264enc");
-		else
-			m_encoderCombo->addItem("NVIDIA NVENC (nvh264enc)", "nvh264enc");
-
-		if (gst_master_pipeline_element_available("qsvh264enc"))
-			m_encoderCombo->addItem("Intel QuickSync (Detected)", "qsvh264enc");
-		else
-			m_encoderCombo->addItem("Intel QuickSync (qsvh264enc)", "qsvh264enc");
-
-		if (gst_master_pipeline_element_available("amfh264enc"))
-			m_encoderCombo->addItem("AMD AMF (Detected)", "amfh264enc");
-		else
-			m_encoderCombo->addItem("AMD AMF (amfh264enc)", "amfh264enc");
-
-		if (gst_master_pipeline_element_available("vah264enc") ||
-		    gst_master_pipeline_element_available("vaapih264enc"))
-			m_encoderCombo->addItem("VAAPI GPU (Detected)", "vaapih264enc");
-		else
-			m_encoderCombo->addItem("VAAPI GPU (vaapih264enc)", "vaapih264enc");
-
-		if (gst_master_pipeline_element_available("mfh264enc"))
-			m_encoderCombo->addItem("MediaFoundation H.264 (Detected)", "mfh264enc");
-
-		m_encoderCombo->addItem("Software (x264enc)", "x264enc");
-		int encIdx = m_encoderCombo->findData(QString::fromStdString(hub->gpu_encoder_type));
-		if (encIdx >= 0) m_encoderCombo->setCurrentIndex(encIdx);
+		populateEncoderCombo(m_codecCombo->currentData().toString());
+		connect(m_codecCombo, &QComboBox::currentIndexChanged, this, [this]() {
+			populateEncoderCombo(m_codecCombo->currentData().toString());
+		});
 		encoderForm->addRow("Hardware Encoder:", m_encoderCombo);
 
 		m_bitrateSpin = new QSpinBox(this);
@@ -1185,6 +1163,86 @@ public:
 	}
 
 private:
+	void populateEncoderCombo(const QString &codec)
+	{
+		QString previousEnc = m_encoderCombo->currentData().isValid()
+			? m_encoderCombo->currentData().toString()
+			: QString::fromStdString(m_hub->gpu_encoder_type);
+
+		m_encoderCombo->clear();
+		bool isH265 = (codec == "h265");
+		const char *autoEnc = gst_master_pipeline_select_encoder("auto", codec.toUtf8().constData(), true);
+		m_encoderCombo->addItem(
+			QString("Auto Detect GPU (%1)").arg(autoEnc ? autoEnc : "auto"),
+			"auto");
+
+		if (isH265) {
+			if (gst_master_pipeline_element_available("nvd3d11h265enc") ||
+			    gst_master_pipeline_element_available("nvh265enc"))
+				m_encoderCombo->addItem("NVIDIA NVENC H.265 (Detected)", "nvh265enc");
+			else
+				m_encoderCombo->addItem("NVIDIA NVENC H.265 (nvh265enc)", "nvh265enc");
+
+			if (gst_master_pipeline_element_available("qsvh265enc"))
+				m_encoderCombo->addItem("Intel QuickSync H.265 (Detected)", "qsvh265enc");
+			else
+				m_encoderCombo->addItem("Intel QuickSync H.265 (qsvh265enc)", "qsvh265enc");
+
+			if (gst_master_pipeline_element_available("amfh265enc"))
+				m_encoderCombo->addItem("AMD AMF H.265 (Detected)", "amfh265enc");
+			else
+				m_encoderCombo->addItem("AMD AMF H.265 (amfh265enc)", "amfh265enc");
+
+			if (gst_master_pipeline_element_available("vah265enc"))
+				m_encoderCombo->addItem("VAAPI GPU H.265 (Detected)", "vah265enc");
+			else
+				m_encoderCombo->addItem("VAAPI GPU H.265 (vah265enc)", "vah265enc");
+
+			if (gst_master_pipeline_element_available("mfh265enc"))
+				m_encoderCombo->addItem("MediaFoundation H.265 (Detected)", "mfh265enc");
+
+			if (gst_master_pipeline_element_available("x265enc"))
+				m_encoderCombo->addItem("Software H.265 (x265enc - Detected)", "x265enc");
+			else
+				m_encoderCombo->addItem("Software H.265 (x265enc)", "x265enc");
+		} else {
+			if (gst_master_pipeline_element_available("nvd3d11h264enc") ||
+			    gst_master_pipeline_element_available("nvh264enc") ||
+			    gst_master_pipeline_element_available("nvcudah264enc"))
+				m_encoderCombo->addItem("NVIDIA NVENC (Detected)", "nvh264enc");
+			else
+				m_encoderCombo->addItem("NVIDIA NVENC (nvh264enc)", "nvh264enc");
+
+			if (gst_master_pipeline_element_available("qsvh264enc"))
+				m_encoderCombo->addItem("Intel QuickSync (Detected)", "qsvh264enc");
+			else
+				m_encoderCombo->addItem("Intel QuickSync (qsvh264enc)", "qsvh264enc");
+
+			if (gst_master_pipeline_element_available("amfh264enc"))
+				m_encoderCombo->addItem("AMD AMF (Detected)", "amfh264enc");
+			else
+				m_encoderCombo->addItem("AMD AMF (amfh264enc)", "amfh264enc");
+
+			if (gst_master_pipeline_element_available("vah264enc") ||
+			    gst_master_pipeline_element_available("vaapih264enc"))
+				m_encoderCombo->addItem("VAAPI GPU (Detected)", "vaapih264enc");
+			else
+				m_encoderCombo->addItem("VAAPI GPU (vaapih264enc)", "vaapih264enc");
+
+			if (gst_master_pipeline_element_available("mfh264enc"))
+				m_encoderCombo->addItem("MediaFoundation H.264 (Detected)", "mfh264enc");
+
+			m_encoderCombo->addItem("Software (x264enc)", "x264enc");
+		}
+
+		int encIdx = m_encoderCombo->findData(previousEnc);
+		if (encIdx >= 0) {
+			m_encoderCombo->setCurrentIndex(encIdx);
+		} else {
+			m_encoderCombo->setCurrentIndex(0); /* Default to Auto */
+		}
+	}
+
 	void populateTargetCombo(const QString &sourceType)
 	{
 		m_targetCombo->clear();
