@@ -478,7 +478,7 @@ bool gstreamer_output_start(void *p)
 			pipe_string = g_strdup(user_pipe);
 		} else if (is_encoded) {
 			pipe_string = g_strdup_printf(
-				"appsrc name=appsrc_video is-live=true format=GST_FORMAT_TIME do-timestamp=true caps=\"video/x-h264, stream-format=byte-stream, alignment=au\" ! %s",
+				"appsrc name=appsrc_video is-live=true format=GST_FORMAT_TIME do-timestamp=false caps=\"video/x-h264, stream-format=byte-stream, alignment=au\" ! %s",
 				(user_pipe && user_pipe[0]) ? user_pipe : "fakesink");
 		} else {
 			pipe_string = g_strdup_printf(
