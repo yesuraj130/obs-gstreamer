@@ -166,8 +166,6 @@ static void rtsp_frame_cb(GstBuffer *buf, bool is_keyframe, gpointer user_data)
 	}
 
 	GstBuffer *out_buf = gst_buffer_copy(buf);
-	GST_BUFFER_PTS(out_buf) = GST_CLOCK_TIME_NONE;
-	GST_BUFFER_DTS(out_buf) = GST_CLOCK_TIME_NONE;
 	GstElement *appsrc = gst_object_ref(branch->appsrc);
 	g_mutex_unlock(&branch->lock);
 
@@ -265,11 +263,11 @@ struct gst_hub_branch *gst_rtsp_branch_start(gst_master_pipeline_t *pipeline,
 	    !(is_hevc && strstr(rtsp_pipeline, "rtph264pay") != NULL)) {
 		launch_str = rtsp_pipeline;
 	} else if (is_hevc) {
-		launch_str = "( appsrc name=appsrc_video is-live=true format=GST_FORMAT_TIME do-timestamp=true "
+		launch_str = "( appsrc name=appsrc_video is-live=true format=GST_FORMAT_TIME do-timestamp=false "
 		             "caps=\"video/x-h265, stream-format=byte-stream, alignment=au\" ! "
 		             "h265parse config-interval=1 ! rtph265pay name=pay0 pt=96 config-interval=1 )";
 	} else {
-		launch_str = "( appsrc name=appsrc_video is-live=true format=GST_FORMAT_TIME do-timestamp=true "
+		launch_str = "( appsrc name=appsrc_video is-live=true format=GST_FORMAT_TIME do-timestamp=false "
 		             "caps=\"video/x-h264, stream-format=byte-stream, alignment=au\" ! "
 		             "h264parse config-interval=1 ! rtph264pay name=pay0 pt=96 config-interval=1 )";
 	}
