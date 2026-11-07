@@ -495,6 +495,48 @@ static char *sanitize_pipeline_string(const char *input)
 	return g_string_free(out, FALSE);
 }
 
+static bool pipeline_has_audio(const char *str)
+{
+	if (!str) return false;
+
+	bool in_single_quotes = false;
+	bool in_double_quotes = false;
+	size_t len = strlen(str);
+
+	for (size_t i = 0; i < len; i++)
+	{
+		char c = str[i];
+
+		if (c == '\'' && !in_double_quotes)
+		{
+			in_single_quotes = !in_single_quotes;
+			continue;
+		}
+		if (c == '"' && !in_single_quotes)
+		{
+			in_double_quotes = !in_double_quotes;
+			continue;
+		}
+
+		if (!in_single_quotes && !in_double_quotes)
+		{
+			// Check for "audio." or "audio_appsink"
+			// Must be preceded by start of string or a non-identifier character
+			if ((i == 0 || (!g_ascii_isalnum(str[i - 1]) && str[i - 1] != '_')) &&
+			    strncmp(&str[i], "audio", 5) == 0)
+			{
+				const char *after = &str[i + 5];
+				if (*after == '.' || strncmp(after, "_appsink", 8) == 0)
+				{
+					return true;
+				}
+			}
+		}
+	}
+
+	return false;
+}
+
 static void create_pipeline(struct gstreamer_source_data *data, obs_data_t *settings)
 {
 	if (!data || !settings) return;
@@ -516,7 +558,15 @@ static void create_pipeline(struct gstreamer_source_data *data, obs_data_t *sett
 	{
 		const char *id = obs_source_get_id(data->gstreamer_source);
 		if (id && strcmp(id, "gstreamer-source-video") == 0)
+		{
 			default_internal = DEFAULT_INTERNAL_VIDEO_PIPELINE;
+		}
+		else if (!pipeline_has_audio(clean_user_pipeline))
+		{
+			default_internal = DEFAULT_INTERNAL_VIDEO_PIPELINE;
+			blog(LOG_INFO, "[obs-gstreamer-source] %s: No audio link ('audio.') detected in user pipeline; stripping audio branch (behaving as video source)",
+					obs_source_get_name_safe(data->gstreamer_source, "gstreamer-source"));
+		}
 	}
 	const char *internal_pipeline = override_internal ? obs_data_get_string(settings, "internal_pipeline") : default_internal;
 
