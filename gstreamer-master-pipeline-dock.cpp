@@ -149,6 +149,7 @@ struct GstMasterHub {
 	std::string render_mode;      /* Deprecated compatibility */
 	std::string capture_method;   /* 4 Callbacks */
 	std::string gpu_encoder_type; /* "auto", "nvenc", "vaapi", "vtenc", "x264enc" */
+	std::string video_codec;      /* "h264", "h265" */
 	int bitrate_kbps;
 	int keyint_sec;
 	int ring_buffer_slots;
@@ -170,6 +171,7 @@ struct GstMasterHub {
 		  render_mode("Render Callback (GPU Direct Texture)"),
 		  capture_method("Render Callback (GPU Direct Texture)"),
 		  gpu_encoder_type("auto"),
+		  video_codec("h264"),
 		  bitrate_kbps(4000),
 		  keyint_sec(1),
 		  ring_buffer_slots(2),
@@ -212,6 +214,7 @@ static void export_dock_status_json()
 		hubObj["scene_name"] = QString::fromStdString(hub->scene_name);
 		hubObj["capture_method"] = QString::fromStdString(hub->capture_method);
 		hubObj["gpu_encoder_type"] = QString::fromStdString(hub->gpu_encoder_type);
+		hubObj["video_codec"] = QString::fromStdString(hub->video_codec);
 		hubObj["bitrate_kbps"] = hub->bitrate_kbps;
 		hubObj["ring_buffer_slots"] = hub->ring_buffer_slots;
 		hubObj["is_active"] = hub->is_active || is_hub_pipeline_active(hub.get());
@@ -263,6 +266,7 @@ static void save_dock_config(obs_data_t *save_data)
 		obs_data_set_string(hubObj, "scene_name", hub->scene_name.c_str());
 		obs_data_set_string(hubObj, "capture_method", hub->capture_method.c_str());
 		obs_data_set_string(hubObj, "gpu_encoder_type", hub->gpu_encoder_type.c_str());
+		obs_data_set_string(hubObj, "video_codec", hub->video_codec.c_str());
 		obs_data_set_int(hubObj, "bitrate_kbps", hub->bitrate_kbps);
 		obs_data_set_int(hubObj, "keyint_sec", hub->keyint_sec);
 		obs_data_set_int(hubObj, "ring_buffer_slots", hub->ring_buffer_slots);
@@ -330,6 +334,7 @@ static void load_dock_config(obs_data_t *save_data)
 		hub->scene_name = read_data_string(hubObj, "scene_name");
 		hub->capture_method = read_data_string(hubObj, "capture_method", "Render Callback (GPU Direct Texture)");
 		hub->gpu_encoder_type = read_data_string(hubObj, "gpu_encoder_type", "auto");
+		hub->video_codec = read_data_string(hubObj, "video_codec", "h264");
 		hub->bitrate_kbps = obs_data_has_user_value(hubObj, "bitrate_kbps")
 			? (int)obs_data_get_int(hubObj, "bitrate_kbps")
 			: 4000;
@@ -519,21 +524,21 @@ static gst_master_pipeline_t *ensure_master_pipeline(GstMasterHub *hub)
 	gst_master_pipeline_t *pipe = nullptr;
 	if (hub->capture_method == "Encoder Callback (GPU Hardware Texture Encoder)") {
 		hub->active_encoder_cb = gst_encoder_callback_create(
-			stype, target_scene, target_source, custom_pipe, encoder_type,
+			stype, target_scene, target_source, custom_pipe, encoder_type, hub->video_codec.c_str(),
 			hub->bitrate_kbps, hub->keyint_sec, fps_num, fps_den
 		);
 		if (hub->active_encoder_cb)
 			pipe = gst_encoder_callback_get_pipeline(hub->active_encoder_cb);
 	} else if (hub->capture_method == "Filter Callback (Source Video Filter Tap)") {
 		hub->active_filter_cb = gst_filter_callback_create(
-			stype, target_scene, target_source, custom_pipe, encoder_type,
+			stype, target_scene, target_source, custom_pipe, encoder_type, hub->video_codec.c_str(),
 			hub->bitrate_kbps, hub->keyint_sec, fps_num, fps_den
 		);
 		if (hub->active_filter_cb)
 			pipe = gst_filter_callback_get_pipeline(hub->active_filter_cb);
 	} else if (hub->capture_method == "Output Callback (Raw Video/Audio Frames)") {
 		hub->active_output_cb = gst_output_callback_create(
-			stype, target_scene, target_source, custom_pipe, encoder_type,
+			stype, target_scene, target_source, custom_pipe, encoder_type, hub->video_codec.c_str(),
 			hub->bitrate_kbps, hub->keyint_sec, fps_num, fps_den
 		);
 		if (hub->active_output_cb)
@@ -541,7 +546,7 @@ static gst_master_pipeline_t *ensure_master_pipeline(GstMasterHub *hub)
 	} else {
 		/* Default: Render Callback (GPU Direct Texture) */
 		hub->active_render_cb = gst_render_callback_create(
-			stype, target_scene, target_source, custom_pipe, encoder_type,
+			stype, target_scene, target_source, custom_pipe, encoder_type, hub->video_codec.c_str(),
 			hub->bitrate_kbps, hub->keyint_sec, fps_num, fps_den
 		);
 		if (hub->active_render_cb)
@@ -1033,8 +1038,15 @@ public:
 		encoderForm->setLabelAlignment(Qt::AlignLeft);
 		encoderForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
 
+		m_codecCombo = new QComboBox(this);
+		m_codecCombo->addItem("H.264 (AVC)", "h264");
+		m_codecCombo->addItem("H.265 (HEVC)", "h265");
+		int codecIdx = m_codecCombo->findData(QString::fromStdString(hub->video_codec));
+		if (codecIdx >= 0) m_codecCombo->setCurrentIndex(codecIdx);
+		encoderForm->addRow("Video Codec:", m_codecCombo);
+
 		m_encoderCombo = new QComboBox(this);
-		const char *autoEnc = gst_master_pipeline_select_encoder("auto", true);
+		const char *autoEnc = gst_master_pipeline_select_encoder("auto", hub->video_codec.c_str(), true);
 		m_encoderCombo->addItem(
 			QString("Auto Detect GPU (%1)").arg(autoEnc ? autoEnc : "auto"),
 			"auto");
@@ -1460,6 +1472,7 @@ private:
 			m_hub->source_name = m_targetCombo->currentText().toStdString();
 
 		m_hub->gpu_encoder_type = m_encoderCombo->currentData().toString().toStdString();
+		m_hub->video_codec = m_codecCombo->currentData().toString().toStdString();
 		m_hub->bitrate_kbps = m_bitrateSpin->value();
 		m_hub->keyint_sec = m_keyintSpin->value();
 		m_hub->ring_buffer_slots = m_ringSlotsSpin->value();
@@ -1475,6 +1488,7 @@ private:
 	QComboBox *m_captureMethodCombo;
 	QLabel *m_targetLabel;
 	QComboBox *m_targetCombo;
+	QComboBox *m_codecCombo;
 	QComboBox *m_encoderCombo;
 	QSpinBox *m_bitrateSpin;
 	QSpinBox *m_keyintSpin;

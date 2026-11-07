@@ -95,6 +95,7 @@ struct gst_master_pipeline
 	gs_stagesurf_t *stagesurf;
 	bool gpu_input;
 	char *selected_encoder;
+	char *video_codec;
 	GstVideoFormat appsrc_format;
 	gst_nv12_color_matrix_t color_matrix;
 	const char *colorimetry_str;
@@ -140,9 +141,9 @@ struct gst_master_pipeline
 };
 
 bool gst_master_pipeline_element_available(const char *factory_name);
-const char *gst_master_pipeline_select_encoder(const char *requested_encoder, bool gpu_input);
+const char *gst_master_pipeline_select_encoder(const char *requested_encoder, const char *video_codec, bool gpu_input);
 
-gst_master_pipeline_t *gst_master_pipeline_create(const char *custom_master_pipe, const char *encoder_type, int bitrate_kbps, int keyint_sec, uint32_t width, uint32_t height, uint32_t fps_num, uint32_t fps_den, bool gpu_input, gst_master_state_cb state_cb, gpointer user_data);
+gst_master_pipeline_t *gst_master_pipeline_create(const char *custom_master_pipe, const char *encoder_type, const char *video_codec, int bitrate_kbps, int keyint_sec, uint32_t width, uint32_t height, uint32_t fps_num, uint32_t fps_den, bool gpu_input, gst_master_state_cb state_cb, gpointer user_data);
 void gst_master_pipeline_set_ring_slots(gst_master_pipeline_t *hub, uint32_t ring_slots);
 void gst_master_pipeline_destroy(gst_master_pipeline_t *hub);
 

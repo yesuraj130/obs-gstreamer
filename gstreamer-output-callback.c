@@ -116,7 +116,7 @@ static void pipeline_state_change(bool active, void *user_data)
 	else if (!active && obs_output_active(cb->output)) obs_output_stop(cb->output);
 }
 
-gst_output_callback_t *gst_output_callback_create(gst_source_type_t type, const char *scene_name, const char *item_name, const char *custom_master_pipe, const char *encoder_type, int bitrate_kbps, int keyint_sec, uint32_t fps_num, uint32_t fps_den)
+gst_output_callback_t *gst_output_callback_create(gst_source_type_t type, const char *scene_name, const char *item_name, const char *custom_master_pipe, const char *encoder_type, const char *video_codec, int bitrate_kbps, int keyint_sec, uint32_t fps_num, uint32_t fps_den)
 {
 	obs_output_t *obs_out = obs_output_create("gstreamer-output-callback", "master_output_cb", NULL, NULL);
 	if (!obs_out) return NULL;
@@ -172,7 +172,7 @@ gst_output_callback_t *gst_output_callback_create(gst_source_type_t type, const 
 	vsi.colorspace = VIDEO_CS_DEFAULT;
 	obs_output_set_video_conversion(obs_out, &vsi);
 
-	cb->pipeline = gst_master_pipeline_create(custom_master_pipe, encoder_type, bitrate_kbps, keyint_sec, width, height, fps_num, fps_den, false, pipeline_state_change, cb);
+	cb->pipeline = gst_master_pipeline_create(custom_master_pipe, encoder_type, video_codec, bitrate_kbps, keyint_sec, width, height, fps_num, fps_den, false, pipeline_state_change, cb);
 	if (!cb->pipeline)
 	{
 		obs_output_release(obs_out);

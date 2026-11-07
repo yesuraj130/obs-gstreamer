@@ -15,7 +15,7 @@ extern "C" {
 
 typedef struct gst_render_callback gst_render_callback_t;
 
-gst_render_callback_t *gst_render_callback_create(gst_source_type_t type, const char *scene_name, const char *item_name, const char *custom_master_pipe, const char *encoder_type, int bitrate_kbps, int keyint_sec, uint32_t fps_num, uint32_t fps_den);
+gst_render_callback_t *gst_render_callback_create(gst_source_type_t type, const char *scene_name, const char *item_name, const char *custom_master_pipe, const char *encoder_type, const char *video_codec, int bitrate_kbps, int keyint_sec, uint32_t fps_num, uint32_t fps_den);
 
 gst_master_pipeline_t *gst_render_callback_get_pipeline(gst_render_callback_t *cb);
 void gst_render_callback_destroy(gst_render_callback_t *cb);

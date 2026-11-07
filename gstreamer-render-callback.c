@@ -177,7 +177,7 @@ static void pipeline_state_change(bool active, void *user_data)
 	}
 }
 
-gst_render_callback_t *gst_render_callback_create(gst_source_type_t type, const char *scene_name, const char *item_name, const char *custom_master_pipe, const char *encoder_type, int bitrate_kbps, int keyint_sec, uint32_t fps_num, uint32_t fps_den)
+gst_render_callback_t *gst_render_callback_create(gst_source_type_t type, const char *scene_name, const char *item_name, const char *custom_master_pipe, const char *encoder_type, const char *video_codec, int bitrate_kbps, int keyint_sec, uint32_t fps_num, uint32_t fps_den)
 {
 	gst_render_callback_t *cb = bzalloc(sizeof(gst_render_callback_t));
 	cb->source_type = type;
@@ -213,7 +213,7 @@ gst_render_callback_t *gst_render_callback_create(gst_source_type_t type, const 
 		}
 	}
 
-	cb->pipeline = gst_master_pipeline_create(custom_master_pipe, encoder_type, bitrate_kbps, keyint_sec, cb->width, cb->height, fps_num, fps_den, true, pipeline_state_change, cb);
+	cb->pipeline = gst_master_pipeline_create(custom_master_pipe, encoder_type, video_codec, bitrate_kbps, keyint_sec, cb->width, cb->height, fps_num, fps_den, true, pipeline_state_change, cb);
 	if (!cb->pipeline)
 	{
 		if (cb->source) obs_source_release(cb->source);

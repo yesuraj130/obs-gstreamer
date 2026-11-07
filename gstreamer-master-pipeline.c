@@ -221,7 +221,7 @@ static void log_gpu_and_encoder_capabilities_once(void)
 	g_once_init_leave(&logged, 1);
 }
 
-const char *gst_master_pipeline_select_encoder(const char *requested_encoder, bool gpu_input)
+const char *gst_master_pipeline_select_encoder(const char *requested_encoder, const char *video_codec, bool gpu_input)
 {
 	log_gpu_and_encoder_capabilities_once();
 
@@ -231,36 +231,13 @@ const char *gst_master_pipeline_select_encoder(const char *requested_encoder, bo
 	obs_leave_graphics();
 
 	bool is_d3d11 = (dev_type == GS_DEVICE_DIRECT3D_11);
+	bool is_h265 = video_codec && g_strcmp0(video_codec, "h265") == 0;
 
 	/* 1. Handle explicit encoder selection with smart platform alias resolution */
 	if (requested_encoder && requested_encoder[0] && g_strcmp0(requested_encoder, "auto") != 0)
 	{
-		if (g_strcmp0(requested_encoder, "nvh264enc") == 0 ||
-		    g_strcmp0(requested_encoder, "nvd3d11h264enc") == 0)
-		{
-			if (gpu_input && is_d3d11 && gst_master_pipeline_element_available("nvd3d11h264enc"))
-				return "nvd3d11h264enc";
-			if (gst_master_pipeline_element_available("nvh264enc"))
-				return "nvh264enc";
-			if (gst_master_pipeline_element_available("nvcudah264enc"))
-				return "nvcudah264enc";
-			if (gst_master_pipeline_element_available("nvd3d11h264enc"))
-				return "nvd3d11h264enc";
-		}
-		else if (g_strcmp0(requested_encoder, "vaapih264enc") == 0 ||
-		         g_strcmp0(requested_encoder, "vah264enc") == 0)
-		{
-			if (gst_master_pipeline_element_available(requested_encoder))
-				return requested_encoder;
-			if (gst_master_pipeline_element_available("vah264enc"))
-				return "vah264enc";
-			if (gst_master_pipeline_element_available("vaapih264enc"))
-				return "vaapih264enc";
-		}
-		else if (gst_master_pipeline_element_available(requested_encoder))
-		{
+		if (gst_master_pipeline_element_available(requested_encoder))
 			return requested_encoder;
-		}
 
 		blog(LOG_WARNING, "[obs-gstreamer-master] Requested encoder '%s' is not available; probing best available encoder",
 			requested_encoder);
@@ -273,46 +250,72 @@ const char *gst_master_pipeline_select_encoder(const char *requested_encoder, bo
 		    g_strstr_len(dev_name, -1, "Quadro") || g_strstr_len(dev_name, -1, "RTX") ||
 		    g_strstr_len(dev_name, -1, "GTX"))
 		{
-			if (is_d3d11 && gst_master_pipeline_element_available("nvd3d11h264enc"))
-				return "nvd3d11h264enc";
-			if (gst_master_pipeline_element_available("nvh264enc"))
-				return "nvh264enc";
-			if (gst_master_pipeline_element_available("nvcudah264enc"))
-				return "nvcudah264enc";
+			if (is_h265)
+			{
+				if (is_d3d11 && gst_master_pipeline_element_available("nvd3d11h265enc"))
+					return "nvd3d11h265enc";
+				if (gst_master_pipeline_element_available("nvh265enc"))
+					return "nvh265enc";
+			}
+			else
+			{
+				if (is_d3d11 && gst_master_pipeline_element_available("nvd3d11h264enc"))
+					return "nvd3d11h264enc";
+				if (gst_master_pipeline_element_available("nvh264enc"))
+					return "nvh264enc";
+				if (gst_master_pipeline_element_available("nvcudah264enc"))
+					return "nvcudah264enc";
+			}
 		}
 		else if (g_strstr_len(dev_name, -1, "Intel") || g_strstr_len(dev_name, -1, "Arc") ||
 		         g_strstr_len(dev_name, -1, "Iris") || g_strstr_len(dev_name, -1, "UHD"))
 		{
-			if (gst_master_pipeline_element_available("qsvh264enc"))
-				return "qsvh264enc";
-			if (!is_d3d11 && gst_master_pipeline_element_available("vah264enc"))
-				return "vah264enc";
-			if (!is_d3d11 && gst_master_pipeline_element_available("vaapih264enc"))
-				return "vaapih264enc";
+			if (is_h265)
+			{
+				if (gst_master_pipeline_element_available("qsvh265enc"))
+					return "qsvh265enc";
+				if (!is_d3d11 && gst_master_pipeline_element_available("vah265enc"))
+					return "vah265enc";
+			}
+			else
+			{
+				if (gst_master_pipeline_element_available("qsvh264enc"))
+					return "qsvh264enc";
+				if (!is_d3d11 && gst_master_pipeline_element_available("vah264enc"))
+					return "vah264enc";
+				if (!is_d3d11 && gst_master_pipeline_element_available("vaapih264enc"))
+					return "vaapih264enc";
+			}
 		}
 		else if (g_strstr_len(dev_name, -1, "AMD") || g_strstr_len(dev_name, -1, "Radeon"))
 		{
-			if (gst_master_pipeline_element_available("amfh264enc"))
-				return "amfh264enc";
-			if (!is_d3d11 && gst_master_pipeline_element_available("vah264enc"))
-				return "vah264enc";
-			if (!is_d3d11 && gst_master_pipeline_element_available("vaapih264enc"))
-				return "vaapih264enc";
+			if (is_h265)
+			{
+				if (gst_master_pipeline_element_available("amfh265enc"))
+					return "amfh265enc";
+				if (!is_d3d11 && gst_master_pipeline_element_available("vah265enc"))
+					return "vah265enc";
+			}
+			else
+			{
+				if (gst_master_pipeline_element_available("amfh264enc"))
+					return "amfh264enc";
+				if (!is_d3d11 && gst_master_pipeline_element_available("vah264enc"))
+					return "vah264enc";
+			}
 		}
 	}
 
 	/* 3. Probe all hardware encoders in platform priority order */
 	if (is_d3d11)
 	{
-		static const char *const win_priority[] = {
-			"nvd3d11h264enc",
-			"nvh264enc",
-			"qsvh264enc",
-			"amfh264enc",
-			"mfh264enc",
-			"x264enc",
-			NULL
+		static const char *const win_h264_priority[] = {
+			"nvd3d11h264enc", "nvh264enc", "qsvh264enc", "amfh264enc", "mfh264enc", "x264enc", NULL
 		};
+		static const char *const win_h265_priority[] = {
+			"nvd3d11h265enc", "nvh265enc", "qsvh265enc", "amfh265enc", "mfh265enc", "x265enc", "x264enc", NULL
+		};
+		const char *const *win_priority = is_h265 ? win_h265_priority : win_h264_priority;
 		for (int i = 0; win_priority[i] != NULL; i++)
 		{
 			if (gst_master_pipeline_element_available(win_priority[i]))
@@ -321,17 +324,13 @@ const char *gst_master_pipeline_select_encoder(const char *requested_encoder, bo
 	}
 	else
 	{
-		static const char *const nix_priority[] = {
-			"nvh264enc",
-			"nvcudah264enc",
-			"vah264enc",
-			"vaapih264enc",
-			"qsvh264enc",
-			"v4l2h264enc",
-			"vtenc_h264_hw",
-			"x264enc",
-			NULL
+		static const char *const nix_h264_priority[] = {
+			"nvh264enc", "nvcudah264enc", "vah264enc", "vaapih264enc", "qsvh264enc", "v4l2h264enc", "vtenc_h264_hw", "x264enc", NULL
 		};
+		static const char *const nix_h265_priority[] = {
+			"nvh265enc", "vah265enc", "qsvh265enc", "x265enc", "x264enc", NULL
+		};
+		const char *const *nix_priority = is_h265 ? nix_h265_priority : nix_h264_priority;
 		for (int i = 0; nix_priority[i] != NULL; i++)
 		{
 			if (gst_master_pipeline_element_available(nix_priority[i]))
@@ -339,7 +338,7 @@ const char *gst_master_pipeline_select_encoder(const char *requested_encoder, bo
 		}
 	}
 
-	return "x264enc";
+	return is_h265 ? "x265enc" : "x264enc";
 }
 
 static gchar *build_encoder_element_str(const char *enc_name, int gop_size, int bitrate_kbps)
@@ -840,10 +839,14 @@ static GstElement *create_master_encoder_pipeline(gst_master_pipeline_t *hub, co
 
 		const char *chosen_enc = hub->selected_encoder
 			? hub->selected_encoder
-			: gst_master_pipeline_select_encoder(encoder_type, hub->gpu_input);
+			: gst_master_pipeline_select_encoder(encoder_type, hub->video_codec, hub->gpu_input);
 		gchar *enc_str = build_encoder_element_str(chosen_enc, gop_size, bitrate);
 
 		init_hub_color_matrix(hub);
+
+		bool is_h265 = hub->video_codec && g_strcmp0(hub->video_codec, "h265") == 0;
+		const char *parse_elem = is_h265 ? "h265parse" : "h264parse";
+		const char *caps_elem = is_h265 ? "video/x-h265" : "video/x-h264";
 
 #if HAVE_GST_D3D11
 		if (hub->gpu_input && hub->d3d11_device && is_d3d11_memory_encoder(chosen_enc))
@@ -855,13 +858,13 @@ static GstElement *create_master_encoder_pipeline(gst_master_pipeline_t *hub, co
 				"caps=\"video/x-raw(memory:D3D11Memory), width=%u, height=%u, "
 				"format=%s, framerate=%u/%u\" ! "
 				"d3d11convert ! video/x-raw(memory:D3D11Memory), format=NV12 ! "
-				"%s ! h264parse config-interval=1 ! "
-				"video/x-h264, stream-format=byte-stream, alignment=au ! "
+				"%s ! %s config-interval=1 ! "
+				"%s, stream-format=byte-stream, alignment=au ! "
 				"appsink name=hub_appsink sync=false drop=true max-buffers=1",
 				hub->width, hub->height,
 				gst_video_format_to_string(hub->appsrc_format),
 				hub->fps_num, hub->fps_den,
-				enc_str);
+				enc_str, parse_elem, caps_elem);
 			g_free(enc_str);
 			goto launch_pipeline;
 		}
@@ -875,11 +878,11 @@ static GstElement *create_master_encoder_pipeline(gst_master_pipeline_t *hub, co
 				"appsrc name=hub_appsrc is-live=true format=GST_FORMAT_TIME do-timestamp=true leaky-type=downstream max-buffers=1 "
 				"caps=\"video/x-raw(memory:GLMemory), width=%u, height=%u, "
 				"format=NV12, framerate=%u/%u, texture-target=2D, colorimetry=%s\" ! "
-				"%s ! h264parse config-interval=1 ! "
-				"video/x-h264, stream-format=byte-stream, alignment=au ! "
+				"%s ! %s config-interval=1 ! "
+				"%s, stream-format=byte-stream, alignment=au ! "
 				"appsink name=hub_appsink sync=false drop=true max-buffers=1",
 				hub->width, hub->height, hub->fps_num, hub->fps_den, hub->colorimetry_str,
-				enc_str);
+				enc_str, parse_elem, caps_elem);
 			g_free(enc_str);
 			goto launch_pipeline;
 		}
@@ -888,10 +891,10 @@ static GstElement *create_master_encoder_pipeline(gst_master_pipeline_t *hub, co
 		pipe_desc = g_strdup_printf(
 			"appsrc name=hub_appsrc is-live=true format=GST_FORMAT_TIME do-timestamp=true leaky-type=downstream max-buffers=1 "
 			"caps=\"video/x-raw, width=%u, height=%u, format=NV12, framerate=%u/%u, colorimetry=%s\" ! "
-			"%s ! h264parse config-interval=1 ! video/x-h264, stream-format=byte-stream, alignment=au ! "
+			"%s ! %s config-interval=1 ! %s, stream-format=byte-stream, alignment=au ! "
 			"appsink name=hub_appsink sync=false drop=true max-buffers=1",
 			hub->width, hub->height, hub->fps_num, hub->fps_den, hub->colorimetry_str,
-			enc_str);
+			enc_str, parse_elem, caps_elem);
 
 		g_free(enc_str);
 	}
@@ -2037,7 +2040,7 @@ void gst_master_pipeline_request_keyframe(gst_master_pipeline_t *hub)
 	gst_element_send_event(hub->appsink, event);
 }
 
-gst_master_pipeline_t *gst_master_pipeline_create(const char *custom_master_pipe, const char *encoder_type, int bitrate_kbps, int keyint_sec, uint32_t width, uint32_t height, uint32_t fps_num, uint32_t fps_den, bool gpu_input, gst_master_state_cb state_cb, gpointer user_data)
+gst_master_pipeline_t *gst_master_pipeline_create(const char *custom_master_pipe, const char *encoder_type, const char *video_codec, int bitrate_kbps, int keyint_sec, uint32_t width, uint32_t height, uint32_t fps_num, uint32_t fps_den, bool gpu_input, gst_master_state_cb state_cb, gpointer user_data)
 {
 	gst_master_pipeline_t *hub = bzalloc(sizeof(gst_master_pipeline_t));
 	g_mutex_init(&hub->subscriber_mutex);
@@ -2051,8 +2054,9 @@ gst_master_pipeline_t *gst_master_pipeline_create(const char *custom_master_pipe
 	hub->state_user_data = user_data;
 	hub->gpu_input = false;
 	hub->ring_slots = GST_MASTER_DEFAULT_RING_SLOTS;
+	hub->video_codec = bstrdup(video_codec ? video_codec : "h264");
 
-	const char *chosen_enc = gst_master_pipeline_select_encoder(encoder_type, gpu_input);
+	const char *chosen_enc = gst_master_pipeline_select_encoder(encoder_type, hub->video_codec, gpu_input);
 	hub->selected_encoder = bstrdup(chosen_enc);
 
 	bool is_hw_gpu_enc = false;
@@ -2277,6 +2281,12 @@ void gst_master_pipeline_destroy(gst_master_pipeline_t *hub)
 	{
 		bfree(hub->selected_encoder);
 		hub->selected_encoder = NULL;
+	}
+
+	if (hub->video_codec)
+	{
+		bfree(hub->video_codec);
+		hub->video_codec = NULL;
 	}
 
 	GPtrArray *subs = (GPtrArray *)hub->subscribers_atomic;
