@@ -34,6 +34,8 @@ struct gst_hub_branch {
 	bool active;
 	bool is_pipeline;
 	bool waiting_for_keyframe;
+	bool has_first_pts;
+	GstClockTime first_pts;
 	int client_count;
 	GstElement *appsrc;
 	GstElement *pipe;
@@ -155,17 +157,31 @@ static void rtsp_frame_cb(GstBuffer *buf, bool is_keyframe, gpointer user_data)
 		return;
 	}
 
-	if (branch->waiting_for_keyframe) {
+	if (!branch->has_first_pts || branch->waiting_for_keyframe) {
 		if (!is_keyframe) {
 			g_mutex_unlock(&branch->lock);
 			return;
 		}
+		branch->first_pts = GST_BUFFER_PTS_IS_VALID(buf) ? GST_BUFFER_PTS(buf) : 0;
+		branch->has_first_pts = true;
 		branch->waiting_for_keyframe = false;
-		blog(LOG_INFO, "[obs-gstreamer-rtspserver] Keyframe delivered to '%s', client playback starting",
-			branch->name ? branch->name : "branch");
+		blog(LOG_INFO, "[obs-gstreamer-rtspserver] Keyframe delivered to '%s' (first_pts=%" GST_TIME_FORMAT "), client playback starting",
+			branch->name ? branch->name : "branch", GST_TIME_ARGS(branch->first_pts));
 	}
 
 	GstBuffer *out_buf = gst_buffer_copy(buf);
+	if (GST_BUFFER_PTS_IS_VALID(out_buf) && GST_BUFFER_PTS(out_buf) >= branch->first_pts) {
+		GST_BUFFER_PTS(out_buf) -= branch->first_pts;
+	} else {
+		GST_BUFFER_PTS(out_buf) = 0;
+	}
+
+	if (GST_BUFFER_DTS_IS_VALID(out_buf) && GST_BUFFER_DTS(out_buf) >= branch->first_pts) {
+		GST_BUFFER_DTS(out_buf) -= branch->first_pts;
+	} else if (GST_BUFFER_DTS_IS_VALID(out_buf)) {
+		GST_BUFFER_DTS(out_buf) = 0;
+	}
+
 	GstElement *appsrc = gst_object_ref(branch->appsrc);
 	g_mutex_unlock(&branch->lock);
 
@@ -265,11 +281,11 @@ struct gst_hub_branch *gst_rtsp_branch_start(gst_master_pipeline_t *pipeline,
 	} else if (is_hevc) {
 		launch_str = "( appsrc name=appsrc_video is-live=true format=GST_FORMAT_TIME do-timestamp=false "
 		             "caps=\"video/x-h265, stream-format=byte-stream, alignment=au\" ! "
-		             "h265parse config-interval=1 ! rtph265pay name=pay0 pt=96 config-interval=1 )";
+		             "h265parse config-interval=1 ! rtph265pay name=pay0 pt=96 config-interval=1 aggregate-mode=zero-latency )";
 	} else {
 		launch_str = "( appsrc name=appsrc_video is-live=true format=GST_FORMAT_TIME do-timestamp=false "
 		             "caps=\"video/x-h264, stream-format=byte-stream, alignment=au\" ! "
-		             "h264parse config-interval=1 ! rtph264pay name=pay0 pt=96 config-interval=1 )";
+		             "h264parse config-interval=1 ! rtph264pay name=pay0 pt=96 config-interval=1 aggregate-mode=zero-latency )";
 	}
 
 	gst_rtsp_media_factory_set_launch(factory, launch_str);
@@ -284,8 +300,12 @@ struct gst_hub_branch *gst_rtsp_branch_start(gst_master_pipeline_t *pipeline,
 	branch->next = g_branches;
 	g_branches = branch;
 
-	blog(LOG_INFO, "[obs-gstreamer-rtspserver] RTSP branch started: rtsp://0.0.0.0:%s%s (name='%s', waiting for client connection)",
-		branch->service, branch->mount_point, branch->name);
+	blog(LOG_INFO, "[obs-gstreamer-rtspserver] Launching RTSP Media Pipeline for '%s' (url=rtsp://0.0.0.0:%s%s, codec=%s): %s",
+		branch->name ? branch->name : "branch",
+		branch->service ? branch->service : "8554",
+		branch->mount_point ? branch->mount_point : "/live",
+		is_hevc ? "h265" : "h264",
+		launch_str);
 
 	g_mutex_unlock(&g_hub_mutex);
 	return branch;
@@ -586,6 +606,7 @@ static void media_configure_cb(GstRTSPMediaFactory *factory, GstRTSPMedia *media
 
 	if (branch->client_count == 1) {
 		branch->waiting_for_keyframe = true;
+		branch->has_first_pts = false;
 	}
 
 	bool need_subscribe = (branch->sub == NULL && branch->pipeline != NULL);
