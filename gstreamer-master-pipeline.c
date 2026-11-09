@@ -374,6 +374,11 @@ static gchar *build_encoder_element_str(const char *enc_name, int gop_size, int 
 	if (element_has_property(enc_name, "bitrate"))
 		g_string_append_printf(str, " bitrate=%d", bitrate_kbps);
 
+	if (element_has_property(enc_name, "rate-control"))
+		g_string_append(str, " rate-control=cbr");
+	else if (element_has_property(enc_name, "rc-mode"))
+		g_string_append(str, " rc-mode=cbr");
+
 	if (element_has_property(enc_name, "bframes"))
 		g_string_append(str, " bframes=0");
 	else if (element_has_property(enc_name, "b-frames"))
@@ -862,13 +867,13 @@ static GstElement *create_master_encoder_pipeline(gst_master_pipeline_t *hub, co
 			GstVideoFormat obs_fmt = get_obs_compositing_format();
 			hub->appsrc_format = (obs_fmt == GST_VIDEO_FORMAT_RGBA) ? GST_VIDEO_FORMAT_RGBA : GST_VIDEO_FORMAT_BGRA;
 			pipe_desc = g_strdup_printf(
-				"appsrc name=hub_appsrc is-live=true format=GST_FORMAT_TIME do-timestamp=true leaky-type=downstream max-buffers=1 "
+				"appsrc name=hub_appsrc is-live=true format=GST_FORMAT_TIME do-timestamp=false min-latency=0 max-latency=0 "
 				"caps=\"video/x-raw(memory:D3D11Memory), width=%u, height=%u, "
 				"format=%s, framerate=%u/%u\" ! "
 				"d3d11convert ! video/x-raw(memory:D3D11Memory), format=NV12 ! "
 				"%s ! %s config-interval=1 ! "
 				"%s, stream-format=byte-stream, alignment=au ! "
-				"appsink name=hub_appsink sync=false drop=true max-buffers=1",
+				"appsink name=hub_appsink sync=false drop=false max-buffers=4",
 				hub->width, hub->height,
 				gst_video_format_to_string(hub->appsrc_format),
 				hub->fps_num, hub->fps_den,
@@ -883,12 +888,12 @@ static GstElement *create_master_encoder_pipeline(gst_master_pipeline_t *hub, co
 		    (is_gl_memory_encoder(chosen_enc) || is_dmabuf_memory_encoder(chosen_enc)))
 		{
 			pipe_desc = g_strdup_printf(
-				"appsrc name=hub_appsrc is-live=true format=GST_FORMAT_TIME do-timestamp=true leaky-type=downstream max-buffers=1 "
+				"appsrc name=hub_appsrc is-live=true format=GST_FORMAT_TIME do-timestamp=false min-latency=0 max-latency=0 "
 				"caps=\"video/x-raw(memory:GLMemory), width=%u, height=%u, "
 				"format=NV12, framerate=%u/%u, texture-target=2D, colorimetry=%s\" ! "
 				"%s ! %s config-interval=1 ! "
 				"%s, stream-format=byte-stream, alignment=au ! "
-				"appsink name=hub_appsink sync=false drop=true max-buffers=1",
+				"appsink name=hub_appsink sync=false drop=false max-buffers=4",
 				hub->width, hub->height, hub->fps_num, hub->fps_den, hub->colorimetry_str,
 				enc_str, parse_elem, caps_elem);
 			g_free(enc_str);
@@ -897,10 +902,10 @@ static GstElement *create_master_encoder_pipeline(gst_master_pipeline_t *hub, co
 #endif
 
 		pipe_desc = g_strdup_printf(
-			"appsrc name=hub_appsrc is-live=true format=GST_FORMAT_TIME do-timestamp=true leaky-type=downstream max-buffers=1 "
+			"appsrc name=hub_appsrc is-live=true format=GST_FORMAT_TIME do-timestamp=false min-latency=0 max-latency=0 "
 			"caps=\"video/x-raw, width=%u, height=%u, format=NV12, framerate=%u/%u, colorimetry=%s\" ! "
 			"%s ! %s config-interval=1 ! %s, stream-format=byte-stream, alignment=au ! "
-			"appsink name=hub_appsink sync=false drop=true max-buffers=1",
+			"appsink name=hub_appsink sync=false drop=false max-buffers=4",
 			hub->width, hub->height, hub->fps_num, hub->fps_den, hub->colorimetry_str,
 			enc_str, parse_elem, caps_elem);
 
@@ -1150,34 +1155,23 @@ static bool push_d3d11_texture(gst_master_pipeline_t *hub, gs_texture_t *texture
 	uint32_t slots = (hub->ring_slots >= 2 && hub->ring_slots <= GST_MASTER_MAX_RING_SLOTS)
 		? hub->ring_slots : GST_MASTER_DEFAULT_RING_SLOTS;
 
-	/* Multi-slot ring buffer check: locate any available slot starting from next_slot */
-	int free_idx = -1;
-	for (uint32_t i = 0; i < slots; i++)
-	{
-		uint32_t candidate = (hub->d3d11_next_slot + i) % slots;
-		if (g_atomic_int_get(&hub->d3d11_slots[candidate].in_use) == 0)
-		{
-			free_idx = (int)candidate;
-			break;
-		}
-	}
+	uint32_t slot_idx = hub->d3d11_next_slot;
+	gst_d3d11_nv12_slot_t *slot = &hub->d3d11_slots[slot_idx];
 
-	if (free_idx < 0)
+	/* Strict FIFO: Only the next sequential slot in line can be used */
+	if (g_atomic_int_get(&slot->in_use) != 0)
 	{
 		hub->texture_drop_count++;
 		uint64_t drops = hub->texture_drop_count;
 		if (drops == 1 || drops % 120 == 0)
 		{
-			blog(LOG_WARNING, "[obs-gstreamer-master] Encoder busy: dropped D3D11 frame #%" PRIu64 " (all %u slots in use, total drops: %" PRIu64 ")",
-				hub->texture_push_count + 1, slots, drops);
+			blog(LOG_WARNING, "[obs-gstreamer-master] Encoder busy: dropped D3D11 frame #%" PRIu64 " (slot %u in use, total drops: %" PRIu64 ")",
+				hub->texture_push_count + 1, slot_idx, drops);
 		}
 		return true;
 	}
 
-	uint32_t slot_idx = (uint32_t)free_idx;
-	gst_d3d11_nv12_slot_t *slot = &hub->d3d11_slots[slot_idx];
-
-	/* Claim slot and advance ring pointer */
+	/* Claim slot and advance ring pointer strictly sequentially */
 	g_atomic_int_set(&slot->in_use, 1);
 	hub->d3d11_next_slot = (slot_idx + 1) % slots;
 
@@ -1507,32 +1501,21 @@ static bool push_gl_texture(gst_master_pipeline_t *hub, gs_texture_t *texture, u
 	uint32_t slots = (hub->ring_slots >= 2 && hub->ring_slots <= GST_MASTER_MAX_RING_SLOTS)
 		? hub->ring_slots : GST_MASTER_DEFAULT_RING_SLOTS;
 
-	/* Multi-slot ring buffer check: locate any available slot starting from next_slot */
-	int free_idx = -1;
-	for (uint32_t i = 0; i < slots; i++)
-	{
-		uint32_t candidate = (hub->gl_next_slot + i) % slots;
-		if (g_atomic_int_get(&hub->gl_slots[candidate].in_use) == 0)
-		{
-			free_idx = (int)candidate;
-			break;
-		}
-	}
+	uint32_t slot_idx = hub->gl_next_slot;
+	gst_gl_nv12_slot_t *slot = &hub->gl_slots[slot_idx];
 
-	if (free_idx < 0)
+	/* Strict FIFO: Only the next sequential slot in line can be used */
+	if (g_atomic_int_get(&slot->in_use) != 0)
 	{
 		hub->texture_drop_count++;
 		uint64_t drops = hub->texture_drop_count;
 		if (drops == 1 || drops % 120 == 0)
 		{
-			blog(LOG_WARNING, "[obs-gstreamer-master] Encoder busy: dropped OpenGL frame #%" PRIu64 " (all %u slots in use, total drops: %" PRIu64 ")",
-				hub->texture_push_count + 1, slots, drops);
+			blog(LOG_WARNING, "[obs-gstreamer-master] Encoder busy: dropped OpenGL frame #%" PRIu64 " (slot %u in use, total drops: %" PRIu64 ")",
+				hub->texture_push_count + 1, slot_idx, drops);
 		}
 		return true;
 	}
-
-	uint32_t slot_idx = (uint32_t)free_idx;
-	gst_gl_nv12_slot_t *slot = &hub->gl_slots[slot_idx];
 
 	g_atomic_int_set(&slot->in_use, 1);
 	g_atomic_int_set(&slot->plane_refs, 2); /* 2 planes: Y and UV */
