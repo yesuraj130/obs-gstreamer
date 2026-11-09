@@ -468,7 +468,7 @@ static GstBusSyncReply master_bus_sync_handler(GstBus *bus, GstMessage *msg, gpo
 		if (err) g_error_free(err);
 		g_free(debug_info);
 		g_atomic_int_set(&hub->pipeline_failed, 1);
-		uint32_t active_slots = (hub->ring_slots >= 2 && hub->ring_slots <= GST_MASTER_MAX_RING_SLOTS)
+		uint32_t active_slots = (hub->ring_slots >= 1 && hub->ring_slots <= GST_MASTER_MAX_RING_SLOTS)
 			? hub->ring_slots : GST_MASTER_DEFAULT_RING_SLOTS;
 #if HAVE_GST_D3D11
 		for (uint32_t i = 0; i < active_slots; i++)
@@ -1030,7 +1030,7 @@ static void d3d11_nv12_slot_release_notify(gpointer user_data)
 static void destroy_d3d11_nv12_converter(gst_master_pipeline_t *hub)
 {
 	if (!hub) return;
-	uint32_t slots = (hub->ring_slots >= 2 && hub->ring_slots <= GST_MASTER_MAX_RING_SLOTS)
+	uint32_t slots = (hub->ring_slots >= 1 && hub->ring_slots <= GST_MASTER_MAX_RING_SLOTS)
 		? hub->ring_slots : GST_MASTER_DEFAULT_RING_SLOTS;
 	for (uint32_t i = 0; i < slots; i++)
 	{
@@ -1067,7 +1067,7 @@ static bool init_d3d11_nv12_converter(gst_master_pipeline_t *hub)
 		? DXGI_FORMAT_R8G8B8A8_UNORM
 		: DXGI_FORMAT_B8G8R8A8_UNORM;
 
-	uint32_t slots = (hub->ring_slots >= 2 && hub->ring_slots <= GST_MASTER_MAX_RING_SLOTS)
+	uint32_t slots = (hub->ring_slots >= 1 && hub->ring_slots <= GST_MASTER_MAX_RING_SLOTS)
 		? hub->ring_slots : GST_MASTER_DEFAULT_RING_SLOTS;
 
 	for (uint32_t i = 0; i < slots; i++)
@@ -1152,7 +1152,7 @@ static bool push_d3d11_texture(gst_master_pipeline_t *hub, gs_texture_t *texture
 	if (!hub->d3d11_nv12_ready && !init_d3d11_nv12_converter(hub))
 		return false;
 
-	uint32_t slots = (hub->ring_slots >= 2 && hub->ring_slots <= GST_MASTER_MAX_RING_SLOTS)
+	uint32_t slots = (hub->ring_slots >= 1 && hub->ring_slots <= GST_MASTER_MAX_RING_SLOTS)
 		? hub->ring_slots : GST_MASTER_DEFAULT_RING_SLOTS;
 
 	uint32_t slot_idx = hub->d3d11_next_slot;
@@ -1301,7 +1301,7 @@ static void destroy_gl_nv12_converter(gst_master_pipeline_t *hub)
 	if (hub->gl_context)
 	{
 		GstGLFuncs *gl = hub->gl_context->gl_vtable;
-		uint32_t slots = (hub->ring_slots >= 2 && hub->ring_slots <= GST_MASTER_MAX_RING_SLOTS)
+		uint32_t slots = (hub->ring_slots >= 1 && hub->ring_slots <= GST_MASTER_MAX_RING_SLOTS)
 			? hub->ring_slots : GST_MASTER_DEFAULT_RING_SLOTS;
 		for (uint32_t i = 0; i < slots; i++)
 		{
@@ -1432,7 +1432,7 @@ static bool init_gl_nv12_converter(gst_master_pipeline_t *hub)
 	if (!hub->gl_nv12_prog_y || !hub->gl_nv12_prog_uv)
 		return false;
 
-	uint32_t slots = (hub->ring_slots >= 2 && hub->ring_slots <= GST_MASTER_MAX_RING_SLOTS)
+	uint32_t slots = (hub->ring_slots >= 1 && hub->ring_slots <= GST_MASTER_MAX_RING_SLOTS)
 		? hub->ring_slots : GST_MASTER_DEFAULT_RING_SLOTS;
 
 	for (uint32_t i = 0; i < slots; i++)
@@ -1498,7 +1498,7 @@ static bool push_gl_texture(gst_master_pipeline_t *hub, gs_texture_t *texture, u
 	if (!hub->gl_nv12_ready && !init_gl_nv12_converter(hub))
 		return false;
 
-	uint32_t slots = (hub->ring_slots >= 2 && hub->ring_slots <= GST_MASTER_MAX_RING_SLOTS)
+	uint32_t slots = (hub->ring_slots >= 1 && hub->ring_slots <= GST_MASTER_MAX_RING_SLOTS)
 		? hub->ring_slots : GST_MASTER_DEFAULT_RING_SLOTS;
 
 	uint32_t slot_idx = hub->gl_next_slot;
@@ -2203,7 +2203,7 @@ gst_master_pipeline_t *gst_master_pipeline_create(const char *custom_master_pipe
 void gst_master_pipeline_set_ring_slots(gst_master_pipeline_t *hub, uint32_t ring_slots)
 {
 	if (!hub) return;
-	if (ring_slots < 2) ring_slots = 2;
+	if (ring_slots < 1) ring_slots = 1;
 	if (ring_slots > GST_MASTER_MAX_RING_SLOTS) ring_slots = GST_MASTER_MAX_RING_SLOTS;
 	hub->ring_slots = ring_slots;
 }

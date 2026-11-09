@@ -348,7 +348,7 @@ static void load_dock_config(obs_data_t *save_data)
 		hub->ring_buffer_slots = obs_data_has_user_value(hubObj, "ring_buffer_slots")
 			? (int)obs_data_get_int(hubObj, "ring_buffer_slots")
 			: 2;
-		if (hub->ring_buffer_slots < 2) hub->ring_buffer_slots = 2;
+		if (hub->ring_buffer_slots < 1) hub->ring_buffer_slots = 1;
 		if (hub->ring_buffer_slots > GST_MASTER_MAX_RING_SLOTS) hub->ring_buffer_slots = GST_MASTER_MAX_RING_SLOTS;
 		hub->master_pipeline = read_data_string(hubObj, "master_pipeline");
 
@@ -559,7 +559,7 @@ static gst_master_pipeline_t *ensure_master_pipeline(GstMasterHub *hub)
 	}
 
 	if (pipe) {
-		uint32_t configured_slots = hub->ring_buffer_slots >= 2 ? (uint32_t)hub->ring_buffer_slots : GST_MASTER_DEFAULT_RING_SLOTS;
+		uint32_t configured_slots = hub->ring_buffer_slots >= 1 ? (uint32_t)hub->ring_buffer_slots : GST_MASTER_DEFAULT_RING_SLOTS;
 		gst_master_pipeline_set_ring_slots(pipe, configured_slots);
 		return pipe;
 	}
@@ -1088,9 +1088,9 @@ public:
 		encoderForm->addRow("Keyframe Interval:", m_keyintSpin);
 
 		m_ringSlotsSpin = new QSpinBox(this);
-		m_ringSlotsSpin->setRange(2, 8);
-		m_ringSlotsSpin->setValue(hub->ring_buffer_slots >= 2 ? hub->ring_buffer_slots : 2);
-		m_ringSlotsSpin->setToolTip("Number of D3D11/OpenGL GPU textures in zero-copy ring buffer (default: 2, ping-pong). Increasing to 3 or 4 provides extra absorption cushion against jitter/drops.");
+		m_ringSlotsSpin->setRange(1, 8);
+		m_ringSlotsSpin->setValue(hub->ring_buffer_slots >= 1 ? hub->ring_buffer_slots : 2);
+		m_ringSlotsSpin->setToolTip("Number of D3D11/OpenGL GPU textures in zero-copy ring buffer (1: single slot, no buffering cusion; 2: ping-pong default; 3-8: extra absorption cushion against jitter/drops).");
 		encoderForm->addRow("Ring Buffer Slots:", m_ringSlotsSpin);
 
 		m_customPipeEdit = new QPlainTextEdit(QString::fromStdString(hub->master_pipeline), this);
