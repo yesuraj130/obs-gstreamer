@@ -107,6 +107,7 @@ struct GstDestination {
 	std::string rtsp_port;
 	std::string rtsp_mount;
 	std::string rtsp_pipeline;
+	std::string rtsp_protocols;   /* "tcp", "all", "udp" */
 	struct gst_hub_branch *rtsp_branch;
 
 	/* WebRTC specifics */
@@ -129,6 +130,7 @@ struct GstDestination {
 		  rtsp_port("8554"),
 		  rtsp_mount("/live"),
 		  rtsp_pipeline(DEFAULT_RTSP_PIPELINE),
+		  rtsp_protocols("tcp"),
 		  rtsp_branch(nullptr),
 		  webrtc_port("8888"),
 		  webrtc_stun(""),
@@ -230,6 +232,7 @@ static void export_dock_status_json()
 			dObj["is_active"] = d->is_active;
 			dObj["rtsp_port"] = QString::fromStdString(d->rtsp_port);
 			dObj["rtsp_mount"] = QString::fromStdString(d->rtsp_mount);
+			dObj["rtsp_protocols"] = QString::fromStdString(d->rtsp_protocols);
 			dObj["webrtc_port"] = QString::fromStdString(d->webrtc_port);
 			dObj["custom_pipeline"] = QString::fromStdString(d->custom_pipeline);
 			destsArray.append(dObj);
@@ -282,6 +285,7 @@ static void save_dock_config(obs_data_t *save_data)
 			obs_data_set_string(dObj, "rtsp_port", d->rtsp_port.c_str());
 			obs_data_set_string(dObj, "rtsp_mount", d->rtsp_mount.c_str());
 			obs_data_set_string(dObj, "rtsp_pipeline", d->rtsp_pipeline.c_str());
+			obs_data_set_string(dObj, "rtsp_protocols", d->rtsp_protocols.c_str());
 			obs_data_set_string(dObj, "webrtc_port", d->webrtc_port.c_str());
 			obs_data_set_string(dObj, "webrtc_stun", d->webrtc_stun.c_str());
 			obs_data_set_string(dObj, "webrtc_turn", d->webrtc_turn.c_str());
@@ -370,6 +374,7 @@ static void load_dock_config(obs_data_t *save_data)
 				dest->rtsp_port = read_data_string(dObj, "rtsp_port", "8554");
 				dest->rtsp_mount = read_data_string(dObj, "rtsp_mount", "/live");
 				dest->rtsp_pipeline = read_data_string(dObj, "rtsp_pipeline", DEFAULT_RTSP_PIPELINE);
+				dest->rtsp_protocols = read_data_string(dObj, "rtsp_protocols", "tcp");
 				dest->webrtc_port = read_data_string(dObj, "webrtc_port", "8888");
 				dest->webrtc_stun = read_data_string(dObj, "webrtc_stun");
 				dest->webrtc_turn = read_data_string(dObj, "webrtc_turn");
@@ -590,7 +595,8 @@ static bool start_destination(GstMasterHub *hub, GstDestination *dest)
 			dest->rtsp_port.c_str(),
 			dest->rtsp_mount.c_str(),
 			effective_enc.c_str(),
-			dest->rtsp_pipeline.c_str()
+			dest->rtsp_pipeline.c_str(),
+			dest->rtsp_protocols.c_str()
 		);
 
 		if (!dest->rtsp_branch) {
@@ -812,9 +818,16 @@ public:
 		rtspForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
 		m_rtspPortEdit = new QLineEdit(QString::fromStdString(dest->rtsp_port), this);
 		m_rtspMountEdit = new QLineEdit(QString::fromStdString(dest->rtsp_mount), this);
+		m_rtspProtoCombo = new QComboBox(this);
+		m_rtspProtoCombo->addItem("Force TCP Interleaved (Firewall Safe, No UDP Hang)", "tcp");
+		m_rtspProtoCombo->addItem("Auto (UDP / Multicast / TCP)", "all");
+		m_rtspProtoCombo->addItem("UDP Only", "udp");
+		int protoIdx = m_rtspProtoCombo->findData(QString::fromStdString(dest->rtsp_protocols));
+		if (protoIdx >= 0) m_rtspProtoCombo->setCurrentIndex(protoIdx);
 		m_rtspPipeEdit = new QLineEdit(QString::fromStdString(dest->rtsp_pipeline), this);
 		rtspForm->addRow("RTSP Port:", m_rtspPortEdit);
 		rtspForm->addRow("Mount Path:", m_rtspMountEdit);
+		rtspForm->addRow("Transport Protocol:", m_rtspProtoCombo);
 		rtspForm->addRow("Payloader Pipeline:", m_rtspPipeEdit);
 
 		QHBoxLayout *urlLayout = new QHBoxLayout();
@@ -922,6 +935,7 @@ private:
 
 		m_dest->rtsp_port = m_rtspPortEdit->text().toStdString();
 		m_dest->rtsp_mount = m_rtspMountEdit->text().toStdString();
+		m_dest->rtsp_protocols = m_rtspProtoCombo->currentData().toString().toStdString();
 		m_dest->rtsp_pipeline = m_rtspPipeEdit->text().toStdString();
 
 		m_dest->webrtc_port = m_webrtcPortEdit->text().toStdString();
@@ -943,6 +957,7 @@ private:
 	QGroupBox *m_rtspGroup;
 	QLineEdit *m_rtspPortEdit;
 	QLineEdit *m_rtspMountEdit;
+	QComboBox *m_rtspProtoCombo;
 	QLineEdit *m_rtspPipeEdit;
 	QLineEdit *m_rtspUrlDisplay;
 

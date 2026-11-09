@@ -28,6 +28,7 @@ struct gst_hub_output_params {
 	int keyint_sec;
 	const char *master_pipeline;
 	const char *rtsp_pipeline;
+	const char *rtsp_protocols;   /* "all", "tcp", "udp" */
 	const char *render_mode;
 	gst_master_pipeline_t *master_pipe;
 };
@@ -38,7 +39,8 @@ gst_hub_branch_t *gst_rtsp_branch_start(gst_master_pipeline_t *pipeline,
                                         const char *service,
                                         const char *mount,
                                         const char *encoder_type,
-                                        const char *rtsp_pipeline);
+                                        const char *rtsp_pipeline,
+                                        const char *protocols);
 
 gst_hub_branch_t *gst_custom_branch_start(gst_master_pipeline_t *pipeline,
                                           const char *name,

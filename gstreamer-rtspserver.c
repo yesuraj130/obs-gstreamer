@@ -197,7 +197,8 @@ struct gst_hub_branch *gst_rtsp_branch_start(gst_master_pipeline_t *pipeline,
                                              const char *service,
                                              const char *mount,
                                              const char *encoder_type,
-                                             const char *rtsp_pipeline)
+                                             const char *rtsp_pipeline,
+                                             const char *protocols)
 {
 	if (!pipeline) {
 		blog(LOG_ERROR, "[obs-gstreamer-rtspserver] Cannot start RTSP branch '%s': master_pipe is NULL",
@@ -268,7 +269,18 @@ struct gst_hub_branch *gst_rtsp_branch_start(gst_master_pipeline_t *pipeline,
 
 	GstRTSPMediaFactory *factory = gst_rtsp_media_factory_new();
 	gst_rtsp_media_factory_set_shared(factory, TRUE);
-	gst_rtsp_media_factory_set_protocols(factory, GST_RTSP_LOWER_TRANS_UDP | GST_RTSP_LOWER_TRANS_UDP_MCAST | GST_RTSP_LOWER_TRANS_TCP);
+
+	GstRTSPLowerTrans proto_mask = GST_RTSP_LOWER_TRANS_UDP | GST_RTSP_LOWER_TRANS_UDP_MCAST | GST_RTSP_LOWER_TRANS_TCP;
+	if (protocols && g_strcmp0(protocols, "tcp") == 0) {
+		proto_mask = GST_RTSP_LOWER_TRANS_TCP;
+		blog(LOG_INFO, "[obs-gstreamer-rtspserver] RTSP branch '%s': Forcing TCP transport exclusively",
+			branch->name);
+	} else if (protocols && g_strcmp0(protocols, "udp") == 0) {
+		proto_mask = GST_RTSP_LOWER_TRANS_UDP | GST_RTSP_LOWER_TRANS_UDP_MCAST;
+		blog(LOG_INFO, "[obs-gstreamer-rtspserver] RTSP branch '%s': Forcing UDP transport exclusively",
+			branch->name);
+	}
+	gst_rtsp_media_factory_set_protocols(factory, proto_mask);
 
 	const char *pipe_codec = gst_master_pipeline_get_codec(pipeline);
 	bool is_hevc = (pipe_codec && g_strcmp0(pipe_codec, "h265") == 0) ||
@@ -558,7 +570,8 @@ struct gst_hub_branch *gst_render_hub_start_branch(const struct gst_hub_output_p
 	                             params->rtsp_service,
 	                             params->rtsp_mount,
 	                             params->encoder_type,
-	                             params->rtsp_pipeline);
+	                             params->rtsp_pipeline,
+	                             params->rtsp_protocols);
 }
 
 static void media_configure_cb(GstRTSPMediaFactory *factory, GstRTSPMedia *media, gpointer user_data)
