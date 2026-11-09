@@ -468,18 +468,12 @@ static GstBusSyncReply master_bus_sync_handler(GstBus *bus, GstMessage *msg, gpo
 		if (err) g_error_free(err);
 		g_free(debug_info);
 		g_atomic_int_set(&hub->pipeline_failed, 1);
-		uint32_t active_slots = (hub->ring_slots >= 1 && hub->ring_slots <= GST_MASTER_MAX_RING_SLOTS)
-			? hub->ring_slots : GST_MASTER_DEFAULT_RING_SLOTS;
 #if HAVE_GST_D3D11
-		for (uint32_t i = 0; i < active_slots; i++)
-			g_atomic_int_set(&hub->d3d11_slots[i].in_use, 0);
+		g_atomic_int_set(&hub->d3d11_slot.in_use, 0);
 #endif
 #if HAVE_GST_GL
-		for (uint32_t i = 0; i < active_slots; i++)
-		{
-			g_atomic_int_set(&hub->gl_slots[i].in_use, 0);
-			g_atomic_int_set(&hub->gl_slots[i].plane_refs, 0);
-		}
+		g_atomic_int_set(&hub->gl_slot.in_use, 0);
+		g_atomic_int_set(&hub->gl_slot.plane_refs, 0);
 #endif
 	}
 	else if (GST_MESSAGE_TYPE(msg) == GST_MESSAGE_WARNING)
@@ -871,7 +865,7 @@ static GstElement *create_master_encoder_pipeline(gst_master_pipeline_t *hub, co
 				"caps=\"video/x-raw(memory:D3D11Memory), width=%u, height=%u, "
 				"format=%s, framerate=%u/%u\" ! "
 				"d3d11convert ! video/x-raw(memory:D3D11Memory), format=NV12 ! "
-				"%s ! %s config-interval=1 ! "
+				"%s ! %s ! "
 				"%s, stream-format=byte-stream, alignment=au ! "
 				"appsink name=hub_appsink sync=false drop=false max-buffers=4",
 				hub->width, hub->height,
@@ -891,7 +885,7 @@ static GstElement *create_master_encoder_pipeline(gst_master_pipeline_t *hub, co
 				"appsrc name=hub_appsrc is-live=true format=GST_FORMAT_TIME do-timestamp=false min-latency=0 max-latency=0 "
 				"caps=\"video/x-raw(memory:GLMemory), width=%u, height=%u, "
 				"format=NV12, framerate=%u/%u, texture-target=2D, colorimetry=%s\" ! "
-				"%s ! %s config-interval=1 ! "
+				"%s ! %s ! "
 				"%s, stream-format=byte-stream, alignment=au ! "
 				"appsink name=hub_appsink sync=false drop=false max-buffers=4",
 				hub->width, hub->height, hub->fps_num, hub->fps_den, hub->colorimetry_str,
@@ -904,7 +898,7 @@ static GstElement *create_master_encoder_pipeline(gst_master_pipeline_t *hub, co
 		pipe_desc = g_strdup_printf(
 			"appsrc name=hub_appsrc is-live=true format=GST_FORMAT_TIME do-timestamp=false min-latency=0 max-latency=0 "
 			"caps=\"video/x-raw, width=%u, height=%u, format=NV12, framerate=%u/%u, colorimetry=%s\" ! "
-			"%s ! %s config-interval=1 ! %s, stream-format=byte-stream, alignment=au ! "
+			"%s ! %s ! %s, stream-format=byte-stream, alignment=au ! "
 			"appsink name=hub_appsink sync=false drop=false max-buffers=4",
 			hub->width, hub->height, hub->fps_num, hub->fps_den, hub->colorimetry_str,
 			enc_str, parse_elem, caps_elem);
@@ -1030,24 +1024,19 @@ static void d3d11_nv12_slot_release_notify(gpointer user_data)
 static void destroy_d3d11_nv12_converter(gst_master_pipeline_t *hub)
 {
 	if (!hub) return;
-	uint32_t slots = (hub->ring_slots >= 1 && hub->ring_slots <= GST_MASTER_MAX_RING_SLOTS)
-		? hub->ring_slots : GST_MASTER_DEFAULT_RING_SLOTS;
-	for (uint32_t i = 0; i < slots; i++)
+	gst_d3d11_nv12_slot_t *slot = &hub->d3d11_slot;
+	if (slot->gst_texture && slot->gst_texture != slot->texture)
 	{
-		gst_d3d11_nv12_slot_t *slot = &hub->d3d11_slots[i];
-		if (slot->gst_texture && slot->gst_texture != slot->texture)
-		{
-			ID3D11Texture2D_Release(slot->gst_texture);
-			slot->gst_texture = NULL;
-		}
-		if (slot->texture)
-		{
-			ID3D11Texture2D_Release(slot->texture);
-			slot->texture = NULL;
-		}
-		slot->shared_handle = NULL;
-		g_atomic_int_set(&slot->in_use, 0);
+		ID3D11Texture2D_Release(slot->gst_texture);
+		slot->gst_texture = NULL;
 	}
+	if (slot->texture)
+	{
+		ID3D11Texture2D_Release(slot->texture);
+		slot->texture = NULL;
+	}
+	slot->shared_handle = NULL;
+	g_atomic_int_set(&slot->in_use, 0);
 	hub->d3d11_nv12_ready = false;
 }
 
@@ -1067,65 +1056,59 @@ static bool init_d3d11_nv12_converter(gst_master_pipeline_t *hub)
 		? DXGI_FORMAT_R8G8B8A8_UNORM
 		: DXGI_FORMAT_B8G8R8A8_UNORM;
 
-	uint32_t slots = (hub->ring_slots >= 1 && hub->ring_slots <= GST_MASTER_MAX_RING_SLOTS)
-		? hub->ring_slots : GST_MASTER_DEFAULT_RING_SLOTS;
+	gst_d3d11_nv12_slot_t *slot = &hub->d3d11_slot;
+	D3D11_TEXTURE2D_DESC tex_desc = {0};
+	tex_desc.Width = hub->width;
+	tex_desc.Height = hub->height;
+	tex_desc.MipLevels = 1;
+	tex_desc.ArraySize = 1;
+	tex_desc.Format = tex_dxgi_format;
+	tex_desc.SampleDesc.Count = 1;
+	tex_desc.Usage = D3D11_USAGE_DEFAULT;
+	tex_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+	if (hub->d3d11_native_device)
+		tex_desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED;
 
-	for (uint32_t i = 0; i < slots; i++)
+	HRESULT hr = ID3D11Device_CreateTexture2D(obs_device, &tex_desc, NULL, &slot->texture);
+	if (FAILED(hr))
 	{
-		gst_d3d11_nv12_slot_t *slot = &hub->d3d11_slots[i];
-		D3D11_TEXTURE2D_DESC tex_desc = {0};
-		tex_desc.Width = hub->width;
-		tex_desc.Height = hub->height;
-		tex_desc.MipLevels = 1;
-		tex_desc.ArraySize = 1;
-		tex_desc.Format = tex_dxgi_format;
-		tex_desc.SampleDesc.Count = 1;
-		tex_desc.Usage = D3D11_USAGE_DEFAULT;
-		tex_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-		if (hub->d3d11_native_device)
-			tex_desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED;
-
-		HRESULT hr = ID3D11Device_CreateTexture2D(obs_device, &tex_desc, NULL, &slot->texture);
-		if (FAILED(hr))
-		{
-			blog(LOG_ERROR, "[obs-gstreamer-master] Failed to create D3D11 texture slot %u (format=%d): 0x%08lx",
-				i, (int)tex_dxgi_format, (unsigned long)hr);
-			return false;
-		}
-
-		if (hub->d3d11_native_device)
-		{
-			IDXGIResource *dxgi_res = NULL;
-			HRESULT hr_res = ID3D11Texture2D_QueryInterface(slot->texture, &IID_IDXGIResource, (void **)&dxgi_res);
-			if (SUCCEEDED(hr_res) && dxgi_res)
-			{
-				IDXGIResource_GetSharedHandle(dxgi_res, &slot->shared_handle);
-				IDXGIResource_Release(dxgi_res);
-			}
-			if (slot->shared_handle)
-			{
-				hr = ID3D11Device_OpenSharedResource(hub->d3d11_native_device, slot->shared_handle,
-					&gst_IID_ID3D11Texture2D, (void **)&slot->gst_texture);
-				if (FAILED(hr))
-				{
-					blog(LOG_ERROR, "[obs-gstreamer-master] Failed to open shared texture slot %u on GStreamer device: 0x%08lx",
-						i, (unsigned long)hr);
-					return false;
-				}
-			}
-		}
-		else
-		{
-			slot->gst_texture = slot->texture;
-			ID3D11Texture2D_AddRef(slot->gst_texture);
-		}
-
-		g_atomic_int_set(&slot->in_use, 0);
+		blog(LOG_ERROR, "[obs-gstreamer-master] Failed to create D3D11 texture slot (format=%d): 0x%08lx",
+			(int)tex_dxgi_format, (unsigned long)hr);
+		return false;
 	}
 
+	if (hub->d3d11_native_device)
+	{
+		IDXGIResource *dxgi_res = NULL;
+		HRESULT hr_res = ID3D11Texture2D_QueryInterface(slot->texture, &IID_IDXGIResource, (void **)&dxgi_res);
+		if (SUCCEEDED(hr_res) && dxgi_res)
+		{
+			IDXGIResource_GetSharedHandle(dxgi_res, &slot->shared_handle);
+			IDXGIResource_Release(dxgi_res);
+		}
+		if (slot->shared_handle)
+		{
+			hr = ID3D11Device_OpenSharedResource(hub->d3d11_native_device, slot->shared_handle,
+				&gst_IID_ID3D11Texture2D, (void **)&slot->gst_texture);
+			if (FAILED(hr))
+			{
+				blog(LOG_ERROR, "[obs-gstreamer-master] Failed to open shared texture slot on GStreamer device: 0x%08lx",
+					(unsigned long)hr);
+				return false;
+			}
+		}
+	}
+	else
+	{
+		slot->gst_texture = slot->texture;
+		ID3D11Texture2D_AddRef(slot->gst_texture);
+	}
+
+	g_atomic_int_set(&slot->in_use, 0);
+
 	hub->d3d11_nv12_ready = true;
-	blog(LOG_INFO, "[obs-gstreamer-master] Initialized D3D11 zero-copy ring buffer (%u slots, appsrc_format=%s)",
-		slots, gst_video_format_to_string(hub->appsrc_format));
+	blog(LOG_INFO, "[obs-gstreamer-master] Initialized D3D11 zero-copy direct texture slot (appsrc_format=%s)",
+		gst_video_format_to_string(hub->appsrc_format));
 	return true;
 }
 
@@ -1152,28 +1135,22 @@ static bool push_d3d11_texture(gst_master_pipeline_t *hub, gs_texture_t *texture
 	if (!hub->d3d11_nv12_ready && !init_d3d11_nv12_converter(hub))
 		return false;
 
-	uint32_t slots = (hub->ring_slots >= 1 && hub->ring_slots <= GST_MASTER_MAX_RING_SLOTS)
-		? hub->ring_slots : GST_MASTER_DEFAULT_RING_SLOTS;
+	gst_d3d11_nv12_slot_t *slot = &hub->d3d11_slot;
 
-	uint32_t slot_idx = hub->d3d11_next_slot;
-	gst_d3d11_nv12_slot_t *slot = &hub->d3d11_slots[slot_idx];
-
-	/* Strict FIFO: Only the next sequential slot in line can be used */
+	/* Strict Direct Processing: If encoder is busy, drop frame immediately */
 	if (g_atomic_int_get(&slot->in_use) != 0)
 	{
 		hub->texture_drop_count++;
 		uint64_t drops = hub->texture_drop_count;
 		if (drops == 1 || drops % 120 == 0)
 		{
-			blog(LOG_WARNING, "[obs-gstreamer-master] Encoder busy: dropped D3D11 frame #%" PRIu64 " (slot %u in use, total drops: %" PRIu64 ")",
-				hub->texture_push_count + 1, slot_idx, drops);
+			blog(LOG_WARNING, "[obs-gstreamer-master] Encoder busy: dropped D3D11 frame #%" PRIu64 " (slot in use, total drops: %" PRIu64 ")",
+				hub->texture_push_count + 1, drops);
 		}
 		return true;
 	}
 
-	/* Claim slot and advance ring pointer strictly sequentially */
 	g_atomic_int_set(&slot->in_use, 1);
-	hub->d3d11_next_slot = (slot_idx + 1) % slots;
 
 	ID3D11Texture2D *d3d_texture = (ID3D11Texture2D *)gs_texture_get_obj(texture);
 	if (!d3d_texture)
@@ -1273,10 +1250,10 @@ static bool push_d3d11_texture(gst_master_pipeline_t *hub, gs_texture_t *texture
 	if (frame_number == 1 || frame_number % 300 == 0)
 	{
 		blog(LOG_INFO, "[obs-gstreamer-master] D3D11 zero-copy frame #%" PRIu64
-			" pushed (%ux%u, format=%s, slot=%u, drops=%" PRIu64 ")",
+			" pushed (%ux%u, format=%s, drops=%" PRIu64 ")",
 			frame_number, width, height,
 			gst_video_format_to_string(hub->appsrc_format),
-			slot_idx, hub->texture_drop_count);
+			hub->texture_drop_count);
 	}
 	return true;
 }
@@ -1301,17 +1278,12 @@ static void destroy_gl_nv12_converter(gst_master_pipeline_t *hub)
 	if (hub->gl_context)
 	{
 		GstGLFuncs *gl = hub->gl_context->gl_vtable;
-		uint32_t slots = (hub->ring_slots >= 1 && hub->ring_slots <= GST_MASTER_MAX_RING_SLOTS)
-			? hub->ring_slots : GST_MASTER_DEFAULT_RING_SLOTS;
-		for (uint32_t i = 0; i < slots; i++)
-		{
-			gst_gl_nv12_slot_t *slot = &hub->gl_slots[i];
-			if (slot->fbo_y) { gl->DeleteFramebuffers(1, &slot->fbo_y); slot->fbo_y = 0; }
-			if (slot->fbo_uv) { gl->DeleteFramebuffers(1, &slot->fbo_uv); slot->fbo_uv = 0; }
-			if (slot->tex_y) { gl->DeleteTextures(1, &slot->tex_y); slot->tex_y = 0; }
-			if (slot->tex_uv) { gl->DeleteTextures(1, &slot->tex_uv); slot->tex_uv = 0; }
-			g_atomic_int_set(&slot->in_use, 0);
-		}
+		gst_gl_nv12_slot_t *slot = &hub->gl_slot;
+		if (slot->fbo_y) { gl->DeleteFramebuffers(1, &slot->fbo_y); slot->fbo_y = 0; }
+		if (slot->fbo_uv) { gl->DeleteFramebuffers(1, &slot->fbo_uv); slot->fbo_uv = 0; }
+		if (slot->tex_y) { gl->DeleteTextures(1, &slot->tex_y); slot->tex_y = 0; }
+		if (slot->tex_uv) { gl->DeleteTextures(1, &slot->tex_uv); slot->tex_uv = 0; }
+		g_atomic_int_set(&slot->in_use, 0);
 		if (hub->gl_nv12_prog_y) { gl->DeleteProgram(hub->gl_nv12_prog_y); hub->gl_nv12_prog_y = 0; }
 		if (hub->gl_nv12_prog_uv) { gl->DeleteProgram(hub->gl_nv12_prog_uv); hub->gl_nv12_prog_uv = 0; }
 		if (hub->gl_nv12_vs) { gl->DeleteShader(hub->gl_nv12_vs); hub->gl_nv12_vs = 0; }
@@ -1432,49 +1404,43 @@ static bool init_gl_nv12_converter(gst_master_pipeline_t *hub)
 	if (!hub->gl_nv12_prog_y || !hub->gl_nv12_prog_uv)
 		return false;
 
-	uint32_t slots = (hub->ring_slots >= 1 && hub->ring_slots <= GST_MASTER_MAX_RING_SLOTS)
-		? hub->ring_slots : GST_MASTER_DEFAULT_RING_SLOTS;
+	gst_gl_nv12_slot_t *slot = &hub->gl_slot;
 
-	for (uint32_t i = 0; i < slots; i++)
-	{
-		gst_gl_nv12_slot_t *slot = &hub->gl_slots[i];
+	/* Texture Y (GL_R8, W x H) */
+	gl->GenTextures(1, &slot->tex_y);
+	gl->BindTexture(GL_TEXTURE_2D, slot->tex_y);
+	gl->TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	gl->TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+	gl->TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	gl->TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+	gl->TexImage2D(GL_TEXTURE_2D, 0, GL_R8, hub->width, hub->height, 0, GL_RED, GL_UNSIGNED_BYTE, NULL);
 
-		/* Texture Y (GL_R8, W x H) */
-		gl->GenTextures(1, &slot->tex_y);
-		gl->BindTexture(GL_TEXTURE_2D, slot->tex_y);
-		gl->TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-		gl->TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-		gl->TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-		gl->TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-		gl->TexImage2D(GL_TEXTURE_2D, 0, GL_R8, hub->width, hub->height, 0, GL_RED, GL_UNSIGNED_BYTE, NULL);
+	gl->GenFramebuffers(1, &slot->fbo_y);
+	gl->BindFramebuffer(GL_FRAMEBUFFER, slot->fbo_y);
+	gl->FramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, slot->tex_y, 0);
 
-		gl->GenFramebuffers(1, &slot->fbo_y);
-		gl->BindFramebuffer(GL_FRAMEBUFFER, slot->fbo_y);
-		gl->FramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, slot->tex_y, 0);
+	/* Texture UV (GL_RG8, W/2 x H/2) */
+	gl->GenTextures(1, &slot->tex_uv);
+	gl->BindTexture(GL_TEXTURE_2D, slot->tex_uv);
+	gl->TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	gl->TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	gl->TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	gl->TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+	gl->TexImage2D(GL_TEXTURE_2D, 0, GL_RG8, hub->width / 2, hub->height / 2, 0, GL_RG, GL_UNSIGNED_BYTE, NULL);
 
-		/* Texture UV (GL_RG8, W/2 x H/2) */
-		gl->GenTextures(1, &slot->tex_uv);
-		gl->BindTexture(GL_TEXTURE_2D, slot->tex_uv);
-		gl->TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-		gl->TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-		gl->TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-		gl->TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-		gl->TexImage2D(GL_TEXTURE_2D, 0, GL_RG8, hub->width / 2, hub->height / 2, 0, GL_RG, GL_UNSIGNED_BYTE, NULL);
+	gl->GenFramebuffers(1, &slot->fbo_uv);
+	gl->BindFramebuffer(GL_FRAMEBUFFER, slot->fbo_uv);
+	gl->FramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, slot->tex_uv, 0);
 
-		gl->GenFramebuffers(1, &slot->fbo_uv);
-		gl->BindFramebuffer(GL_FRAMEBUFFER, slot->fbo_uv);
-		gl->FramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, slot->tex_uv, 0);
+	gl->BindFramebuffer(GL_FRAMEBUFFER, 0);
+	gl->BindTexture(GL_TEXTURE_2D, 0);
 
-		gl->BindFramebuffer(GL_FRAMEBUFFER, 0);
-		gl->BindTexture(GL_TEXTURE_2D, 0);
-
-		g_atomic_int_set(&slot->in_use, 0);
-		g_atomic_int_set(&slot->plane_refs, 0);
-	}
+	g_atomic_int_set(&slot->in_use, 0);
+	g_atomic_int_set(&slot->plane_refs, 0);
 
 	hub->gl_nv12_ready = true;
-	blog(LOG_INFO, "[obs-gstreamer-master] Initialized OpenGL NV12 converter (%u-slot ring buffer, colorimetry=%s)",
-		slots, hub->colorimetry_str);
+	blog(LOG_INFO, "[obs-gstreamer-master] Initialized OpenGL NV12 converter (direct single slot, colorimetry=%s)",
+		hub->colorimetry_str);
 	return true;
 }
 
@@ -1498,28 +1464,23 @@ static bool push_gl_texture(gst_master_pipeline_t *hub, gs_texture_t *texture, u
 	if (!hub->gl_nv12_ready && !init_gl_nv12_converter(hub))
 		return false;
 
-	uint32_t slots = (hub->ring_slots >= 1 && hub->ring_slots <= GST_MASTER_MAX_RING_SLOTS)
-		? hub->ring_slots : GST_MASTER_DEFAULT_RING_SLOTS;
+	gst_gl_nv12_slot_t *slot = &hub->gl_slot;
 
-	uint32_t slot_idx = hub->gl_next_slot;
-	gst_gl_nv12_slot_t *slot = &hub->gl_slots[slot_idx];
-
-	/* Strict FIFO: Only the next sequential slot in line can be used */
+	/* Strict Direct Processing: If encoder is busy, drop frame immediately */
 	if (g_atomic_int_get(&slot->in_use) != 0)
 	{
 		hub->texture_drop_count++;
 		uint64_t drops = hub->texture_drop_count;
 		if (drops == 1 || drops % 120 == 0)
 		{
-			blog(LOG_WARNING, "[obs-gstreamer-master] Encoder busy: dropped OpenGL frame #%" PRIu64 " (slot %u in use, total drops: %" PRIu64 ")",
-				hub->texture_push_count + 1, slot_idx, drops);
+			blog(LOG_WARNING, "[obs-gstreamer-master] Encoder busy: dropped OpenGL frame #%" PRIu64 " (slot in use, total drops: %" PRIu64 ")",
+				hub->texture_push_count + 1, drops);
 		}
 		return true;
 	}
 
 	g_atomic_int_set(&slot->in_use, 1);
 	g_atomic_int_set(&slot->plane_refs, 2); /* 2 planes: Y and UV */
-	hub->gl_next_slot = (slot_idx + 1) % slots;
 
 	const guint *tex_ptr = (const guint *)gs_texture_get_obj(texture);
 	if (!tex_ptr || *tex_ptr == 0)
@@ -1684,8 +1645,8 @@ static bool push_gl_texture(gst_master_pipeline_t *hub, gs_texture_t *texture, u
 	if (frame_number == 1 || frame_number % 300 == 0)
 	{
 		blog(LOG_INFO, "[obs-gstreamer-master] OpenGL NV12 zero-copy frame #%" PRIu64
-			" converted and pushed (%ux%u, slot=%u, drops=%" PRIu64 ")",
-			frame_number, width, height, slot_idx, hub->texture_drop_count);
+			" converted and pushed (%ux%u, drops=%" PRIu64 ")",
+			frame_number, width, height, hub->texture_drop_count);
 	}
 	return true;
 }
@@ -2042,9 +2003,7 @@ gst_master_pipeline_t *gst_master_pipeline_create(const char *custom_master_pipe
 	hub->fps_num = fps_num;
 	hub->fps_den = fps_den;
 	hub->state_cb = state_cb;
-	hub->state_user_data = user_data;
 	hub->gpu_input = false;
-	hub->ring_slots = GST_MASTER_DEFAULT_RING_SLOTS;
 	hub->video_codec = bstrdup(video_codec ? video_codec : "h264");
 
 	const char *chosen_enc = gst_master_pipeline_select_encoder(encoder_type, hub->video_codec, gpu_input);
@@ -2198,14 +2157,6 @@ gst_master_pipeline_t *gst_master_pipeline_create(const char *custom_master_pipe
 	if (state_cb) state_cb(false, user_data);
 
 	return hub;
-}
-
-void gst_master_pipeline_set_ring_slots(gst_master_pipeline_t *hub, uint32_t ring_slots)
-{
-	if (!hub) return;
-	if (ring_slots < 1) ring_slots = 1;
-	if (ring_slots > GST_MASTER_MAX_RING_SLOTS) ring_slots = GST_MASTER_MAX_RING_SLOTS;
-	hub->ring_slots = ring_slots;
 }
 
 const char *gst_master_pipeline_get_codec(gst_master_pipeline_t *hub)

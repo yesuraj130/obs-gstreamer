@@ -293,11 +293,11 @@ struct gst_hub_branch *gst_rtsp_branch_start(gst_master_pipeline_t *pipeline,
 	} else if (is_hevc) {
 		launch_str = "( appsrc name=appsrc_video is-live=true format=GST_FORMAT_TIME do-timestamp=false "
 		             "caps=\"video/x-h265, stream-format=byte-stream, alignment=au\" ! "
-		             "h265parse config-interval=1 ! rtph265pay name=pay0 pt=96 config-interval=1 aggregate-mode=zero-latency )";
+		             "h265parse ! rtph265pay name=pay0 pt=96 config-interval=-1 aggregate-mode=zero-latency )";
 	} else {
 		launch_str = "( appsrc name=appsrc_video is-live=true format=GST_FORMAT_TIME do-timestamp=false "
 		             "caps=\"video/x-h264, stream-format=byte-stream, alignment=au\" ! "
-		             "h264parse config-interval=1 ! rtph264pay name=pay0 pt=96 config-interval=1 aggregate-mode=zero-latency )";
+		             "h264parse ! rtph264pay name=pay0 pt=96 config-interval=-1 aggregate-mode=zero-latency )";
 	}
 
 	gst_rtsp_media_factory_set_launch(factory, launch_str);

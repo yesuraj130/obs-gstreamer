@@ -1189,15 +1189,15 @@ struct gstreamer_webrtc *gst_webrtc_branch_start(gst_master_pipeline_t *master_p
 		? g_strdup(
 			"appsrc name=appsrc_video is-live=true format=GST_FORMAT_TIME do-timestamp=true "
 			"caps=\"video/x-h265, stream-format=byte-stream, alignment=au\" "
-			"! h265parse config-interval=1 "
-			"! rtph265pay name=pay0 config-interval=1 aggregate-mode=zero-latency "
+			"! h265parse "
+			"! rtph265pay name=pay0 config-interval=-1 aggregate-mode=zero-latency "
 			"! tee name=t "
 			"t. ! queue leaky=downstream max-size-buffers=2 ! fakesink sync=false")
 		: g_strdup(
 			"appsrc name=appsrc_video is-live=true format=GST_FORMAT_TIME do-timestamp=true "
 			"caps=\"video/x-h264, stream-format=byte-stream, alignment=au\" "
-			"! h264parse config-interval=1 "
-			"! rtph264pay name=pay0 config-interval=1 aggregate-mode=zero-latency "
+			"! h264parse "
+			"! rtph264pay name=pay0 config-interval=-1 aggregate-mode=zero-latency "
 			"! tee name=t "
 			"t. ! queue leaky=downstream max-size-buffers=2 ! fakesink sync=false");
 
@@ -1346,8 +1346,8 @@ struct gstreamer_webrtc *gstreamer_webrtc_create(obs_output_t *output, obs_data_
 		"! videoconvert ! x264enc tune=zerolatency speed-preset=veryfast bitrate=3000 "
 		"bframes=0 cabac=false key-int-max=%d "
 		"! video/x-h264, profile=constrained-baseline, stream-format=byte-stream, alignment=au "
-		"! h264parse config-interval=1 "
-		"! rtph264pay name=pay0 config-interval=1 "
+		"! h264parse "
+		"! rtph264pay name=pay0 config-interval=-1 "
 		"! tee name=t "
 		// keep-alive branch: guarantees flow OK even with zero viewers
 		"t. ! queue leaky=downstream max-size-buffers=30 ! fakesink sync=false",

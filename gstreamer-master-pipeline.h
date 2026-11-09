@@ -34,10 +34,6 @@
 extern "C" {
 #endif
 
-#define GST_MASTER_MAX_RING_SLOTS 8
-#define GST_MASTER_DEFAULT_RING_SLOTS 2
-#define GST_MASTER_NV12_RING_SLOTS GST_MASTER_DEFAULT_RING_SLOTS
-
 typedef struct gst_master_pipeline gst_master_pipeline_t;
 typedef struct gst_pipeline_subscriber gst_pipeline_subscriber_t;
 
@@ -100,13 +96,10 @@ struct gst_master_pipeline
 	gst_nv12_color_matrix_t color_matrix;
 	const char *colorimetry_str;
 
-	uint32_t ring_slots;
-
 #if HAVE_GST_D3D11
 	GstD3D11Device *d3d11_device;
 	ID3D11Device *d3d11_native_device;
-	gst_d3d11_nv12_slot_t d3d11_slots[GST_MASTER_MAX_RING_SLOTS];
-	uint32_t d3d11_next_slot;
+	gst_d3d11_nv12_slot_t d3d11_slot;
 	bool d3d11_nv12_ready;
 #endif
 #if HAVE_GST_GL
@@ -120,8 +113,7 @@ struct gst_master_pipeline
 	GLuint gl_nv12_ps_uv;
 	GLuint gl_nv12_prog_y;
 	GLuint gl_nv12_prog_uv;
-	gst_gl_nv12_slot_t gl_slots[GST_MASTER_MAX_RING_SLOTS];
-	uint32_t gl_next_slot;
+	gst_gl_nv12_slot_t gl_slot;
 	bool gl_nv12_ready;
 	bool gl_tex_logged;
 #endif
@@ -144,7 +136,6 @@ bool gst_master_pipeline_element_available(const char *factory_name);
 const char *gst_master_pipeline_select_encoder(const char *requested_encoder, const char *video_codec, bool gpu_input);
 
 gst_master_pipeline_t *gst_master_pipeline_create(const char *custom_master_pipe, const char *encoder_type, const char *video_codec, int bitrate_kbps, int keyint_sec, uint32_t width, uint32_t height, uint32_t fps_num, uint32_t fps_den, bool gpu_input, gst_master_state_cb state_cb, gpointer user_data);
-void gst_master_pipeline_set_ring_slots(gst_master_pipeline_t *hub, uint32_t ring_slots);
 const char *gst_master_pipeline_get_codec(gst_master_pipeline_t *hub);
 void gst_master_pipeline_destroy(gst_master_pipeline_t *hub);
 
