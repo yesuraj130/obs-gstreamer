@@ -96,6 +96,86 @@ static bool element_has_property(const char *factory_name, const char *prop_name
 	return pspec != NULL;
 }
 
+static bool caps_use_only_system_memory(const GstCapsFeatures *features)
+{
+	if (gst_caps_features_is_any(features))
+		return false;
+
+	for (guint i = 0; i < gst_caps_features_get_size(features); i++) {
+		const char *feature = gst_caps_features_get_nth(features, i);
+		if (g_str_has_prefix(feature, "memory:") &&
+		    !g_str_equal(feature, GST_CAPS_FEATURE_MEMORY_SYSTEM_MEMORY))
+			return false;
+	}
+	return true;
+}
+
+static bool validate_custom_master_appsrc(gst_master_pipeline_t *hub)
+{
+	if (!hub || !hub->appsrc)
+		return false;
+
+	GstCaps *caps = gst_app_src_get_caps(GST_APP_SRC(hub->appsrc));
+	if (!caps || gst_caps_is_any(caps) || gst_caps_is_empty(caps)) {
+		if (caps) gst_caps_unref(caps);
+		GstPad *srcpad = gst_element_get_static_pad(hub->appsrc, "src");
+		caps = srcpad ? gst_pad_query_caps(srcpad, NULL) : NULL;
+		if (srcpad) gst_object_unref(srcpad);
+	}
+
+	bool valid = false;
+	if (!caps || !gst_caps_is_fixed(caps) || gst_caps_get_size(caps) != 1)
+		goto done;
+
+	const GstStructure *structure = gst_caps_get_structure(caps, 0);
+	const char *media_type = gst_structure_get_name(structure);
+	const char *format = gst_structure_get_string(structure, "format");
+	gint width = 0;
+	gint height = 0;
+	if (!g_str_equal(media_type, "video/x-raw") || !format ||
+	    !gst_structure_get_int(structure, "width", &width) ||
+	    !gst_structure_get_int(structure, "height", &height) ||
+	    width < 0 || height < 0 ||
+	    (guint)width != hub->width || (guint)height != hub->height)
+		goto done;
+
+	GstCapsFeatures *features = gst_caps_get_features(caps, 0);
+	GstVideoFormat gst_format = gst_video_format_from_string(format);
+	if (hub->gpu_input) {
+#if HAVE_GST_D3D11
+		if (hub->d3d11_device &&
+		    gst_caps_features_contains(features, "memory:D3D11Memory") &&
+		    (gst_format == GST_VIDEO_FORMAT_RGBA || gst_format == GST_VIDEO_FORMAT_BGRA)) {
+			hub->appsrc_format = gst_format;
+			hub->custom_d3d11_memory = true;
+			valid = true;
+			goto done;
+		}
+#endif
+#if HAVE_GST_GL
+		if (hub->gl_app_context &&
+		    gst_caps_features_contains(features, GST_CAPS_FEATURE_MEMORY_GL_MEMORY) &&
+		    gst_format == GST_VIDEO_FORMAT_RGBA) {
+			hub->appsrc_format = GST_VIDEO_FORMAT_RGBA;
+			hub->gl_rgb_pipeline = true;
+			valid = true;
+			goto done;
+		}
+#endif
+	} else if (caps_use_only_system_memory(features) &&
+		   gst_format == GST_VIDEO_FORMAT_RGBA) {
+		hub->appsrc_format = GST_VIDEO_FORMAT_RGBA;
+		valid = true;
+	}
+
+done:
+	if (caps) gst_caps_unref(caps);
+	if (!valid)
+		blog(LOG_ERROR, "[obs-gstreamer-master] Custom master appsrc caps must explicitly match %ux%u video/x-raw and the selected CPU/D3D11/GL input memory and format",
+			hub->width, hub->height);
+	return valid;
+}
+
 #if HAVE_GST_D3D11 || HAVE_GST_GL
 static bool encoder_supports_caps_feature(const char *factory_name, const char *feature_name)
 {
@@ -1496,7 +1576,8 @@ void gst_master_pipeline_push_texture(gst_master_pipeline_t *hub, void *gpu_hand
 
 	gs_texture_t *tex = (gs_texture_t *)gpu_handle;
 #if HAVE_GST_D3D11
-	if (hub->gpu_input && hub->d3d11_device && is_d3d11_memory_encoder(hub->selected_encoder))
+	if (hub->gpu_input && hub->d3d11_device &&
+	    (is_d3d11_memory_encoder(hub->selected_encoder) || hub->custom_d3d11_memory))
 	{
 		push_d3d11_texture(hub, tex, pts);
 		return;
@@ -1905,6 +1986,13 @@ gst_master_pipeline_t *gst_master_pipeline_create(const char *custom_master_pipe
 	{
 		hub->appsrc = gst_bin_get_by_name(GST_BIN(hub->pipe), "hub_appsrc");
 		hub->appsink = gst_bin_get_by_name(GST_BIN(hub->pipe), "hub_appsink");
+	}
+	if (custom_master_pipe && custom_master_pipe[0] &&
+	    hub->appsrc && hub->appsink &&
+	    !validate_custom_master_appsrc(hub))
+	{
+		gst_master_pipeline_destroy(hub);
+		return NULL;
 	}
 
 	hub->active_destinations = 0;

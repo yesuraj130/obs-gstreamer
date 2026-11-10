@@ -100,6 +100,7 @@ struct gst_master_pipeline
 	bool gl_texture_ready;
 	bool gl_rgb_pipeline;
 #endif
+	bool custom_d3d11_memory;
 
 	gint active_destinations;
 	volatile gint pipeline_failed;
