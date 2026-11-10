@@ -1,5 +1,7 @@
 #pragma once
 
+#include <stdbool.h>
+#include <stdint.h>
 #include <obs-module.h>
 #include <gst/gst.h>
 #include <gst/video/video.h>
@@ -15,6 +17,8 @@ GstVideoFormat obs_to_gst_video_format(enum video_format format);
 const char *obs_to_gst_video_format_str(enum video_format format);
 enum video_format gst_to_obs_video_format(GstVideoFormat format);
 GstElement *gstreamer_parse_launch_checked(const gchar *description, GError **error);
+bool gstreamer_copy_obs_video_data_to_buffer(const GstVideoInfo *info,
+	uint8_t *const data[], const uint32_t linesize[], GstBuffer *buffer);
 
 typedef void (*obs_main_rendered_callback_fn)(void (*draw)(void *param), void *param);
 obs_main_rendered_callback_fn obs_resolve_add_main_rendered_callback(void);

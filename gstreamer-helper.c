@@ -1,4 +1,5 @@
 #include "gstreamer-helper.h"
+#include <string.h>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -26,6 +27,49 @@ GstElement *gstreamer_parse_launch_checked(const gchar *description, GError **er
 	}
 
 	return pipeline;
+}
+
+bool gstreamer_copy_obs_video_data_to_buffer(const GstVideoInfo *info,
+	uint8_t *const data[], const uint32_t linesize[], GstBuffer *buffer)
+{
+	GstVideoFrame mapped;
+	if (!info || !data || !linesize || !buffer ||
+	    !gst_video_frame_map(&mapped, info, buffer, GST_MAP_WRITE))
+		return false;
+
+	bool copied = true;
+	for (guint plane = 0; plane < GST_VIDEO_INFO_N_PLANES(info); plane++) {
+		gsize row_bytes = 0;
+		if (info->finfo->format == GST_VIDEO_FORMAT_v210 && plane == 0) {
+			row_bytes = ((gsize)GST_VIDEO_INFO_WIDTH(info) + 5) / 6 * 16;
+		} else {
+			for (guint component = 0; component < GST_VIDEO_INFO_N_COMPONENTS(info); component++) {
+				if (GST_VIDEO_INFO_COMP_PLANE(info, component) == plane) {
+					gsize component_row_bytes =
+						(gsize)GST_VIDEO_INFO_COMP_WIDTH(info, component) *
+						GST_VIDEO_FORMAT_INFO_PSTRIDE(info->finfo, component);
+					row_bytes = MAX(row_bytes, component_row_bytes);
+				}
+			}
+		}
+
+		guint rows = gst_get_plane_height(info, plane);
+		gint dst_stride = GST_VIDEO_FRAME_PLANE_STRIDE(&mapped, plane);
+		if (!data[plane] || linesize[plane] < row_bytes ||
+		    dst_stride < 0 || (gsize)dst_stride < row_bytes) {
+			copied = false;
+			break;
+		}
+
+		guint8 *dst = GST_VIDEO_FRAME_PLANE_DATA(&mapped, plane);
+		for (guint row = 0; row < rows; row++) {
+			memcpy(dst + (gsize)row * dst_stride,
+				data[plane] + (gsize)row * linesize[plane], row_bytes);
+		}
+	}
+
+	gst_video_frame_unmap(&mapped);
+	return copied;
 }
 
 GstVideoFormat obs_to_gst_video_format(enum video_format format)

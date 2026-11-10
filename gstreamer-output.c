@@ -622,47 +622,6 @@ void gstreamer_output_encoded_packet(void *p, struct encoder_packet *packet)
 	gst_object_unref(video);
 }
 
-static bool copy_obs_video_data_to_gst_buffer(GstBuffer *buf, struct video_data *frame,
-	const GstVideoInfo *info)
-{
-	GstMapInfo map;
-	if (!gst_buffer_map(buf, &map, GST_MAP_WRITE)) return false;
-
-	for (guint plane = 0; plane < GST_VIDEO_INFO_N_PLANES(info); plane++) {
-		gsize row_bytes = 0;
-		for (guint component = 0; component < GST_VIDEO_INFO_N_COMPONENTS(info); component++) {
-			if (GST_VIDEO_INFO_COMP_PLANE(info, component) == plane) {
-				gsize component_row_bytes =
-					(gsize)GST_VIDEO_INFO_COMP_WIDTH(info, component) *
-					GST_VIDEO_FORMAT_INFO_PSTRIDE(info->finfo, component);
-				row_bytes = MAX(row_bytes, component_row_bytes);
-			}
-		}
-
-		guint rows = gst_get_plane_height(info, plane);
-		gsize offset = GST_VIDEO_INFO_PLANE_OFFSET(info, plane);
-		gint dst_stride = GST_VIDEO_INFO_PLANE_STRIDE(info, plane);
-		if (!frame->data[plane] || frame->linesize[plane] < row_bytes ||
-		    dst_stride < 0 || (gsize)dst_stride < row_bytes ||
-		    offset > map.size || row_bytes > map.size - offset ||
-		    (rows > 1 && (gsize)dst_stride > (map.size - offset - row_bytes) / (rows - 1))) {
-			blog(LOG_ERROR, "[obs-gstreamer] Invalid plane layout while copying raw video frame (plane=%u)", plane);
-			gst_buffer_unmap(buf, &map);
-			return false;
-		}
-
-		guint8 *dst = map.data + offset;
-		for (guint row = 0; row < rows; row++) {
-			memcpy(dst + (gsize)row * dst_stride,
-				frame->data[plane] + (gsize)row * frame->linesize[plane],
-				row_bytes);
-		}
-	}
-
-	gst_buffer_unmap(buf, &map);
-	return true;
-}
-
 void gstreamer_output_raw_video(void *p, struct video_data *frame)
 {
 	struct gstreamer_output_data *data = (struct gstreamer_output_data *)p;
@@ -684,7 +643,9 @@ void gstreamer_output_raw_video(void *p, struct video_data *frame)
 		return;
 	}
 
-	if (!copy_obs_video_data_to_gst_buffer(buffer, frame, &data->raw_video_info)) {
+	if (!gstreamer_copy_obs_video_data_to_buffer(&data->raw_video_info,
+			frame->data, frame->linesize, buffer)) {
+		blog(LOG_ERROR, "[obs-gstreamer] Invalid plane layout while copying raw video frame");
 		gst_buffer_unref(buffer);
 		gst_object_unref(video);
 		return;
