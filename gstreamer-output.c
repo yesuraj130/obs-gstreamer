@@ -29,6 +29,7 @@
 #include <gst/rtsp-server/rtsp-server.h>
 #include <plugin-support.h>
 
+#include "gstreamer-helper.h"
 #include "gstreamer-webrtc.h"
 
 struct gstreamer_output_data {
@@ -48,6 +49,7 @@ struct gstreamer_output_data {
 	struct gstreamer_webrtc *webrtc;
 	GstElement *audio;
 	gsize buffer_size;
+	GstVideoInfo raw_video_info;
 	uint64_t raw_video_frames;
 	obs_output_t *output;
 	obs_data_t *settings;
@@ -80,27 +82,6 @@ static const char *obs_video_format_to_gst_format(enum video_format format)
 		return "Y444";
 	default:
 		return NULL;
-	}
-}
-
-static gsize obs_video_format_buffer_size(enum video_format format, int width, int height)
-{
-	switch (format) {
-	case VIDEO_FORMAT_I420:
-	case VIDEO_FORMAT_NV12:
-		return width * height * 3 / 2;
-	case VIDEO_FORMAT_YVYU:
-	case VIDEO_FORMAT_YUY2:
-	case VIDEO_FORMAT_UYVY:
-	case VIDEO_FORMAT_I422:
-		return width * height * 2;
-	case VIDEO_FORMAT_RGBA:
-	case VIDEO_FORMAT_BGRA:
-	case VIDEO_FORMAT_BGRX:
-	case VIDEO_FORMAT_I444:
-		return width * height * 4;
-	default:
-		return 0;
 	}
 }
 
@@ -372,8 +353,15 @@ bool gstreamer_output_start(void *p)
 		blog(LOG_ERROR, "[obs-gstreamer] Unhandled video output format: %d", data->ovi.output_format);
 		return false;
 	}
-	data->buffer_size = obs_video_format_buffer_size(data->ovi.output_format,
-		data->ovi.output_width, data->ovi.output_height);
+	gst_video_info_init(&data->raw_video_info);
+	GstVideoFormat raw_format = gst_video_format_from_string(gst_format);
+	if (raw_format == GST_VIDEO_FORMAT_UNKNOWN ||
+	    !gst_video_info_set_format(&data->raw_video_info, raw_format,
+		    data->ovi.output_width, data->ovi.output_height)) {
+		blog(LOG_ERROR, "[obs-gstreamer] Failed to initialize raw video layout for format %s", gst_format);
+		return false;
+	}
+	data->buffer_size = GST_VIDEO_INFO_SIZE(&data->raw_video_info);
 
 	blog(LOG_INFO, "[obs-gstreamer] Output video config: %dx%d @ %d/%d fps, format=%d (%s), frame size=%zu bytes, mode=%s",
 		data->ovi.output_width, data->ovi.output_height,
@@ -662,85 +650,45 @@ void gstreamer_output_encoded_packet(void *p, struct encoder_packet *packet)
 	gst_object_unref(video);
 }
 
-static void copy_obs_video_data_to_gst_buffer(GstBuffer *buf, struct video_data *frame, enum video_format format, uint32_t width, uint32_t height)
+static bool copy_obs_video_data_to_gst_buffer(GstBuffer *buf, struct video_data *frame,
+	const GstVideoInfo *info)
 {
 	GstMapInfo map;
-	if (!gst_buffer_map(buf, &map, GST_MAP_WRITE)) return;
+	if (!gst_buffer_map(buf, &map, GST_MAP_WRITE)) return false;
 
-	uint8_t *dst = map.data;
-	size_t dst_offset = 0;
-
-	switch (format) {
-	case VIDEO_FORMAT_I420: {
-		size_t y_stride = width;
-		for (uint32_t y = 0; y < height && frame->data[0]; y++) {
-			memcpy(dst + dst_offset, frame->data[0] + y * frame->linesize[0], y_stride);
-			dst_offset += y_stride;
-		}
-		size_t u_stride = width / 2;
-		uint32_t u_height = height / 2;
-		for (uint32_t y = 0; y < u_height && frame->data[1]; y++) {
-			memcpy(dst + dst_offset, frame->data[1] + y * frame->linesize[1], u_stride);
-			dst_offset += u_stride;
-		}
-		size_t v_stride = width / 2;
-		uint32_t v_height = height / 2;
-		for (uint32_t y = 0; y < v_height && frame->data[2]; y++) {
-			memcpy(dst + dst_offset, frame->data[2] + y * frame->linesize[2], v_stride);
-			dst_offset += v_stride;
-		}
-		break;
-	}
-	case VIDEO_FORMAT_NV12: {
-		size_t y_stride = width;
-		for (uint32_t y = 0; y < height && frame->data[0]; y++) {
-			memcpy(dst + dst_offset, frame->data[0] + y * frame->linesize[0], y_stride);
-			dst_offset += y_stride;
-		}
-		size_t uv_stride = width;
-		uint32_t uv_height = height / 2;
-		for (uint32_t y = 0; y < uv_height && frame->data[1]; y++) {
-			memcpy(dst + dst_offset, frame->data[1] + y * frame->linesize[1], uv_stride);
-			dst_offset += uv_stride;
-		}
-		break;
-	}
-	case VIDEO_FORMAT_YVYU:
-	case VIDEO_FORMAT_YUY2:
-	case VIDEO_FORMAT_UYVY: {
-		size_t row_bytes = width * 2;
-		for (uint32_t y = 0; y < height && frame->data[0]; y++) {
-			memcpy(dst + dst_offset, frame->data[0] + y * frame->linesize[0], row_bytes);
-			dst_offset += row_bytes;
-		}
-		break;
-	}
-	case VIDEO_FORMAT_RGBA:
-	case VIDEO_FORMAT_BGRA:
-	case VIDEO_FORMAT_BGRX: {
-		size_t row_bytes = width * 4;
-		for (uint32_t y = 0; y < height && frame->data[0]; y++) {
-			memcpy(dst + dst_offset, frame->data[0] + y * frame->linesize[0], row_bytes);
-			dst_offset += row_bytes;
-		}
-		break;
-	}
-	default: {
-		size_t max_copy = map.size;
-		if (frame->data[0] && frame->linesize[0] > 0) {
-			size_t row_bytes = frame->linesize[0] < width * 4 ? frame->linesize[0] : width * 4;
-			for (uint32_t y = 0; y < height && dst_offset < max_copy; y++) {
-				size_t copy_now = (dst_offset + row_bytes <= max_copy) ? row_bytes : (max_copy - dst_offset);
-				if (copy_now == 0) break;
-				memcpy(dst + dst_offset, frame->data[0] + y * frame->linesize[0], copy_now);
-				dst_offset += copy_now;
+	for (guint plane = 0; plane < GST_VIDEO_INFO_N_PLANES(info); plane++) {
+		gsize row_bytes = 0;
+		for (guint component = 0; component < GST_VIDEO_INFO_N_COMPONENTS(info); component++) {
+			if (GST_VIDEO_INFO_COMP_PLANE(info, component) == plane) {
+				gsize component_row_bytes =
+					(gsize)GST_VIDEO_INFO_COMP_WIDTH(info, component) *
+					GST_VIDEO_FORMAT_INFO_PSTRIDE(info->finfo, component);
+				row_bytes = MAX(row_bytes, component_row_bytes);
 			}
 		}
-		break;
-	}
+
+		guint rows = gst_get_plane_height(info, plane);
+		gsize offset = GST_VIDEO_INFO_PLANE_OFFSET(info, plane);
+		gint dst_stride = GST_VIDEO_INFO_PLANE_STRIDE(info, plane);
+		if (!frame->data[plane] || frame->linesize[plane] < row_bytes ||
+		    dst_stride < 0 || (gsize)dst_stride < row_bytes ||
+		    offset > map.size || row_bytes > map.size - offset ||
+		    (rows > 1 && (gsize)dst_stride > (map.size - offset - row_bytes) / (rows - 1))) {
+			blog(LOG_ERROR, "[obs-gstreamer] Invalid plane layout while copying raw video frame (plane=%u)", plane);
+			gst_buffer_unmap(buf, &map);
+			return false;
+		}
+
+		guint8 *dst = map.data + offset;
+		for (guint row = 0; row < rows; row++) {
+			memcpy(dst + (gsize)row * dst_stride,
+				frame->data[plane] + (gsize)row * frame->linesize[plane],
+				row_bytes);
+		}
 	}
 
 	gst_buffer_unmap(buf, &map);
+	return true;
 }
 
 void gstreamer_output_raw_video(void *p, struct video_data *frame)
@@ -764,7 +712,11 @@ void gstreamer_output_raw_video(void *p, struct video_data *frame)
 		return;
 	}
 
-	copy_obs_video_data_to_gst_buffer(buffer, frame, data->ovi.output_format, data->ovi.output_width, data->ovi.output_height);
+	if (!copy_obs_video_data_to_gst_buffer(buffer, frame, &data->raw_video_info)) {
+		gst_buffer_unref(buffer);
+		gst_object_unref(video);
+		return;
+	}
 
 	GST_BUFFER_PTS(buffer) = frame->timestamp;
 	GST_BUFFER_DTS(buffer) = frame->timestamp;
