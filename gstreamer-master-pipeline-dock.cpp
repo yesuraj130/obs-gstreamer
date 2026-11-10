@@ -808,8 +808,8 @@ public:
 		m_rtspPortEdit = new QLineEdit(QString::fromStdString(dest->rtsp_port), this);
 		m_rtspMountEdit = new QLineEdit(QString::fromStdString(dest->rtsp_mount), this);
 		m_rtspProtoCombo = new QComboBox(this);
-		m_rtspProtoCombo->addItem("Force TCP Interleaved (Firewall Safe, No UDP Hang)", "tcp");
-		m_rtspProtoCombo->addItem("Auto (UDP / Multicast / TCP)", "all");
+		m_rtspProtoCombo->addItem("Auto", "all");
+		m_rtspProtoCombo->addItem("TCP Only", "tcp");
 		m_rtspProtoCombo->addItem("UDP Only", "udp");
 		int protoIdx = m_rtspProtoCombo->findData(QString::fromStdString(dest->rtsp_protocols));
 		if (protoIdx >= 0) m_rtspProtoCombo->setCurrentIndex(protoIdx);
