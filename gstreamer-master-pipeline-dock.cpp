@@ -83,7 +83,7 @@ bool obs_frontend_add_dock_by_id(const char *id, const char *title, void *dock) 
 	"appsink name=hub_appsink sync=false drop=true max-buffers=1"
 
 #define DEFAULT_RTSP_PIPELINE \
-	"( appsrc name=appsrc_video is-live=true format=GST_FORMAT_TIME do-timestamp=true " \
+	"( appsrc name=appsrc_video is-live=true format=GST_FORMAT_TIME do-timestamp=false " \
 	"caps=\"video/x-h264, stream-format=byte-stream, alignment=au\" ! " \
 	"h264parse ! rtph264pay name=pay0 pt=96 config-interval=-1 )"
 

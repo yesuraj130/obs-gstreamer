@@ -2003,6 +2003,7 @@ gst_master_pipeline_t *gst_master_pipeline_create(const char *custom_master_pipe
 	hub->fps_num = fps_num;
 	hub->fps_den = fps_den;
 	hub->state_cb = state_cb;
+	hub->state_user_data = user_data;
 	hub->gpu_input = false;
 	hub->video_codec = bstrdup(video_codec ? video_codec : "h264");
 

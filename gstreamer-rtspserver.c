@@ -291,11 +291,11 @@ struct gst_hub_branch *gst_rtsp_branch_start(gst_master_pipeline_t *pipeline,
 	    !(is_hevc && strstr(rtsp_pipeline, "rtph264pay") != NULL)) {
 		launch_str = rtsp_pipeline;
 	} else if (is_hevc) {
-		launch_str = "( appsrc name=appsrc_video is-live=true format=GST_FORMAT_TIME do-timestamp=true "
+		launch_str = "( appsrc name=appsrc_video is-live=true format=GST_FORMAT_TIME do-timestamp=false "
 		             "caps=\"video/x-h265, stream-format=byte-stream, alignment=au\" ! "
 		             "h265parse ! rtph265pay name=pay0 pt=96 config-interval=-1 aggregate-mode=zero-latency )";
 	} else {
-		launch_str = "( appsrc name=appsrc_video is-live=true format=GST_FORMAT_TIME do-timestamp=true "
+		launch_str = "( appsrc name=appsrc_video is-live=true format=GST_FORMAT_TIME do-timestamp=false "
 		             "caps=\"video/x-h264, stream-format=byte-stream, alignment=au\" ! "
 		             "h264parse ! rtph264pay name=pay0 pt=96 config-interval=-1 aggregate-mode=zero-latency )";
 	}
