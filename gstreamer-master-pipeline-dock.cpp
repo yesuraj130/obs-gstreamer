@@ -77,7 +77,8 @@ bool obs_frontend_add_dock_by_id(const char *id, const char *title, void *dock) 
 
 #define DEFAULT_MASTER_PIPELINE \
 	"appsrc name=hub_appsrc is-live=true format=GST_FORMAT_TIME do-timestamp=true leaky-type=downstream max-buffers=1 " \
-	"caps=\"video/x-raw, format=NV12, width=%u, height=%u, framerate=%u/%u\" ! " \
+	"caps=\"video/x-raw, format=RGBA, width=%u, height=%u, framerate=%u/%u\" ! " \
+	"videoconvert ! video/x-raw, format=NV12 ! " \
 	"x264enc tune=zerolatency speed-preset=ultrafast bframes=0 key-int-max=30 bitrate=4000 ! " \
 	"h264parse ! video/x-h264, stream-format=byte-stream, alignment=au ! " \
 	"appsink name=hub_appsink sync=false drop=true max-buffers=1"
@@ -1077,7 +1078,7 @@ public:
 		encoderForm->addRow("Keyframe Interval:", m_keyintSpin);
 
 		m_customPipeEdit = new QPlainTextEdit(QString::fromStdString(hub->master_pipeline), this);
-		m_customPipeEdit->setPlaceholderText("Optional: Custom GStreamer Master Pipeline string (leave empty for auto GPU encoder)");
+		m_customPipeEdit->setPlaceholderText("Optional: Custom pipeline; appsrc must accept RGBA");
 		m_customPipeEdit->setMaximumHeight(45);
 		encoderForm->addRow("Custom Pipeline:", m_customPipeEdit);
 

@@ -134,10 +134,6 @@ static bool is_d3d11_memory_encoder(const char *name)
 #define GST_CAPS_FEATURE_MEMORY_GL_MEMORY "memory:GLMemory"
 #endif
 
-#ifndef GST_CAPS_FEATURE_MEMORY_DMA_BUF
-#define GST_CAPS_FEATURE_MEMORY_DMA_BUF "memory:DMABuf"
-#endif
-
 #if HAVE_GST_GL
 static bool is_gl_memory_encoder(const char *name)
 {
@@ -150,28 +146,6 @@ static bool is_gl_memory_encoder(const char *name)
 
 	/* Dynamic inspection for any custom or new encoder plugins */
 	return encoder_supports_caps_feature(name, GST_CAPS_FEATURE_MEMORY_GL_MEMORY);
-}
-
-static bool is_dmabuf_memory_encoder(const char *name)
-{
-	if (!name || !name[0]) return false;
-
-	/* Fast-path known hardware encoders that natively consume DMABuf on Linux:
-	 * - vah264enc / vah265enc / vaav1enc (Modern gstva plugin)
-	 * - qsvh264enc / qsvh265enc / qsvav1enc (Modern oneVPL Linux plugin)
-	 * - v4l2h264enc / v4l2h265enc (V4L2 M2M hardware encoders) */
-	if (g_strcmp0(name, "vah264enc") == 0  ||
-	    g_strcmp0(name, "vah265enc") == 0  ||
-	    g_strcmp0(name, "vaav1enc") == 0   ||
-	    g_strcmp0(name, "qsvh264enc") == 0 ||
-	    g_strcmp0(name, "qsvh265enc") == 0 ||
-	    g_strcmp0(name, "qsvav1enc") == 0  ||
-	    g_strcmp0(name, "v4l2h264enc") == 0 ||
-	    g_strcmp0(name, "v4l2h265enc") == 0)
-		return true;
-
-	/* Dynamic inspection for any custom or future encoder plugins */
-	return encoder_supports_caps_feature(name, GST_CAPS_FEATURE_MEMORY_DMA_BUF);
 }
 #endif
 
@@ -473,7 +447,6 @@ static GstBusSyncReply master_bus_sync_handler(GstBus *bus, GstMessage *msg, gpo
 #endif
 #if HAVE_GST_GL
 		g_atomic_int_set(&hub->gl_slot.in_use, 0);
-		g_atomic_int_set(&hub->gl_slot.plane_refs, 0);
 #endif
 	}
 	else if (GST_MESSAGE_TYPE(msg) == GST_MESSAGE_WARNING)
@@ -698,37 +671,13 @@ static bool init_obs_gl_context(gst_master_pipeline_t *hub)
 		gst_gl_display_unlock(hub->gl_display);
 	}
 
-	blog(LOG_INFO, "[obs-gstreamer-master] Wrapped OBS OpenGL context (handle=%p, shared_ctx=%p, platform=%d, api=%d) for zero-copy GLMemory pipeline",
+	blog(LOG_INFO, "[obs-gstreamer-master] Wrapped OBS OpenGL context (handle=%p, shared_ctx=%p, platform=%d, api=%d) for GstGLMemory pipeline",
 		(void *)gl_handle, (void *)hub->gl_context, (int)platform, (int)gl_api);
 	return true;
 }
 #endif
 
-#if HAVE_GST_D3D11 || HAVE_GST_GL
-static void ensure_appsrc_gpu_caps(gst_master_pipeline_t *hub, GstVideoFormat format, const char *memory_feature, bool include_tex_target)
-{
-	if (!hub || !hub->appsrc || hub->appsrc_format == format) return;
-
-	const char *fmt_str = gst_video_format_to_string(format);
-	if (!fmt_str) return;
-
-	gchar *caps_str = include_tex_target
-		? g_strdup_printf("video/x-raw(%s), width=%u, height=%u, format=%s, framerate=%u/%u, texture-target=2D",
-			memory_feature, hub->width, hub->height, fmt_str, hub->fps_num, hub->fps_den)
-		: g_strdup_printf("video/x-raw(%s), width=%u, height=%u, format=%s, framerate=%u/%u",
-			memory_feature, hub->width, hub->height, fmt_str, hub->fps_num, hub->fps_den);
-
-	GstCaps *caps = gst_caps_from_string(caps_str);
-	g_free(caps_str);
-	if (caps)
-	{
-		gst_app_src_set_caps(GST_APP_SRC(hub->appsrc), caps);
-		gst_caps_unref(caps);
-		hub->appsrc_format = format;
-	}
-}
-#endif
-
+#if HAVE_GST_D3D11
 static GstVideoFormat get_obs_compositing_format(void)
 {
 	enum gs_color_format gs_fmt = GS_UNKNOWN;
@@ -774,8 +723,9 @@ static GstVideoFormat get_obs_compositing_format(void)
 		return GST_VIDEO_FORMAT_RGBA;
 	return GST_VIDEO_FORMAT_BGRA;
 }
+#endif
 
-static void init_hub_color_matrix(gst_master_pipeline_t *hub)
+static void init_hub_colorimetry(gst_master_pipeline_t *hub)
 {
 	struct obs_video_info ovi;
 	enum video_colorspace cs = VIDEO_CS_709;
@@ -786,55 +736,72 @@ static void init_hub_color_matrix(gst_master_pipeline_t *hub)
 		range = ovi.range;
 	}
 
-	bool full_range = (range == VIDEO_RANGE_FULL);
-	hub->colorimetry_str = "bt709";
-
+	GstVideoColorimetry colorimetry = {0};
+	colorimetry.range = (range == VIDEO_RANGE_FULL)
+		? GST_VIDEO_COLOR_RANGE_0_255
+		: GST_VIDEO_COLOR_RANGE_16_235;
 	if (cs == VIDEO_CS_601)
 	{
-		hub->colorimetry_str = "bt601";
-		if (full_range)
-		{
-			hub->color_matrix.y_coeffs[0] = 0.299000f;  hub->color_matrix.y_coeffs[1] = 0.587000f;  hub->color_matrix.y_coeffs[2] = 0.114000f;  hub->color_matrix.y_coeffs[3] = 0.0f;
-			hub->color_matrix.u_coeffs[0] = -0.168736f; hub->color_matrix.u_coeffs[1] = -0.331264f; hub->color_matrix.u_coeffs[2] = 0.500000f;  hub->color_matrix.u_coeffs[3] = 0.5f;
-			hub->color_matrix.v_coeffs[0] = 0.500000f;  hub->color_matrix.v_coeffs[1] = -0.418688f; hub->color_matrix.v_coeffs[2] = -0.081312f; hub->color_matrix.v_coeffs[3] = 0.5f;
-		}
-		else
-		{
-			hub->color_matrix.y_coeffs[0] = 0.256788f;  hub->color_matrix.y_coeffs[1] = 0.504129f;  hub->color_matrix.y_coeffs[2] = 0.097906f;  hub->color_matrix.y_coeffs[3] = 16.0f / 255.0f;
-			hub->color_matrix.u_coeffs[0] = -0.148223f; hub->color_matrix.u_coeffs[1] = -0.290993f; hub->color_matrix.u_coeffs[2] = 0.439216f;  hub->color_matrix.u_coeffs[3] = 128.0f / 255.0f;
-			hub->color_matrix.v_coeffs[0] = 0.439216f;  hub->color_matrix.v_coeffs[1] = -0.367788f; hub->color_matrix.v_coeffs[2] = -0.071427f; hub->color_matrix.v_coeffs[3] = 128.0f / 255.0f;
-		}
+		colorimetry.matrix = GST_VIDEO_COLOR_MATRIX_BT601;
+		colorimetry.transfer = GST_VIDEO_TRANSFER_BT601;
+		colorimetry.primaries = GST_VIDEO_COLOR_PRIMARIES_SMPTE170M;
 	}
-	else if (cs == VIDEO_CS_2100_PQ || cs == VIDEO_CS_2100_HLG)
+	else if (cs == VIDEO_CS_2100_PQ)
 	{
-		hub->colorimetry_str = "bt2020";
-		hub->color_matrix.y_coeffs[0] = 0.225613f;  hub->color_matrix.y_coeffs[1] = 0.582282f;  hub->color_matrix.y_coeffs[2] = 0.050929f;  hub->color_matrix.y_coeffs[3] = 16.0f / 255.0f;
-		hub->color_matrix.u_coeffs[0] = -0.122655f; hub->color_matrix.u_coeffs[1] = -0.316560f; hub->color_matrix.u_coeffs[2] = 0.439216f;  hub->color_matrix.u_coeffs[3] = 128.0f / 255.0f;
-		hub->color_matrix.v_coeffs[0] = 0.439216f;  hub->color_matrix.v_coeffs[1] = -0.403890f; hub->color_matrix.v_coeffs[2] = -0.035326f; hub->color_matrix.v_coeffs[3] = 128.0f / 255.0f;
+		colorimetry.matrix = GST_VIDEO_COLOR_MATRIX_BT2020;
+		colorimetry.transfer = GST_VIDEO_TRANSFER_SMPTE2084;
+		colorimetry.primaries = GST_VIDEO_COLOR_PRIMARIES_BT2020;
+	}
+	else if (cs == VIDEO_CS_2100_HLG)
+	{
+		colorimetry.matrix = GST_VIDEO_COLOR_MATRIX_BT2020;
+		colorimetry.transfer = GST_VIDEO_TRANSFER_ARIB_STD_B67;
+		colorimetry.primaries = GST_VIDEO_COLOR_PRIMARIES_BT2020;
+	}
+	else if (cs == VIDEO_CS_SRGB)
+	{
+		colorimetry.matrix = GST_VIDEO_COLOR_MATRIX_BT709;
+		colorimetry.transfer = GST_VIDEO_TRANSFER_SRGB;
+		colorimetry.primaries = GST_VIDEO_COLOR_PRIMARIES_BT709;
 	}
 	else
 	{
-		if (full_range)
-		{
-			hub->color_matrix.y_coeffs[0] = 0.212600f;  hub->color_matrix.y_coeffs[1] = 0.715200f;  hub->color_matrix.y_coeffs[2] = 0.072200f;  hub->color_matrix.y_coeffs[3] = 0.0f;
-			hub->color_matrix.u_coeffs[0] = -0.114572f; hub->color_matrix.u_coeffs[1] = -0.385428f; hub->color_matrix.u_coeffs[2] = 0.500000f;  hub->color_matrix.u_coeffs[3] = 0.5f;
-			hub->color_matrix.v_coeffs[0] = 0.500000f;  hub->color_matrix.v_coeffs[1] = -0.454153f; hub->color_matrix.v_coeffs[2] = -0.045847f; hub->color_matrix.v_coeffs[3] = 0.5f;
-		}
-		else
-		{
-			hub->color_matrix.y_coeffs[0] = 0.182586f;  hub->color_matrix.y_coeffs[1] = 0.614231f;  hub->color_matrix.y_coeffs[2] = 0.062007f;  hub->color_matrix.y_coeffs[3] = 16.0f / 255.0f;
-			hub->color_matrix.u_coeffs[0] = -0.100644f; hub->color_matrix.u_coeffs[1] = -0.338572f; hub->color_matrix.u_coeffs[2] = 0.439216f;  hub->color_matrix.u_coeffs[3] = 128.0f / 255.0f;
-			hub->color_matrix.v_coeffs[0] = 0.439216f;  hub->color_matrix.v_coeffs[1] = -0.398942f; hub->color_matrix.v_coeffs[2] = -0.040274f; hub->color_matrix.v_coeffs[3] = 128.0f / 255.0f;
-		}
+		colorimetry.matrix = GST_VIDEO_COLOR_MATRIX_BT709;
+		colorimetry.transfer = GST_VIDEO_TRANSFER_BT709;
+		colorimetry.primaries = GST_VIDEO_COLOR_PRIMARIES_BT709;
+	}
+
+	g_free(hub->colorimetry_str);
+	hub->colorimetry_str = gst_video_colorimetry_to_string(&colorimetry);
+	if (!hub->colorimetry_str)
+	{
+		blog(LOG_ERROR, "[obs-gstreamer-master] Failed to serialize OBS video colorimetry");
+		return;
 	}
 }
 
 static GstElement *create_master_encoder_pipeline(gst_master_pipeline_t *hub, const char *custom_master_pipe, const char *encoder_type, int bitrate_kbps, int keyint_sec)
 {
 	gchar *pipe_desc = NULL;
+#if HAVE_GST_GL
+	hub->gl_rgb_pipeline = false;
+#endif
+	init_hub_colorimetry(hub);
+	if (!hub->colorimetry_str)
+		return NULL;
 
 	if (custom_master_pipe && custom_master_pipe[0])
 	{
+#if HAVE_GST_GL
+		hub->gl_rgb_pipeline = hub->gpu_input && hub->gl_app_context &&
+			strstr(custom_master_pipe, "memory:GLMemory") != NULL &&
+			strstr(custom_master_pipe, "glcolorconvert") != NULL &&
+			strstr(custom_master_pipe, "format=RGBA") != NULL;
+		if (hub->gl_rgb_pipeline)
+			hub->appsrc_format = GST_VIDEO_FORMAT_RGBA;
+#endif
+		if (!hub->gpu_input)
+			hub->appsrc_format = GST_VIDEO_FORMAT_RGBA;
 		pipe_desc = g_strdup(custom_master_pipe);
 	}
 	else
@@ -848,8 +815,6 @@ static GstElement *create_master_encoder_pipeline(gst_master_pipeline_t *hub, co
 			? hub->selected_encoder
 			: gst_master_pipeline_select_encoder(encoder_type, hub->video_codec, hub->gpu_input);
 		gchar *enc_str = build_encoder_element_str(chosen_enc, gop_size, bitrate);
-
-		init_hub_color_matrix(hub);
 
 		bool is_h265 = hub->video_codec && g_strcmp0(hub->video_codec, "h265") == 0;
 		const char *parse_elem = is_h265 ? "h265parse" : "h264parse";
@@ -879,28 +844,34 @@ static GstElement *create_master_encoder_pipeline(gst_master_pipeline_t *hub, co
 
 #if HAVE_GST_GL
 		if (hub->gpu_input && hub->gl_app_context && hub->gl_context &&
-		    (is_gl_memory_encoder(chosen_enc) || is_dmabuf_memory_encoder(chosen_enc)))
+		    is_gl_memory_encoder(chosen_enc) &&
+		    gst_master_pipeline_element_available("glcolorconvert"))
 		{
+			hub->appsrc_format = GST_VIDEO_FORMAT_RGBA;
+			hub->gl_rgb_pipeline = true;
 			pipe_desc = g_strdup_printf(
 				"appsrc name=hub_appsrc is-live=true format=GST_FORMAT_TIME do-timestamp=false min-latency=0 max-latency=0 "
 				"caps=\"video/x-raw(memory:GLMemory), width=%u, height=%u, "
-				"format=NV12, framerate=%u/%u, texture-target=2D, colorimetry=%s\" ! "
+				"format=RGBA, framerate=%u/%u, texture-target=2D, colorimetry=%s\" ! "
+				"glcolorconvert ! video/x-raw(memory:GLMemory), format=NV12, texture-target=2D, colorimetry=%s ! "
 				"%s ! %s ! "
 				"%s, stream-format=byte-stream, alignment=au ! "
 				"appsink name=hub_appsink sync=false drop=false max-buffers=4",
 				hub->width, hub->height, hub->fps_num, hub->fps_den, hub->colorimetry_str,
-				enc_str, parse_elem, caps_elem);
+				hub->colorimetry_str, enc_str, parse_elem, caps_elem);
 			g_free(enc_str);
 			goto launch_pipeline;
 		}
 #endif
 
+		hub->appsrc_format = GST_VIDEO_FORMAT_RGBA;
 		pipe_desc = g_strdup_printf(
 			"appsrc name=hub_appsrc is-live=true format=GST_FORMAT_TIME do-timestamp=false min-latency=0 max-latency=0 "
-			"caps=\"video/x-raw, width=%u, height=%u, format=NV12, framerate=%u/%u, colorimetry=%s\" ! "
+			"caps=\"video/x-raw, width=%u, height=%u, format=RGBA, framerate=%u/%u, colorimetry=%s\" ! "
+			"videoconvert ! video/x-raw, format=NV12, colorimetry=%s ! "
 			"%s ! %s ! %s, stream-format=byte-stream, alignment=au ! "
 			"appsink name=hub_appsink sync=false drop=false max-buffers=4",
-			hub->width, hub->height, hub->fps_num, hub->fps_den, hub->colorimetry_str,
+			hub->width, hub->height, hub->fps_num, hub->fps_den, hub->colorimetry_str, hub->colorimetry_str,
 			enc_str, parse_elem, caps_elem);
 
 		g_free(enc_str);
@@ -909,7 +880,7 @@ static GstElement *create_master_encoder_pipeline(gst_master_pipeline_t *hub, co
 #if HAVE_GST_D3D11 || HAVE_GST_GL
 launch_pipeline:
 #endif
-	blog(LOG_INFO, "[obs-gstreamer-master] Launching Master Hardware Encoder Pipeline (gpu_zero_copy=%s, encoder=%s, appsrc_format=%s): %s",
+	blog(LOG_INFO, "[obs-gstreamer-master] Launching Master Hardware Encoder Pipeline (gpu_input=%s, encoder=%s, appsrc_format=%s): %s",
 		hub->gpu_input ? "yes" : "no",
 		hub->selected_encoder ? hub->selected_encoder : "custom",
 		gst_video_format_to_string(hub->appsrc_format),
@@ -991,7 +962,7 @@ static GstFlowReturn video_new_sample_cb(GstAppSink *sink, gpointer user_data)
 	if (sample_number == 1 || sample_number % 300 == 0)
 	{
 		blog(LOG_INFO, "[obs-gstreamer-master] Encoded sample #%" PRIu64 ": %" G_GSIZE_FORMAT
-			" bytes, keyframe=%s (gpu_zero_copy=%s, stagesurf=%s)",
+			" bytes, keyframe=%s (gpu_input=%s, stagesurf=%s)",
 			sample_number, gst_buffer_get_size(buf), is_keyframe ? "yes" : "no",
 			hub->gpu_input ? "yes" : "no",
 			hub->stagesurf ? "allocated" : "NONE");
@@ -1012,19 +983,19 @@ static GstFlowReturn video_new_sample_cb(GstAppSink *sink, gpointer user_data)
 }
 
 #if HAVE_GST_D3D11
-static void d3d11_nv12_slot_release_notify(gpointer user_data)
+static void d3d11_texture_slot_release_notify(gpointer user_data)
 {
-	gst_d3d11_nv12_slot_t *slot = (gst_d3d11_nv12_slot_t *)user_data;
+	gst_d3d11_texture_slot_t *slot = (gst_d3d11_texture_slot_t *)user_data;
 	if (slot)
 	{
 		g_atomic_int_set(&slot->in_use, 0);
 	}
 }
 
-static void destroy_d3d11_nv12_converter(gst_master_pipeline_t *hub)
+static void destroy_d3d11_texture_slot(gst_master_pipeline_t *hub)
 {
 	if (!hub) return;
-	gst_d3d11_nv12_slot_t *slot = &hub->d3d11_slot;
+	gst_d3d11_texture_slot_t *slot = &hub->d3d11_slot;
 	if (slot->gst_texture && slot->gst_texture != slot->texture)
 	{
 		ID3D11Texture2D_Release(slot->gst_texture);
@@ -1037,12 +1008,12 @@ static void destroy_d3d11_nv12_converter(gst_master_pipeline_t *hub)
 	}
 	slot->shared_handle = NULL;
 	g_atomic_int_set(&slot->in_use, 0);
-	hub->d3d11_nv12_ready = false;
+	hub->d3d11_texture_ready = false;
 }
 
-static bool init_d3d11_nv12_converter(gst_master_pipeline_t *hub)
+static bool init_d3d11_texture_slot(gst_master_pipeline_t *hub)
 {
-	if (hub->d3d11_nv12_ready) return true;
+	if (hub->d3d11_texture_ready) return true;
 	if (!hub->d3d11_device && !init_obs_d3d11_device(hub)) return false;
 
 	obs_enter_graphics();
@@ -1056,7 +1027,7 @@ static bool init_d3d11_nv12_converter(gst_master_pipeline_t *hub)
 		? DXGI_FORMAT_R8G8B8A8_UNORM
 		: DXGI_FORMAT_B8G8R8A8_UNORM;
 
-	gst_d3d11_nv12_slot_t *slot = &hub->d3d11_slot;
+	gst_d3d11_texture_slot_t *slot = &hub->d3d11_slot;
 	D3D11_TEXTURE2D_DESC tex_desc = {0};
 	tex_desc.Width = hub->width;
 	tex_desc.Height = hub->height;
@@ -1106,7 +1077,7 @@ static bool init_d3d11_nv12_converter(gst_master_pipeline_t *hub)
 
 	g_atomic_int_set(&slot->in_use, 0);
 
-	hub->d3d11_nv12_ready = true;
+	hub->d3d11_texture_ready = true;
 	blog(LOG_INFO, "[obs-gstreamer-master] Initialized D3D11 zero-copy direct texture slot (appsrc_format=%s)",
 		gst_video_format_to_string(hub->appsrc_format));
 	return true;
@@ -1132,10 +1103,10 @@ static bool push_d3d11_texture(gst_master_pipeline_t *hub, gs_texture_t *texture
 		return false;
 	}
 
-	if (!hub->d3d11_nv12_ready && !init_d3d11_nv12_converter(hub))
+	if (!hub->d3d11_texture_ready && !init_d3d11_texture_slot(hub))
 		return false;
 
-	gst_d3d11_nv12_slot_t *slot = &hub->d3d11_slot;
+	gst_d3d11_texture_slot_t *slot = &hub->d3d11_slot;
 
 	/* Strict Direct Processing: If encoder is busy, drop frame immediately */
 	if (g_atomic_int_get(&slot->in_use) != 0)
@@ -1199,7 +1170,7 @@ static bool push_d3d11_texture(gst_master_pipeline_t *hub, gs_texture_t *texture
 	ID3D11Texture2D_AddRef(push_tex);
 	GstMemory *memory = gst_d3d11_allocator_alloc_wrapped(
 		GST_D3D11_ALLOCATOR(allocator), hub->d3d11_device, (ID3D11Resource *)push_tex,
-		GST_VIDEO_INFO_SIZE(&info), slot, d3d11_nv12_slot_release_notify);
+		GST_VIDEO_INFO_SIZE(&info), slot, d3d11_texture_slot_release_notify);
 	gst_object_unref(allocator);
 	if (!memory)
 	{
@@ -1260,187 +1231,58 @@ static bool push_d3d11_texture(gst_master_pipeline_t *hub, gs_texture_t *texture
 #endif
 
 #if HAVE_GST_GL
-static void gl_nv12_plane_release_notify(gpointer user_data)
+static void gl_texture_release_notify(gpointer user_data)
 {
-	gst_gl_nv12_slot_t *slot = (gst_gl_nv12_slot_t *)user_data;
-	if (slot)
-	{
-		if (g_atomic_int_dec_and_test(&slot->plane_refs))
-		{
-			g_atomic_int_set(&slot->in_use, 0);
-		}
-	}
+	gst_gl_texture_slot_t *slot = (gst_gl_texture_slot_t *)user_data;
+	if (slot) g_atomic_int_set(&slot->in_use, 0);
 }
 
-static void destroy_gl_nv12_converter(gst_master_pipeline_t *hub)
+static void destroy_gl_texture_slot(gst_master_pipeline_t *hub)
 {
 	if (!hub) return;
 	if (hub->gl_context)
 	{
 		GstGLFuncs *gl = hub->gl_context->gl_vtable;
-		gst_gl_nv12_slot_t *slot = &hub->gl_slot;
-		if (slot->fbo_y) { gl->DeleteFramebuffers(1, &slot->fbo_y); slot->fbo_y = 0; }
-		if (slot->fbo_uv) { gl->DeleteFramebuffers(1, &slot->fbo_uv); slot->fbo_uv = 0; }
-		if (slot->tex_y) { gl->DeleteTextures(1, &slot->tex_y); slot->tex_y = 0; }
-		if (slot->tex_uv) { gl->DeleteTextures(1, &slot->tex_uv); slot->tex_uv = 0; }
+		gst_gl_texture_slot_t *slot = &hub->gl_slot;
+		if (slot->read_fbo) { gl->DeleteFramebuffers(1, &slot->read_fbo); slot->read_fbo = 0; }
+		if (slot->draw_fbo) { gl->DeleteFramebuffers(1, &slot->draw_fbo); slot->draw_fbo = 0; }
+		if (slot->texture) { gl->DeleteTextures(1, &slot->texture); slot->texture = 0; }
 		g_atomic_int_set(&slot->in_use, 0);
-		if (hub->gl_nv12_prog_y) { gl->DeleteProgram(hub->gl_nv12_prog_y); hub->gl_nv12_prog_y = 0; }
-		if (hub->gl_nv12_prog_uv) { gl->DeleteProgram(hub->gl_nv12_prog_uv); hub->gl_nv12_prog_uv = 0; }
-		if (hub->gl_nv12_vs) { gl->DeleteShader(hub->gl_nv12_vs); hub->gl_nv12_vs = 0; }
-		if (hub->gl_nv12_ps_y) { gl->DeleteShader(hub->gl_nv12_ps_y); hub->gl_nv12_ps_y = 0; }
-		if (hub->gl_nv12_ps_uv) { gl->DeleteShader(hub->gl_nv12_ps_uv); hub->gl_nv12_ps_uv = 0; }
 	}
-	hub->gl_nv12_ready = false;
+	hub->gl_texture_ready = false;
 }
 
-static GLuint compile_gl_shader(GstGLFuncs *gl, GLenum type, const char *src)
+static bool init_gl_texture_slot(gst_master_pipeline_t *hub)
 {
-	GLuint s = gl->CreateShader(type);
-	gl->ShaderSource(s, 1, &src, NULL);
-	gl->CompileShader(s);
-	GLint status = 0;
-	gl->GetShaderiv(s, GL_COMPILE_STATUS, &status);
-	if (!status)
-	{
-		char log[1024] = {0};
-		gl->GetShaderInfoLog(s, sizeof(log), NULL, log);
-		blog(LOG_ERROR, "[obs-gstreamer-master] GLSL shader compile error: %s", log);
-		gl->DeleteShader(s);
-		return 0;
-	}
-	return s;
-}
-
-static GLuint link_gl_program(GstGLFuncs *gl, GLuint vs, GLuint fs)
-{
-	GLuint p = gl->CreateProgram();
-	gl->AttachShader(p, vs);
-	gl->AttachShader(p, fs);
-	gl->LinkProgram(p);
-	GLint status = 0;
-	gl->GetProgramiv(p, GL_LINK_STATUS, &status);
-	if (!status)
-	{
-		char log[1024] = {0};
-		gl->GetProgramInfoLog(p, sizeof(log), NULL, log);
-		blog(LOG_ERROR, "[obs-gstreamer-master] GLSL program link error: %s", log);
-		gl->DeleteProgram(p);
-		return 0;
-	}
-	return p;
-}
-
-static bool init_gl_nv12_converter(gst_master_pipeline_t *hub)
-{
-	if (hub->gl_nv12_ready) return true;
+	if (hub->gl_texture_ready) return true;
 	if ((!hub->gl_app_context || !hub->gl_context || !hub->gl_display) && !init_obs_gl_context(hub))
 		return false;
 
 	GstGLFuncs *gl = hub->gl_context->gl_vtable;
 	if (!gl) return false;
 
-	const char *vs_src =
-		"#version 330 core\n"
-		"out vec2 v_uv;\n"
-		"void main() {\n"
-		"    uint vid = uint(gl_VertexID);\n"
-		"    vec2 uv = vec2(float((vid << 1u) & 2u), float(vid & 2u));\n"
-		"    v_uv = vec2(uv.x, 1.0 - uv.y);\n"
-		"    gl_Position = vec4(uv * vec2(2.0, -2.0) + vec2(-1.0, 1.0), 0.0, 1.0);\n"
-		"}\n";
-
-	const char *ps_y_src =
-		"#version 330 core\n"
-		"in vec2 v_uv;\n"
-		"uniform sampler2D s_tex;\n"
-		"uniform vec4 u_y_coeffs;\n"
-		"uniform int u_is_srgb;\n"
-		"out vec4 fragColor;\n"
-		"vec3 linear_to_srgb(vec3 lin) {\n"
-		"    bvec3 cutoff = lessThanEqual(lin, vec3(0.0031308));\n"
-		"    vec3 higher = vec3(1.055) * pow(max(lin, vec3(0.0)), vec3(1.0 / 2.4)) - vec3(0.055);\n"
-		"    vec3 lower = lin * vec3(12.92);\n"
-		"    return mix(higher, lower, cutoff);\n"
-		"}\n"
-		"void main() {\n"
-		"    vec3 c = texture(s_tex, v_uv).rgb;\n"
-		"    if (u_is_srgb != 0) c = linear_to_srgb(c);\n"
-		"    float y = clamp(dot(c, u_y_coeffs.rgb) + u_y_coeffs.w, 0.0, 1.0);\n"
-		"    fragColor = vec4(y, 0.0, 0.0, 1.0);\n"
-		"}\n";
-
-	const char *ps_uv_src =
-		"#version 330 core\n"
-		"in vec2 v_uv;\n"
-		"uniform sampler2D s_tex;\n"
-		"uniform vec4 u_u_coeffs;\n"
-		"uniform vec4 u_v_coeffs;\n"
-		"uniform int u_is_srgb;\n"
-		"out vec4 fragColor;\n"
-		"vec3 linear_to_srgb(vec3 lin) {\n"
-		"    bvec3 cutoff = lessThanEqual(lin, vec3(0.0031308));\n"
-		"    vec3 higher = vec3(1.055) * pow(max(lin, vec3(0.0)), vec3(1.0 / 2.4)) - vec3(0.055);\n"
-		"    vec3 lower = lin * vec3(12.92);\n"
-		"    return mix(higher, lower, cutoff);\n"
-		"}\n"
-		"void main() {\n"
-		"    vec3 c = texture(s_tex, v_uv).rgb;\n"
-		"    if (u_is_srgb != 0) c = linear_to_srgb(c);\n"
-		"    float u = clamp(dot(c, u_u_coeffs.rgb) + u_u_coeffs.w, 0.0, 1.0);\n"
-		"    float v = clamp(dot(c, u_v_coeffs.rgb) + u_v_coeffs.w, 0.0, 1.0);\n"
-		"    fragColor = vec4(u, v, 0.0, 1.0);\n"
-		"}\n";
-
-	hub->gl_nv12_vs = compile_gl_shader(gl, GL_VERTEX_SHADER, vs_src);
-	hub->gl_nv12_ps_y = compile_gl_shader(gl, GL_FRAGMENT_SHADER, ps_y_src);
-	hub->gl_nv12_ps_uv = compile_gl_shader(gl, GL_FRAGMENT_SHADER, ps_uv_src);
-
-	if (!hub->gl_nv12_vs || !hub->gl_nv12_ps_y || !hub->gl_nv12_ps_uv)
-		return false;
-
-	hub->gl_nv12_prog_y = link_gl_program(gl, hub->gl_nv12_vs, hub->gl_nv12_ps_y);
-	hub->gl_nv12_prog_uv = link_gl_program(gl, hub->gl_nv12_vs, hub->gl_nv12_ps_uv);
-
-	if (!hub->gl_nv12_prog_y || !hub->gl_nv12_prog_uv)
-		return false;
-
-	gst_gl_nv12_slot_t *slot = &hub->gl_slot;
-
-	/* Texture Y (GL_R8, W x H) */
-	gl->GenTextures(1, &slot->tex_y);
-	gl->BindTexture(GL_TEXTURE_2D, slot->tex_y);
+	gst_gl_texture_slot_t *slot = &hub->gl_slot;
+	gl->GenTextures(1, &slot->texture);
+	gl->BindTexture(GL_TEXTURE_2D, slot->texture);
 	gl->TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
 	gl->TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 	gl->TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
 	gl->TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-	gl->TexImage2D(GL_TEXTURE_2D, 0, GL_R8, hub->width, hub->height, 0, GL_RED, GL_UNSIGNED_BYTE, NULL);
-
-	gl->GenFramebuffers(1, &slot->fbo_y);
-	gl->BindFramebuffer(GL_FRAMEBUFFER, slot->fbo_y);
-	gl->FramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, slot->tex_y, 0);
-
-	/* Texture UV (GL_RG8, W/2 x H/2) */
-	gl->GenTextures(1, &slot->tex_uv);
-	gl->BindTexture(GL_TEXTURE_2D, slot->tex_uv);
-	gl->TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-	gl->TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-	gl->TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-	gl->TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-	gl->TexImage2D(GL_TEXTURE_2D, 0, GL_RG8, hub->width / 2, hub->height / 2, 0, GL_RG, GL_UNSIGNED_BYTE, NULL);
-
-	gl->GenFramebuffers(1, &slot->fbo_uv);
-	gl->BindFramebuffer(GL_FRAMEBUFFER, slot->fbo_uv);
-	gl->FramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, slot->tex_uv, 0);
-
-	gl->BindFramebuffer(GL_FRAMEBUFFER, 0);
+	gl->TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, hub->width, hub->height, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+	gl->GenFramebuffers(1, &slot->read_fbo);
+	gl->GenFramebuffers(1, &slot->draw_fbo);
 	gl->BindTexture(GL_TEXTURE_2D, 0);
 
-	g_atomic_int_set(&slot->in_use, 0);
-	g_atomic_int_set(&slot->plane_refs, 0);
+	if (!slot->texture || !slot->read_fbo || !slot->draw_fbo || gl->GetError() != GL_NO_ERROR)
+	{
+		destroy_gl_texture_slot(hub);
+		blog(LOG_ERROR, "[obs-gstreamer-master] Failed to allocate OpenGL RGB texture slot");
+		return false;
+	}
 
-	hub->gl_nv12_ready = true;
-	blog(LOG_INFO, "[obs-gstreamer-master] Initialized OpenGL NV12 converter (direct single slot, colorimetry=%s)",
-		hub->colorimetry_str);
+	g_atomic_int_set(&slot->in_use, 0);
+	hub->gl_texture_ready = true;
+	blog(LOG_INFO, "[obs-gstreamer-master] Initialized OpenGL RGB texture slot for GstGLMemory");
 	return true;
 }
 
@@ -1448,7 +1290,7 @@ static bool push_gl_texture(gst_master_pipeline_t *hub, gs_texture_t *texture, u
 {
 	if (gs_get_device_type() != GS_DEVICE_OPENGL)
 	{
-		blog(LOG_ERROR, "[obs-gstreamer-master] OpenGL zero-copy requires the OBS OpenGL graphics backend");
+		blog(LOG_ERROR, "[obs-gstreamer-master] OpenGL texture input requires the OBS OpenGL graphics backend");
 		return false;
 	}
 
@@ -1461,10 +1303,10 @@ static bool push_gl_texture(gst_master_pipeline_t *hub, gs_texture_t *texture, u
 		return false;
 	}
 
-	if (!hub->gl_nv12_ready && !init_gl_nv12_converter(hub))
+	if (!hub->gl_texture_ready && !init_gl_texture_slot(hub))
 		return false;
 
-	gst_gl_nv12_slot_t *slot = &hub->gl_slot;
+	gst_gl_texture_slot_t *slot = &hub->gl_slot;
 
 	/* Strict Direct Processing: If encoder is busy, drop frame immediately */
 	if (g_atomic_int_get(&slot->in_use) != 0)
@@ -1480,7 +1322,6 @@ static bool push_gl_texture(gst_master_pipeline_t *hub, gs_texture_t *texture, u
 	}
 
 	g_atomic_int_set(&slot->in_use, 1);
-	g_atomic_int_set(&slot->plane_refs, 2); /* 2 planes: Y and UV */
 
 	const guint *tex_ptr = (const guint *)gs_texture_get_obj(texture);
 	if (!tex_ptr || *tex_ptr == 0)
@@ -1491,77 +1332,42 @@ static bool push_gl_texture(gst_master_pipeline_t *hub, gs_texture_t *texture, u
 	}
 	guint tex_id = *tex_ptr;
 
-	enum gs_color_format color_format = gs_texture_get_color_format(texture);
-	int is_srgb = gs_is_srgb_format(color_format) ? 1 : 0;
-
-	/* Flush OBS's GL commands before shared context reads texture */
 	gs_flush();
 
 	GstGLFuncs *gl = hub->gl_context->gl_vtable;
-
-	GLint prev_vp[4] = {0, 0, (GLint)hub->width, (GLint)hub->height};
-	gl->GetIntegerv(GL_VIEWPORT, prev_vp);
-
-#ifndef GL_TEXTURE_SRGB_DECODE_EXT
-#define GL_TEXTURE_SRGB_DECODE_EXT 0x8A48
-#endif
-#ifndef GL_DECODE_EXT
-#define GL_DECODE_EXT 0x8A49
-#endif
-#ifndef GL_SKIP_DECODE_EXT
-#define GL_SKIP_DECODE_EXT 0x8A4A
-#endif
-
-	gl->ActiveTexture(GL_TEXTURE0);
-	gl->BindTexture(GL_TEXTURE_2D, tex_id);
-	gl->TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-	gl->TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-
-	bool srgb_skip_active = false;
-	int shader_srgb_fallback = 0;
-	if (is_srgb)
+	GLint previous_read_fbo = 0;
+	GLint previous_draw_fbo = 0;
+	gl->GetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previous_read_fbo);
+	gl->GetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &previous_draw_fbo);
+	gl->BindFramebuffer(GL_READ_FRAMEBUFFER, slot->read_fbo);
+	gl->FramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex_id, 0);
+	gl->BindFramebuffer(GL_DRAW_FRAMEBUFFER, slot->draw_fbo);
+	gl->FramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, slot->texture, 0);
+	if (gl->CheckFramebufferStatus(GL_READ_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE ||
+	    gl->CheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
 	{
-		while (gl->GetError() != GL_NO_ERROR) {}
-		gl->TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SRGB_DECODE_EXT, GL_SKIP_DECODE_EXT);
-		if (gl->GetError() == GL_NO_ERROR)
-			srgb_skip_active = true;
-		else
-			shader_srgb_fallback = 1;
+		gl->BindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)previous_read_fbo);
+		gl->BindFramebuffer(GL_DRAW_FRAMEBUFFER, (GLuint)previous_draw_fbo);
+		g_atomic_int_set(&slot->in_use, 0);
+		blog(LOG_ERROR, "[obs-gstreamer-master] OpenGL texture copy framebuffer is incomplete");
+		return false;
 	}
-
-	/* Render Pass 1: Y Plane (FBO Y, full resolution) */
-	gl->BindFramebuffer(GL_FRAMEBUFFER, slot->fbo_y);
-	gl->Viewport(0, 0, hub->width, hub->height);
-	gl->UseProgram(hub->gl_nv12_prog_y);
-	GLint loc_y = gl->GetUniformLocation(hub->gl_nv12_prog_y, "u_y_coeffs");
-	GLint loc_srgb_y = gl->GetUniformLocation(hub->gl_nv12_prog_y, "u_is_srgb");
-	gl->Uniform4fv(loc_y, 1, hub->color_matrix.y_coeffs);
-	gl->Uniform1i(loc_srgb_y, shader_srgb_fallback);
-	gl->DrawArrays(GL_TRIANGLES, 0, 3);
-
-	/* Render Pass 2: UV Plane (FBO UV, half resolution) */
-	gl->BindFramebuffer(GL_FRAMEBUFFER, slot->fbo_uv);
-	gl->Viewport(0, 0, hub->width / 2, hub->height / 2);
-	gl->UseProgram(hub->gl_nv12_prog_uv);
-	GLint loc_u = gl->GetUniformLocation(hub->gl_nv12_prog_uv, "u_u_coeffs");
-	GLint loc_v = gl->GetUniformLocation(hub->gl_nv12_prog_uv, "u_v_coeffs");
-	GLint loc_srgb_uv = gl->GetUniformLocation(hub->gl_nv12_prog_uv, "u_is_srgb");
-	gl->Uniform4fv(loc_u, 1, hub->color_matrix.u_coeffs);
-	gl->Uniform4fv(loc_v, 1, hub->color_matrix.v_coeffs);
-	gl->Uniform1i(loc_srgb_uv, shader_srgb_fallback);
-	gl->DrawArrays(GL_TRIANGLES, 0, 3);
-
-	if (srgb_skip_active)
-		gl->TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SRGB_DECODE_EXT, GL_DECODE_EXT);
-
-	gl->BindFramebuffer(GL_FRAMEBUFFER, 0);
-	gl->BindTexture(GL_TEXTURE_2D, 0);
-	gl->UseProgram(0);
-	gl->Viewport(prev_vp[0], prev_vp[1], prev_vp[2], prev_vp[3]);
+	gl->BlitFramebuffer(0, (GLint)height, (GLint)width, 0,
+		0, 0, (GLint)width, (GLint)height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+	GLenum copy_error = gl->GetError();
+	gl->BindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)previous_read_fbo);
+	gl->BindFramebuffer(GL_DRAW_FRAMEBUFFER, (GLuint)previous_draw_fbo);
+	if (copy_error != GL_NO_ERROR)
+	{
+		g_atomic_int_set(&slot->in_use, 0);
+		blog(LOG_ERROR, "[obs-gstreamer-master] Failed to copy OBS texture into the owned OpenGL slot: 0x%04x",
+			(unsigned int)copy_error);
+		return false;
+	}
 	gl->Flush();
 
 	GstVideoInfo info;
-	if (!gst_video_info_set_format(&info, GST_VIDEO_FORMAT_NV12, width, height))
+	if (!gst_video_info_set_format(&info, GST_VIDEO_FORMAT_RGBA, width, height))
 	{
 		g_atomic_int_set(&slot->in_use, 0);
 		return false;
@@ -1576,56 +1382,48 @@ static bool push_gl_texture(gst_master_pipeline_t *hub, gs_texture_t *texture, u
 		return false;
 	}
 
-	/* Wrap Plane 0: Y */
-	GstGLVideoAllocationParams *params_y = gst_gl_video_allocation_params_new_wrapped_texture(
+	GstGLVideoAllocationParams *params = gst_gl_video_allocation_params_new_wrapped_texture(
 		hub->gl_context, NULL, &info, 0, NULL,
-		GST_GL_TEXTURE_TARGET_2D, GST_GL_R8, slot->tex_y, slot, gl_nv12_plane_release_notify);
-	GstGLBaseMemory *gl_mem_y = gst_gl_base_memory_alloc(
-		GST_GL_BASE_MEMORY_ALLOCATOR(allocator), (GstGLAllocationParams *)params_y);
-	gst_gl_allocation_params_free((GstGLAllocationParams *)params_y);
-
-	/* Wrap Plane 1: UV */
-	GstGLVideoAllocationParams *params_uv = gst_gl_video_allocation_params_new_wrapped_texture(
-		hub->gl_context, NULL, &info, 1, NULL,
-		GST_GL_TEXTURE_TARGET_2D, GST_GL_RG8, slot->tex_uv, slot, gl_nv12_plane_release_notify);
-	GstGLBaseMemory *gl_mem_uv = gst_gl_base_memory_alloc(
-		GST_GL_BASE_MEMORY_ALLOCATOR(allocator), (GstGLAllocationParams *)params_uv);
-	gst_gl_allocation_params_free((GstGLAllocationParams *)params_uv);
+		GST_GL_TEXTURE_TARGET_2D, GST_GL_RGBA8, slot->texture, slot, gl_texture_release_notify);
+	GstGLBaseMemory *gl_mem = gst_gl_base_memory_alloc(
+		GST_GL_BASE_MEMORY_ALLOCATOR(allocator), (GstGLAllocationParams *)params);
+	gst_gl_allocation_params_free((GstGLAllocationParams *)params);
 	gst_object_unref(allocator);
 
-	if (!gl_mem_y || !gl_mem_uv)
+	if (!gl_mem)
 	{
-		if (gl_mem_y) gst_memory_unref(GST_MEMORY_CAST(gl_mem_y));
-		if (gl_mem_uv) gst_memory_unref(GST_MEMORY_CAST(gl_mem_uv));
 		g_atomic_int_set(&slot->in_use, 0);
-		blog(LOG_ERROR, "[obs-gstreamer-master] Failed to wrap OpenGL NV12 textures as GstGLMemory");
+		blog(LOG_ERROR, "[obs-gstreamer-master] Failed to wrap copied OpenGL texture as GstGLMemory");
 		return false;
 	}
 
 	GstBuffer *buffer = gst_buffer_new();
 	if (!buffer)
 	{
-		gst_memory_unref(GST_MEMORY_CAST(gl_mem_y));
-		gst_memory_unref(GST_MEMORY_CAST(gl_mem_uv));
+		gst_memory_unref(GST_MEMORY_CAST(gl_mem));
 		return false;
 	}
-	gst_buffer_append_memory(buffer, GST_MEMORY_CAST(gl_mem_y));
-	gst_buffer_append_memory(buffer, GST_MEMORY_CAST(gl_mem_uv));
+	gst_buffer_append_memory(buffer, GST_MEMORY_CAST(gl_mem));
 
 	gsize offsets[GST_VIDEO_MAX_PLANES] = {0};
 	gint strides[GST_VIDEO_MAX_PLANES] = {0};
-	for (guint plane = 0; plane < GST_VIDEO_INFO_N_PLANES(&info); plane++)
-	{
-		offsets[plane] = GST_VIDEO_INFO_PLANE_OFFSET(&info, plane);
-		strides[plane] = GST_VIDEO_INFO_PLANE_STRIDE(&info, plane);
-	}
-	if (!gst_buffer_add_video_meta_full(buffer, GST_VIDEO_FRAME_FLAG_NONE, GST_VIDEO_FORMAT_NV12, width, height,
-		GST_VIDEO_INFO_N_PLANES(&info), offsets, strides))
+	offsets[0] = GST_VIDEO_INFO_PLANE_OFFSET(&info, 0);
+	strides[0] = GST_VIDEO_INFO_PLANE_STRIDE(&info, 0);
+	if (!gst_buffer_add_video_meta_full(buffer, GST_VIDEO_FRAME_FLAG_NONE, GST_VIDEO_FORMAT_RGBA, width, height,
+		1, offsets, strides))
 	{
 		gst_buffer_unref(buffer);
-		blog(LOG_ERROR, "[obs-gstreamer-master] Failed to attach NV12 video metadata to OpenGL frame");
+		blog(LOG_ERROR, "[obs-gstreamer-master] Failed to attach RGBA video metadata to OpenGL frame");
 		return false;
 	}
+	GstGLSyncMeta *sync_meta = gst_buffer_add_gl_sync_meta(hub->gl_context, buffer);
+	if (!sync_meta)
+	{
+		gst_buffer_unref(buffer);
+		blog(LOG_ERROR, "[obs-gstreamer-master] Failed to add OpenGL synchronization metadata");
+		return false;
+	}
+	gst_gl_sync_meta_set_sync_point(sync_meta, hub->gl_context);
 
 	uint64_t duration = gst_util_uint64_scale_int(GST_SECOND, hub->fps_den, hub->fps_num);
 	GST_BUFFER_PTS(buffer) = pts;
@@ -1636,7 +1434,7 @@ static bool push_gl_texture(gst_master_pipeline_t *hub, gs_texture_t *texture, u
 	GstFlowReturn flow = gst_app_src_push_buffer(GST_APP_SRC(hub->appsrc), buffer);
 	if (flow != GST_FLOW_OK)
 	{
-		blog(LOG_ERROR, "[obs-gstreamer-master] OpenGL NV12 texture push failed: flow=%s",
+		blog(LOG_ERROR, "[obs-gstreamer-master] OpenGL RGB texture push failed: flow=%s",
 			gst_flow_get_name(flow));
 		return false;
 	}
@@ -1644,8 +1442,8 @@ static bool push_gl_texture(gst_master_pipeline_t *hub, gs_texture_t *texture, u
 	uint64_t frame_number = ++hub->texture_push_count;
 	if (frame_number == 1 || frame_number % 300 == 0)
 	{
-		blog(LOG_INFO, "[obs-gstreamer-master] OpenGL NV12 zero-copy frame #%" PRIu64
-			" converted and pushed (%ux%u, drops=%" PRIu64 ")",
+		blog(LOG_INFO, "[obs-gstreamer-master] OpenGL RGB texture frame #%" PRIu64
+			" copied and pushed for GStreamer conversion (%ux%u, drops=%" PRIu64 ")",
 			frame_number, width, height, hub->texture_drop_count);
 	}
 	return true;
@@ -1665,8 +1463,7 @@ void gst_master_pipeline_push_texture(gst_master_pipeline_t *hub, void *gpu_hand
 	}
 #endif
 #if HAVE_GST_GL
-	if (hub->gpu_input && hub->gl_app_context &&
-	    (is_gl_memory_encoder(hub->selected_encoder) || is_dmabuf_memory_encoder(hub->selected_encoder)))
+	if (hub->gpu_input && hub->gl_app_context && hub->gl_rgb_pipeline)
 	{
 		push_gl_texture(hub, tex, pts);
 		return;
@@ -1719,107 +1516,83 @@ void gst_master_pipeline_push_texture(gst_master_pipeline_t *hub, void *gpu_hand
 		return;
 	}
 
+	if (fmt != GS_RGBA && fmt != GS_RGBA_UNORM && fmt != GS_BGRA &&
+	    fmt != GS_BGRA_UNORM && fmt != GS_BGRX && fmt != GS_BGRX_UNORM)
+	{
+		blog(LOG_ERROR, "[obs-gstreamer-master] Unsupported CPU staging texture format=%d for RGBA input",
+			(int)fmt);
+		gs_stagesurface_unmap(hub->stagesurf);
+		return;
+	}
+
+	if ((size_t)tex_w > SIZE_MAX / 4 ||
+	    (size_t)src_linesize < (size_t)tex_w * 4 ||
+	    hub->height == 0 || hub->width > SIZE_MAX / 4 ||
+	    (size_t)hub->width * 4 > SIZE_MAX / hub->height ||
+	    (size_t)hub->width * 4 > G_MAXINT)
+	{
+		blog(LOG_ERROR, "[obs-gstreamer-master] Invalid stride or RGBA frame size overflow in CPU staging path");
+		gs_stagesurface_unmap(hub->stagesurf);
+		return;
+	}
+
 	uint32_t copy_w = tex_w < hub->width ? tex_w : hub->width;
 	uint32_t copy_h = tex_h < hub->height ? tex_h : hub->height;
-	size_t y_size = (size_t)hub->width * hub->height;
-	size_t uv_size = (size_t)hub->width * (hub->height / 2);
-	size_t total_size = y_size + uv_size;
-
-	GstBuffer *in_buf = gst_buffer_new_allocate(NULL, total_size, NULL);
-	if (!in_buf)
+	size_t row_bytes = (size_t)hub->width * 4;
+	size_t total_size = row_bytes * hub->height;
+	GstBuffer *rgba_buf = gst_buffer_new_allocate(NULL, total_size, NULL);
+	GstMapInfo rgba_map;
+	if (!rgba_buf || !gst_buffer_map(rgba_buf, &rgba_map, GST_MAP_WRITE))
 	{
-		if (frame_number == 1)
-			blog(LOG_ERROR, "[obs-gstreamer-master] Failed to allocate NV12 buffer for staging frame");
+		if (rgba_buf) gst_buffer_unref(rgba_buf);
+		blog(LOG_ERROR, "[obs-gstreamer-master] Failed to allocate or map RGBA staging buffer");
 		gs_stagesurface_unmap(hub->stagesurf);
 		return;
 	}
 
-	GstMapInfo map;
-	if (!gst_buffer_map(in_buf, &map, GST_MAP_WRITE))
-	{
-		if (frame_number == 1)
-			blog(LOG_ERROR, "[obs-gstreamer-master] Failed to map NV12 buffer for staging frame");
-		gst_buffer_unref(in_buf);
-		gs_stagesurface_unmap(hub->stagesurf);
-		return;
-	}
-
-	bool is_bgra = (fmt == GS_BGRA || fmt == GS_BGRA_UNORM || fmt == GS_BGRX);
-	uint8_t *dst_y = map.data;
-	uint8_t *dst_uv = map.data + y_size;
-	const float *yc = hub->color_matrix.y_coeffs;
-	const float *uc = hub->color_matrix.u_coeffs;
-	const float *vc = hub->color_matrix.v_coeffs;
-
+	bool swap_rb = fmt == GS_BGRA || fmt == GS_BGRA_UNORM || fmt == GS_BGRX || fmt == GS_BGRX_UNORM;
+	bool force_opaque_alpha = fmt == GS_BGRX || fmt == GS_BGRX_UNORM;
+	memset(rgba_map.data, 0, total_size);
 	for (uint32_t y = 0; y < copy_h; y++)
 	{
 		const uint8_t *src_row = src_data + (size_t)y * src_linesize;
-		uint8_t *out_y_row = dst_y + (size_t)y * hub->width;
+		uint8_t *dst_row = rgba_map.data + (size_t)y * row_bytes;
 		for (uint32_t x = 0; x < copy_w; x++)
 		{
-			float r = (float)(is_bgra ? src_row[x * 4 + 2] : src_row[x * 4 + 0]) / 255.0f;
-			float g = (float)(src_row[x * 4 + 1]) / 255.0f;
-			float b = (float)(is_bgra ? src_row[x * 4 + 0] : src_row[x * 4 + 2]) / 255.0f;
-
-			float y_val = r * yc[0] + g * yc[1] + b * yc[2] + yc[3];
-			if (y_val < 0.0f) y_val = 0.0f;
-			else if (y_val > 1.0f) y_val = 1.0f;
-			out_y_row[x] = (uint8_t)(y_val * 255.0f + 0.5f);
+			size_t pixel_offset = (size_t)x * 4;
+			dst_row[pixel_offset + 0] = src_row[pixel_offset + (swap_rb ? 2 : 0)];
+			dst_row[pixel_offset + 1] = src_row[pixel_offset + 1];
+			dst_row[pixel_offset + 2] = src_row[pixel_offset + (swap_rb ? 0 : 2)];
+			dst_row[pixel_offset + 3] = force_opaque_alpha ? 255 : src_row[pixel_offset + 3];
 		}
 	}
+	gst_buffer_unmap(rgba_buf, &rgba_map);
 
-	for (uint32_t y = 0; y < copy_h / 2; y++)
+	gsize rgba_offsets[GST_VIDEO_MAX_PLANES] = {0};
+	gint rgba_strides[GST_VIDEO_MAX_PLANES] = {(gint)row_bytes};
+	if (!gst_buffer_add_video_meta_full(rgba_buf, GST_VIDEO_FRAME_FLAG_NONE, GST_VIDEO_FORMAT_RGBA,
+		hub->width, hub->height, 1, rgba_offsets, rgba_strides))
 	{
-		const uint8_t *src_row0 = src_data + (size_t)(y * 2) * src_linesize;
-		const uint8_t *src_row1 = src_data + (size_t)(y * 2 + 1) * src_linesize;
-		uint8_t *out_uv_row = dst_uv + (size_t)y * hub->width;
-		for (uint32_t x = 0; x < copy_w / 2; x++)
-		{
-			uint32_t x2 = x * 2;
-			float r = (float)(is_bgra ?
-				(src_row0[x2 * 4 + 2] + src_row0[(x2 + 1) * 4 + 2] + src_row1[x2 * 4 + 2] + src_row1[(x2 + 1) * 4 + 2]) :
-				(src_row0[x2 * 4 + 0] + src_row0[(x2 + 1) * 4 + 0] + src_row1[x2 * 4 + 0] + src_row1[(x2 + 1) * 4 + 0])) / (4.0f * 255.0f);
-			float g = (float)(src_row0[x2 * 4 + 1] + src_row0[(x2 + 1) * 4 + 1] + src_row1[x2 * 4 + 1] + src_row1[(x2 + 1) * 4 + 1]) / (4.0f * 255.0f);
-			float b = (float)(is_bgra ?
-				(src_row0[x2 * 4 + 0] + src_row0[(x2 + 1) * 4 + 0] + src_row1[x2 * 4 + 0] + src_row1[(x2 + 1) * 4 + 0]) :
-				(src_row0[x2 * 4 + 2] + src_row0[(x2 + 1) * 4 + 2] + src_row1[x2 * 4 + 2] + src_row1[(x2 + 1) * 4 + 2])) / (4.0f * 255.0f);
-
-			float u_val = r * uc[0] + g * uc[1] + b * uc[2] + uc[3];
-			float v_val = r * vc[0] + g * vc[1] + b * vc[2] + vc[3];
-			if (u_val < 0.0f) u_val = 0.0f; else if (u_val > 1.0f) u_val = 1.0f;
-			if (v_val < 0.0f) v_val = 0.0f; else if (v_val > 1.0f) v_val = 1.0f;
-
-			out_uv_row[x * 2 + 0] = (uint8_t)(u_val * 255.0f + 0.5f);
-			out_uv_row[x * 2 + 1] = (uint8_t)(v_val * 255.0f + 0.5f);
-		}
+		gst_buffer_unref(rgba_buf);
+		blog(LOG_ERROR, "[obs-gstreamer-master] Failed to attach RGBA video metadata to staging frame");
+		gs_stagesurface_unmap(hub->stagesurf);
+		return;
 	}
-	gst_buffer_unmap(in_buf, &map);
-
-	gsize offsets[GST_VIDEO_MAX_PLANES] = {0, y_size, 0, 0};
-	gint strides[GST_VIDEO_MAX_PLANES] = {(gint)hub->width, (gint)hub->width, 0, 0};
-	gst_buffer_add_video_meta_full(in_buf, GST_VIDEO_FRAME_FLAG_NONE, GST_VIDEO_FORMAT_NV12,
-		hub->width, hub->height, 2, offsets, strides);
 
 	uint64_t duration = gst_util_uint64_scale_int(GST_SECOND, hub->fps_den, hub->fps_num);
-	GST_BUFFER_PTS(in_buf) = pts > 0 ? pts : (hub->frame_index * duration);
-	GST_BUFFER_DTS(in_buf) = GST_BUFFER_PTS(in_buf);
-	GST_BUFFER_DURATION(in_buf) = duration;
+	GST_BUFFER_PTS(rgba_buf) = pts > 0 ? pts : hub->frame_index * duration;
+	GST_BUFFER_DTS(rgba_buf) = GST_BUFFER_PTS(rgba_buf);
+	GST_BUFFER_DURATION(rgba_buf) = duration;
 	hub->frame_index++;
 
-	GstFlowReturn flow = gst_app_src_push_buffer(GST_APP_SRC(hub->appsrc), in_buf);
+	GstFlowReturn flow = gst_app_src_push_buffer(GST_APP_SRC(hub->appsrc), rgba_buf);
 	if (flow != GST_FLOW_OK)
-	{
-		if (frame_number == 1 || frame_number % 300 == 0)
-			blog(LOG_ERROR, "[obs-gstreamer-master] Texture frame #%" PRIu64
-				" push to encoder failed: flow=%s",
-				frame_number, gst_flow_get_name(flow));
-	}
+		blog(LOG_ERROR, "[obs-gstreamer-master] RGBA staging frame push failed: flow=%s",
+			gst_flow_get_name(flow));
 	else if (frame_number == 1 || frame_number % 300 == 0)
-	{
 		blog(LOG_INFO, "[obs-gstreamer-master] Texture frame #%" PRIu64
-			" pushed to encoder (%ux%u texture, %ux%u submitted)",
+			" pushed as RGBA (%ux%u texture, %ux%u submitted)",
 			frame_number, tex_w, tex_h, copy_w, copy_h);
-	}
 
 	gs_stagesurface_unmap(hub->stagesurf);
 }
@@ -1829,32 +1602,41 @@ void gst_master_pipeline_push_raw_video(gst_master_pipeline_t *hub, struct video
 	if (!hub || !frame || !frame->data[0] || g_atomic_int_get(&hub->active_destinations) <= 0 || !hub->appsrc) return;
 	if (g_atomic_int_get(&hub->pipeline_failed)) return;
 
+	if (hub->gpu_input || hub->height == 0 || hub->width > SIZE_MAX / 4)
+	{
+		blog(LOG_ERROR, "[obs-gstreamer-master] Invalid CPU frame dimensions for RGBA input");
+		return;
+	}
+
 	size_t row_size = (size_t)hub->width * 4;
-	if (hub->gpu_input || hub->height == 0 || row_size / 4 != hub->width ||
-	    (size_t)frame->linesize[0] < row_size)
+	if (row_size > G_MAXINT || (size_t)frame->linesize[0] < row_size ||
+	    row_size > SIZE_MAX / hub->height)
 	{
-		blog(LOG_ERROR, "[obs-gstreamer-master] Invalid CPU frame layout for wrapped input");
+		blog(LOG_ERROR, "[obs-gstreamer-master] Invalid CPU frame stride or RGBA frame size overflow");
 		return;
 	}
 
-	size_t frame_size = (size_t)frame->linesize[0] * hub->height;
-	if (frame_size / hub->height != (size_t)frame->linesize[0])
+	size_t frame_size = row_size * hub->height;
+	GstBuffer *buf = gst_buffer_new_allocate(NULL, frame_size, NULL);
+	GstMapInfo map;
+	if (!buf || !gst_buffer_map(buf, &map, GST_MAP_WRITE))
 	{
-		blog(LOG_ERROR, "[obs-gstreamer-master] CPU frame size overflow while wrapping input");
+		if (buf) gst_buffer_unref(buf);
+		blog(LOG_ERROR, "[obs-gstreamer-master] Failed to allocate or map CPU RGBA frame");
 		return;
 	}
-
-	GstBuffer *buf = gst_buffer_new_wrapped_full(GST_MEMORY_FLAG_READONLY, frame->data[0],
-		frame_size, 0, frame_size, NULL, NULL);
-	if (!buf) return;
+	for (uint32_t y = 0; y < hub->height; y++)
+		memcpy(map.data + (size_t)y * row_size,
+			frame->data[0] + (size_t)y * frame->linesize[0], row_size);
+	gst_buffer_unmap(buf, &map);
 
 	gsize offsets[GST_VIDEO_MAX_PLANES] = {0};
-	gint strides[GST_VIDEO_MAX_PLANES] = {(gint)frame->linesize[0]};
+	gint strides[GST_VIDEO_MAX_PLANES] = {(gint)row_size};
 	if (!gst_buffer_add_video_meta_full(buf, GST_VIDEO_FRAME_FLAG_NONE, GST_VIDEO_FORMAT_RGBA,
 		hub->width, hub->height, 1, offsets, strides))
 	{
 		gst_buffer_unref(buf);
-		blog(LOG_ERROR, "[obs-gstreamer-master] Failed to attach video metadata to wrapped CPU frame");
+		blog(LOG_ERROR, "[obs-gstreamer-master] Failed to attach video metadata to copied CPU frame");
 		return;
 	}
 
@@ -2016,14 +1798,27 @@ gst_master_pipeline_t *gst_master_pipeline_create(const char *custom_master_pipe
 		is_hw_gpu_enc = true;
 #endif
 #if HAVE_GST_GL
-	if (is_gl_memory_encoder(chosen_enc) || is_dmabuf_memory_encoder(chosen_enc))
+	if (is_gl_memory_encoder(chosen_enc) &&
+	    gst_master_pipeline_element_available("glcolorconvert"))
 		is_hw_gpu_enc = true;
 #endif
 
+	bool custom_gpu_pipe = false;
+	if (custom_master_pipe && custom_master_pipe[0])
+	{
+#if HAVE_GST_D3D11
+		custom_gpu_pipe = strstr(custom_master_pipe, "memory:D3D11Memory") != NULL;
+#endif
+#if HAVE_GST_GL
+		custom_gpu_pipe = custom_gpu_pipe ||
+			(strstr(custom_master_pipe, "memory:GLMemory") != NULL &&
+			 strstr(custom_master_pipe, "glcolorconvert") != NULL &&
+			 strstr(custom_master_pipe, "format=RGBA") != NULL);
+#endif
+	}
 	bool allow_gpu_pipe = (!custom_master_pipe || !custom_master_pipe[0])
 		? is_hw_gpu_enc
-		: (strstr(custom_master_pipe, "memory:D3D11Memory") != NULL ||
-		   strstr(custom_master_pipe, "memory:GLMemory") != NULL);
+		: custom_gpu_pipe;
 
 	if (gpu_input && allow_gpu_pipe)
 	{
@@ -2041,7 +1836,7 @@ gst_master_pipeline_t *gst_master_pipeline_create(const char *custom_master_pipe
 #endif
 		if (!hub->gpu_input)
 		{
-			blog(LOG_WARNING, "[obs-gstreamer-master] GPU zero-copy context unavailable; falling back to CPU staging surface");
+			blog(LOG_WARNING, "[obs-gstreamer-master] GPU input context unavailable; falling back to CPU staging surface");
 		}
 	}
 
@@ -2087,7 +1882,7 @@ gst_master_pipeline_t *gst_master_pipeline_create(const char *custom_master_pipe
 			if (!gst_master_pipeline_element_available(candidate))
 				continue;
 
-			blog(LOG_WARNING, "[obs-gstreamer-master] Encoder '%s' failed state change; trying '%s' (gpu_zero_copy=%s)",
+			blog(LOG_WARNING, "[obs-gstreamer-master] Encoder '%s' failed state change; trying '%s' (gpu_input=%s)",
 				hub->selected_encoder, candidate, hub->gpu_input ? "yes" : "no");
 
 			gst_element_set_state(hub->pipe, GST_STATE_NULL);
@@ -2116,7 +1911,7 @@ gst_master_pipeline_t *gst_master_pipeline_create(const char *custom_master_pipe
 
 	if (state_ret == GST_STATE_CHANGE_FAILURE && hub->gpu_input)
 	{
-		blog(LOG_WARNING, "[obs-gstreamer-master] GPU zero-copy pipeline failed to initialize; retrying with CPU texture readback");
+		blog(LOG_WARNING, "[obs-gstreamer-master] GPU input pipeline failed to initialize; retrying with CPU texture readback");
 		if (hub->pipe) gst_element_set_state(hub->pipe, GST_STATE_NULL);
 		if (hub->appsrc) gst_object_unref(hub->appsrc);
 		if (hub->appsink) gst_object_unref(hub->appsink);
@@ -2193,7 +1988,7 @@ void gst_master_pipeline_destroy(gst_master_pipeline_t *hub)
 	}
 
 #if HAVE_GST_D3D11
-	destroy_d3d11_nv12_converter(hub);
+	destroy_d3d11_texture_slot(hub);
 	if (hub->d3d11_device)
 	{
 		gst_object_unref(hub->d3d11_device);
@@ -2207,7 +2002,7 @@ void gst_master_pipeline_destroy(gst_master_pipeline_t *hub)
 #endif
 
 #if HAVE_GST_GL
-	destroy_gl_nv12_converter(hub);
+	destroy_gl_texture_slot(hub);
 	if (hub->gl_context)
 	{
 		gst_object_unref(hub->gl_context);
@@ -2236,6 +2031,8 @@ void gst_master_pipeline_destroy(gst_master_pipeline_t *hub)
 		bfree(hub->video_codec);
 		hub->video_codec = NULL;
 	}
+	g_free(hub->colorimetry_str);
+	hub->colorimetry_str = NULL;
 
 	GPtrArray *subs = (GPtrArray *)hub->subscribers_atomic;
 	if (subs)

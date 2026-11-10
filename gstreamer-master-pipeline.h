@@ -48,33 +48,24 @@ struct gst_pipeline_subscriber
 	bool waiting_for_keyframe;
 };
 
-typedef struct gst_nv12_color_matrix
-{
-	float y_coeffs[4];
-	float u_coeffs[4];
-	float v_coeffs[4];
-} gst_nv12_color_matrix_t;
-
 #if HAVE_GST_D3D11
-typedef struct gst_d3d11_nv12_slot
+typedef struct gst_d3d11_texture_slot
 {
 	ID3D11Texture2D *texture;
 	ID3D11Texture2D *gst_texture;
 	HANDLE shared_handle;
 	volatile gint in_use;
-} gst_d3d11_nv12_slot_t;
+} gst_d3d11_texture_slot_t;
 #endif
 
 #if HAVE_GST_GL
-typedef struct gst_gl_nv12_slot
+typedef struct gst_gl_texture_slot
 {
-	GLuint tex_y;
-	GLuint tex_uv;
-	GLuint fbo_y;
-	GLuint fbo_uv;
+	GLuint texture;
+	GLuint read_fbo;
+	GLuint draw_fbo;
 	volatile gint in_use;
-	volatile gint plane_refs;
-} gst_gl_nv12_slot_t;
+} gst_gl_texture_slot_t;
 #endif
 
 struct gst_master_pipeline
@@ -93,29 +84,21 @@ struct gst_master_pipeline
 	char *selected_encoder;
 	char *video_codec;
 	GstVideoFormat appsrc_format;
-	gst_nv12_color_matrix_t color_matrix;
-	const char *colorimetry_str;
+	gchar *colorimetry_str;
 
 #if HAVE_GST_D3D11
 	GstD3D11Device *d3d11_device;
 	ID3D11Device *d3d11_native_device;
-	gst_d3d11_nv12_slot_t d3d11_slot;
-	bool d3d11_nv12_ready;
+	gst_d3d11_texture_slot_t d3d11_slot;
+	bool d3d11_texture_ready;
 #endif
 #if HAVE_GST_GL
 	GstGLDisplay *gl_display;
 	GstGLContext *gl_app_context;
 	GstGLContext *gl_context;
-	GLuint gl_nv12_vao;
-	GLuint gl_nv12_vbo;
-	GLuint gl_nv12_vs;
-	GLuint gl_nv12_ps_y;
-	GLuint gl_nv12_ps_uv;
-	GLuint gl_nv12_prog_y;
-	GLuint gl_nv12_prog_uv;
-	gst_gl_nv12_slot_t gl_slot;
-	bool gl_nv12_ready;
-	bool gl_tex_logged;
+	gst_gl_texture_slot_t gl_slot;
+	bool gl_texture_ready;
+	bool gl_rgb_pipeline;
 #endif
 
 	gint active_destinations;
