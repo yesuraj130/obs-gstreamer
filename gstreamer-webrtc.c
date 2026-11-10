@@ -60,6 +60,7 @@ static GstPadProbeReturn rtp_packet_probe(GstPad *pad, GstPadProbeInfo *info,
 }
 
 struct gstreamer_webrtc;
+struct answer_ctx;
 
 struct whep_session {
 	char *id;
@@ -70,9 +71,16 @@ struct whep_session {
 	GstPad *sinkpad;
 	struct packet_counter rtp_counter;
 	gulong rtp_probe_id;
+	struct answer_ctx *answer_ctx;
 	SoupServerMessage *pending_msg;
 	guint timeout_id;
 	bool replied;
+};
+
+struct answer_ctx {
+	gatomicrefcount ref_count;
+	struct gstreamer_webrtc *webrtc;
+	char *session_id;
 };
 
 struct gstreamer_webrtc {
@@ -364,6 +372,42 @@ static void webrtc_source_remove(struct gstreamer_webrtc *webrtc, guint tag)
 	}
 }
 
+static struct answer_ctx *answer_ctx_ref(struct answer_ctx *ctx)
+{
+	g_atomic_ref_count_inc(&ctx->ref_count);
+	return ctx;
+}
+
+static void answer_ctx_unref(gpointer data)
+{
+	struct answer_ctx *ctx = data;
+	if (ctx && g_atomic_ref_count_dec(&ctx->ref_count)) {
+		g_free(ctx->session_id);
+		g_free(ctx);
+	}
+}
+
+static void answer_ctx_closure_unref(gpointer data, GClosure *closure)
+{
+	UNUSED_PARAMETER(closure);
+	answer_ctx_unref(data);
+}
+
+static struct whep_session *lookup_answer_session_locked(struct answer_ctx *ctx)
+{
+	return g_hash_table_lookup(ctx->webrtc->sessions, ctx->session_id);
+}
+
+static GstElement *answer_ctx_get_webrtcbin(struct answer_ctx *ctx)
+{
+	g_mutex_lock(&ctx->webrtc->sessions_lock);
+	struct whep_session *session = lookup_answer_session_locked(ctx);
+	GstElement *webrtcbin = session && session->webrtcbin
+		? gst_object_ref(session->webrtcbin) : NULL;
+	g_mutex_unlock(&ctx->webrtc->sessions_lock);
+	return webrtcbin;
+}
+
 static void session_free(gpointer data)
 {
 	struct whep_session *session = data;
@@ -376,6 +420,8 @@ static void session_free(gpointer data)
 		gst_object_unref(session->sinkpad);
 		session->sinkpad = NULL;
 	}
+	answer_ctx_unref(session->answer_ctx);
+	session->answer_ctx = NULL;
 	if (session->webrtcbin && session->pending_msg) {
 		soup_server_message_set_status(session->pending_msg, SOUP_STATUS_INTERNAL_SERVER_ERROR, NULL);
 		compat_soup_server_message_unpause(session->webrtc ? session->webrtc->server : NULL, session->pending_msg);
@@ -478,6 +524,8 @@ static void remove_session_locked(struct gstreamer_webrtc *webrtc, struct whep_s
 	// 1. Disconnect any signal callbacks on webrtcbin
 	if (session->webrtcbin) {
 		g_signal_handlers_disconnect_by_data(session->webrtcbin, webrtc);
+		if (session->answer_ctx)
+			g_signal_handlers_disconnect_by_data(session->webrtcbin, session->answer_ctx);
 	}
 
 	// 2. Remove the queue probe before releasing its pad.
@@ -672,19 +720,17 @@ static gboolean answer_timeout(gpointer user_data)
 static void on_answer_created(GstPromise *promise, gpointer user_data);
 static void on_local_description_set(GstPromise *promise, gpointer user_data);
 
-struct answer_ctx {
-	struct gstreamer_webrtc *webrtc;
-	struct whep_session *session;
-};
-
 static void on_gathering_complete(GstElement *webrtcbin, GParamSpec *pspec, gpointer user_data)
 {
 	struct answer_ctx *ctx = user_data;
+	answer_ctx_ref(ctx);
 	GstWebRTCICEGatheringState state;
 
 	g_object_get(webrtcbin, "ice-gathering-state", &state, NULL);
-	if (state != GST_WEBRTC_ICE_GATHERING_STATE_COMPLETE)
+	if (state != GST_WEBRTC_ICE_GATHERING_STATE_COMPLETE) {
+		answer_ctx_unref(ctx);
 		return;
+	}
 
 	g_signal_handlers_disconnect_by_func(webrtcbin, on_gathering_complete, user_data);
 
@@ -695,18 +741,21 @@ static void on_gathering_complete(GstElement *webrtcbin, GParamSpec *pspec, gpoi
 		gst_webrtc_session_description_free(local);
 
 	g_mutex_lock(&ctx->webrtc->sessions_lock);
-	struct whep_session *session = ctx->session ? g_hash_table_lookup(ctx->webrtc->sessions, ctx->session->id) : NULL;
-	if (!session || session->replied || !session->pending_msg) {
+	struct whep_session *session = lookup_answer_session_locked(ctx);
+	struct answer_ctx *session_ctx = NULL;
+	if (!session || session->answer_ctx != ctx || session->replied || !session->pending_msg) {
 		g_mutex_unlock(&ctx->webrtc->sessions_lock);
 		blog(LOG_WARNING, "[obs-gstreamer] WHEP session %s: completed after timeout/cleanup",
-			ctx->session ? ctx->session->id : "unknown");
+			ctx->session_id);
 		g_free(sdp_text);
-		g_free(ctx);
+		answer_ctx_unref(ctx);
 		return;
 	}
 
 	blog(LOG_INFO, "[obs-gstreamer] WHEP session %s: ICE gathering complete, sending 201 answer",
 		session->id);
+	session_ctx = session->answer_ctx;
+	session->answer_ctx = NULL;
 
 	struct reply_ctx *reply = g_new0(struct reply_ctx, 1);
 	reply->webrtc = ctx->webrtc;
@@ -717,62 +766,98 @@ static void on_gathering_complete(GstElement *webrtcbin, GParamSpec *pspec, gpoi
 	webrtc_idle_add(ctx->webrtc, idle_reply, reply);
 	g_mutex_unlock(&ctx->webrtc->sessions_lock);
 
-	g_free(ctx);
+	answer_ctx_unref(session_ctx);
+	answer_ctx_unref(ctx);
 }
 
 static void on_local_description_set(GstPromise *promise, gpointer user_data)
 {
 	struct answer_ctx *ctx = user_data;
+	answer_ctx_ref(ctx);
 	gst_promise_unref(promise);
 
 	blog(LOG_INFO, "[obs-gstreamer] WHEP session %s: local description set, waiting for ICE",
-		ctx->session->id);
-	g_signal_connect(ctx->session->webrtcbin, "notify::ice-gathering-state",
-		G_CALLBACK(on_gathering_complete), ctx);
+		ctx->session_id);
+	g_mutex_lock(&ctx->webrtc->sessions_lock);
+	struct whep_session *session = lookup_answer_session_locked(ctx);
+	GstElement *webrtcbin = session && session->answer_ctx == ctx && session->webrtcbin
+		? gst_object_ref(session->webrtcbin) : NULL;
+	if (webrtcbin) {
+		g_signal_connect_data(webrtcbin, "notify::ice-gathering-state",
+			G_CALLBACK(on_gathering_complete), answer_ctx_ref(ctx),
+			answer_ctx_closure_unref, 0);
+	}
+	g_mutex_unlock(&ctx->webrtc->sessions_lock);
+
+	if (webrtcbin) {
+		GstWebRTCICEGatheringState state;
+		g_object_get(webrtcbin, "ice-gathering-state", &state, NULL);
+		if (state == GST_WEBRTC_ICE_GATHERING_STATE_COMPLETE)
+			on_gathering_complete(webrtcbin, NULL, ctx);
+		gst_object_unref(webrtcbin);
+	}
+	answer_ctx_unref(ctx);
 }
 
 static void on_remote_description_set(GstPromise *promise, gpointer user_data)
 {
 	struct answer_ctx *ctx = user_data;
+	answer_ctx_ref(ctx);
 	const GstStructure *remote_reply = gst_promise_get_reply(promise);
 	if (remote_reply) {
 		gchar *reply_text = gst_structure_to_string(remote_reply);
 		blog(LOG_INFO, "[obs-gstreamer] WHEP session %s: set-remote-description reply: %s",
-			ctx->session->id, reply_text);
+			ctx->session_id, reply_text);
 		g_free(reply_text);
 	}
 	gst_promise_unref(promise);
 
-	struct whep_session *session = ctx->session;
-	gst_element_sync_state_with_parent(session->queue);
-	gst_element_sync_state_with_parent(session->webrtcbin);
+	g_mutex_lock(&ctx->webrtc->sessions_lock);
+	struct whep_session *session = lookup_answer_session_locked(ctx);
+	GstElement *queue = session && session->queue ? gst_object_ref(session->queue) : NULL;
+	GstElement *webrtcbin = session && session->webrtcbin ? gst_object_ref(session->webrtcbin) : NULL;
+	g_mutex_unlock(&ctx->webrtc->sessions_lock);
+	if (!queue || !webrtcbin) {
+		if (queue) gst_object_unref(queue);
+		if (webrtcbin) gst_object_unref(webrtcbin);
+		answer_ctx_unref(ctx);
+		return;
+	}
+
+	gst_element_sync_state_with_parent(queue);
+	gst_element_sync_state_with_parent(webrtcbin);
 	blog(LOG_INFO, "[obs-gstreamer] WHEP session %s: branch synced to PLAYING",
-		session->id);
+		ctx->session_id);
 	GArray *transceivers = NULL;
-	g_signal_emit_by_name(session->webrtcbin, "get-transceivers", &transceivers);
+	g_signal_emit_by_name(webrtcbin, "get-transceivers", &transceivers);
 	blog(LOG_INFO, "[obs-gstreamer] WHEP session %s: transceivers after offer: %u",
-		session->id, transceivers ? transceivers->len : 0);
+		ctx->session_id, transceivers ? transceivers->len : 0);
 	if (transceivers)
 		g_array_unref(transceivers);
 	GstWebRTCSignalingState signaling_state;
-	g_object_get(session->webrtcbin, "signaling-state", &signaling_state, NULL);
+	g_object_get(webrtcbin, "signaling-state", &signaling_state, NULL);
 	blog(LOG_INFO, "[obs-gstreamer] WHEP session %s: signaling state before answer: %d",
-		session->id, (int)signaling_state);
+		ctx->session_id, (int)signaling_state);
 
-	GstPromise *p = gst_promise_new_with_change_func(on_answer_created, ctx, NULL);
-	g_signal_emit_by_name(session->webrtcbin, "create-answer", NULL, p);
+	GstPromise *p = gst_promise_new_with_change_func(on_answer_created,
+		answer_ctx_ref(ctx), answer_ctx_unref);
+	g_signal_emit_by_name(webrtcbin, "create-answer", NULL, p);
+	gst_object_unref(queue);
+	gst_object_unref(webrtcbin);
+	answer_ctx_unref(ctx);
 }
 
 static void on_answer_created(GstPromise *promise, gpointer user_data)
 {
 	struct answer_ctx *ctx = user_data;
+	answer_ctx_ref(ctx);
 
 	const GstStructure *reply = gst_promise_get_reply(promise);
 	GstWebRTCSessionDescription *answer = NULL;
 	if (reply) {
 		gchar *reply_text = gst_structure_to_string(reply);
 		blog(LOG_ERROR, "[obs-gstreamer] WHEP session %s: create-answer reply: %s",
-			ctx->session->id, reply_text);
+			ctx->session_id, reply_text);
 		g_free(reply_text);
 		gst_structure_get(reply, "answer", GST_TYPE_WEBRTC_SESSION_DESCRIPTION, &answer, NULL);
 	}
@@ -780,9 +865,9 @@ static void on_answer_created(GstPromise *promise, gpointer user_data)
 
 	if (!answer) {
 		blog(LOG_ERROR, "[obs-gstreamer] WHEP session %s: create-answer failed",
-			ctx->session ? ctx->session->id : "unknown");
+			ctx->session_id);
 		g_mutex_lock(&ctx->webrtc->sessions_lock);
-		struct whep_session *session = ctx->session ? g_hash_table_lookup(ctx->webrtc->sessions, ctx->session->id) : NULL;
+		struct whep_session *session = lookup_answer_session_locked(ctx);
 		if (session && !session->replied && session->pending_msg) {
 			struct reply_ctx *reply_ctx = g_new0(struct reply_ctx, 1);
 			reply_ctx->webrtc = ctx->webrtc;
@@ -793,13 +878,22 @@ static void on_answer_created(GstPromise *promise, gpointer user_data)
 			webrtc_idle_add(ctx->webrtc, idle_reply, reply_ctx);
 		}
 		g_mutex_unlock(&ctx->webrtc->sessions_lock);
-		g_free(ctx);
+		answer_ctx_unref(ctx);
 		return;
 	}
 
-	GstPromise *p = gst_promise_new_with_change_func(on_local_description_set, ctx, NULL);
-	g_signal_emit_by_name(ctx->session->webrtcbin, "set-local-description", answer, p);
+	GstElement *webrtcbin = answer_ctx_get_webrtcbin(ctx);
+	if (!webrtcbin) {
+		gst_webrtc_session_description_free(answer);
+		answer_ctx_unref(ctx);
+		return;
+	}
+	GstPromise *p = gst_promise_new_with_change_func(on_local_description_set,
+		answer_ctx_ref(ctx), answer_ctx_unref);
+	g_signal_emit_by_name(webrtcbin, "set-local-description", answer, p);
 	gst_webrtc_session_description_free(answer);
+	gst_object_unref(webrtcbin);
+	answer_ctx_unref(ctx);
 }
 
 // ---------------------------------------------------------------------------
@@ -1019,22 +1113,42 @@ static void whep_post(struct gstreamer_webrtc *webrtc, SoupServerMessage *msg)
 	blog(LOG_INFO, "[obs-gstreamer] WHEP POST: offer parsed (%u bytes), starting negotiation", (guint)size);
 
 	struct answer_ctx *ctx = g_new0(struct answer_ctx, 1);
+	g_atomic_ref_count_init(&ctx->ref_count);
 	ctx->webrtc = webrtc;
-	ctx->session = session;
+	ctx->session_id = g_strdup(session->id);
 
-	session->pending_msg = msg;
 	struct timeout_ctx *tctx = g_new0(struct timeout_ctx, 1);
 	tctx->webrtc = webrtc;
-	tctx->id = g_strdup(session->id);
-	session->timeout_id = webrtc_timeout_add_seconds(webrtc, ANSWER_TIMEOUT_SECONDS, answer_timeout, tctx);
-	compat_soup_server_message_pause(webrtc->server, msg);
+	tctx->id = g_strdup(ctx->session_id);
+	g_mutex_lock(&webrtc->sessions_lock);
+	session = g_hash_table_lookup(webrtc->sessions, ctx->session_id);
+	GstElement *session_webrtcbin = session && session->webrtcbin
+		? gst_object_ref(session->webrtcbin) : NULL;
+	if (session_webrtcbin) {
+		session->answer_ctx = answer_ctx_ref(ctx);
+		session->pending_msg = msg;
+		session->timeout_id = webrtc_timeout_add_seconds(
+			webrtc, ANSWER_TIMEOUT_SECONDS, answer_timeout, tctx);
+		compat_soup_server_message_pause(webrtc->server, msg);
+	}
+	g_mutex_unlock(&webrtc->sessions_lock);
+	if (!session_webrtcbin) {
+		g_free(tctx->id);
+		g_free(tctx);
+		answer_ctx_unref(ctx);
+		gst_webrtc_session_description_free(offer);
+		soup_server_message_set_status(msg, SOUP_STATUS_INTERNAL_SERVER_ERROR, NULL);
+		return;
+	}
 
-	GstPromise *promise = gst_promise_new_with_change_func(on_remote_description_set, ctx, NULL);
-	g_signal_emit_by_name(session->webrtcbin, "set-remote-description", offer, promise);
+	GstPromise *promise = gst_promise_new_with_change_func(on_remote_description_set,
+		answer_ctx_ref(ctx), answer_ctx_unref);
+	g_signal_emit_by_name(session_webrtcbin, "set-remote-description", offer, promise);
 	gst_webrtc_session_description_free(offer);
-
 	blog(LOG_INFO, "[obs-gstreamer] WebRTC session %s negotiating (%u active)",
-		session->id, count + 1);
+		ctx->session_id, count + 1);
+	gst_object_unref(session_webrtcbin);
+	answer_ctx_unref(ctx);
 }
 
 static void whep_delete(struct gstreamer_webrtc *webrtc, SoupServerMessage *msg, const char *path)
