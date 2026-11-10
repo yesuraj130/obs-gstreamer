@@ -1042,7 +1042,7 @@ public:
 		populateTargetCombo(m_sourceTypeCombo->currentText());
 
 		/* 3. Second Collapsible: Encoder (hardware encoder, pipeline, bitrate, etc.) */
-		m_secEncoder = new CollapsibleSection("Encoder (Pipeline and Compression)", true, this);
+		m_secEncoder = new CollapsibleSection("Encoder (Pipeline and Compression)", false, this);
 		QWidget *encoderWidget = new QWidget();
 		QFormLayout *encoderForm = new QFormLayout(encoderWidget);
 		encoderForm->setContentsMargins(12, 12, 12, 12);
