@@ -106,6 +106,8 @@ struct gst_master_pipeline
 	uint64_t texture_push_count;
 	uint64_t texture_drop_count;
 	uint64_t encoded_sample_count;
+	gpointer cpu_frame_slot;
+	uint64_t cpu_frame_drop_count;
 
 	GPtrArray *subscribers;
 	GMutex subscriber_mutex;

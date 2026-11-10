@@ -13,6 +13,34 @@
 #include <stdlib.h>
 #include <string.h>
 
+struct cpu_frame_slot {
+	gatomicrefcount ref_count;
+	volatile gint in_use;
+	guint8 *data;
+	gsize size;
+};
+
+static struct cpu_frame_slot *cpu_frame_slot_ref(struct cpu_frame_slot *slot)
+{
+	g_atomic_ref_count_inc(&slot->ref_count);
+	return slot;
+}
+
+static void cpu_frame_slot_unref(struct cpu_frame_slot *slot)
+{
+	if (slot && g_atomic_ref_count_dec(&slot->ref_count)) {
+		g_free(slot->data);
+		g_free(slot);
+	}
+}
+
+static void cpu_frame_slot_release_notify(gpointer user_data)
+{
+	struct cpu_frame_slot *slot = user_data;
+	g_atomic_int_set(&slot->in_use, 0);
+	cpu_frame_slot_unref(slot);
+}
+
 #if HAVE_GST_D3D11
 #include <d3d11.h>
 #include <d3d10_1.h>
@@ -867,6 +895,7 @@ static GstElement *create_master_encoder_pipeline(gst_master_pipeline_t *hub, co
 		hub->appsrc_format = GST_VIDEO_FORMAT_RGBA;
 		pipe_desc = g_strdup_printf(
 			"appsrc name=hub_appsrc is-live=true format=GST_FORMAT_TIME do-timestamp=false min-latency=0 max-latency=0 "
+			"max-buffers=1 leaky-type=downstream "
 			"caps=\"video/x-raw, width=%u, height=%u, format=RGBA, framerate=%u/%u, colorimetry=%s\" ! "
 			"videoconvert ! video/x-raw, format=NV12, colorimetry=%s ! "
 			"%s ! %s ! %s, stream-format=byte-stream, alignment=au ! "
@@ -1627,19 +1656,43 @@ void gst_master_pipeline_push_raw_video(gst_master_pipeline_t *hub, struct video
 		return;
 	}
 
-	size_t frame_size = row_size * hub->height;
-	GstBuffer *buf = gst_buffer_new_allocate(NULL, frame_size, NULL);
-	GstMapInfo map;
-	if (!buf || !gst_buffer_map(buf, &map, GST_MAP_WRITE))
-	{
-		if (buf) gst_buffer_unref(buf);
-		blog(LOG_ERROR, "[obs-gstreamer-master] Failed to allocate or map CPU RGBA frame");
+	struct cpu_frame_slot *slot = hub->cpu_frame_slot;
+	if (!slot || slot->size != row_size * hub->height) {
+		blog(LOG_ERROR, "[obs-gstreamer-master] CPU frame slot is unavailable or has an invalid size");
 		return;
 	}
+	if (!g_atomic_int_compare_and_exchange(&slot->in_use, 0, 1)) {
+		uint64_t dropped = ++hub->cpu_frame_drop_count;
+		if (dropped == 1 || dropped % 300 == 0)
+			blog(LOG_WARNING, "[obs-gstreamer-master] CPU encoder busy: dropped raw frame #%" PRIu64,
+				dropped);
+		return;
+	}
+
+	GstBuffer *buf = gst_buffer_new();
+	if (!buf)
+	{
+		g_atomic_int_set(&slot->in_use, 0);
+		blog(LOG_ERROR, "[obs-gstreamer-master] Failed to allocate reusable CPU RGBA frame buffer");
+		return;
+	}
+
+	struct cpu_frame_slot *memory_slot = cpu_frame_slot_ref(slot);
+	GstMemory *memory = gst_memory_new_wrapped(GST_MEMORY_FLAG_READONLY,
+		slot->data, slot->size, 0, slot->size,
+		memory_slot, cpu_frame_slot_release_notify);
+	if (!memory)
+	{
+		g_atomic_int_set(&slot->in_use, 0);
+		cpu_frame_slot_unref(memory_slot);
+		gst_buffer_unref(buf);
+		blog(LOG_ERROR, "[obs-gstreamer-master] Failed to create reusable CPU RGBA frame memory");
+		return;
+	}
+	gst_buffer_append_memory(buf, memory);
 	for (uint32_t y = 0; y < hub->height; y++)
-		memcpy(map.data + (size_t)y * row_size,
+		memcpy(slot->data + (size_t)y * row_size,
 			frame->data[0] + (size_t)y * frame->linesize[0], row_size);
-	gst_buffer_unmap(buf, &map);
 
 	gsize offsets[GST_VIDEO_MAX_PLANES] = {0};
 	gint strides[GST_VIDEO_MAX_PLANES] = {(gint)row_size};
@@ -1952,6 +2005,28 @@ gst_master_pipeline_t *gst_master_pipeline_create(const char *custom_master_pipe
 		return NULL;
 	}
 
+	if (!hub->gpu_input)
+	{
+		if (width == 0 || height == 0 || width > SIZE_MAX / 4 ||
+		    (size_t)width * 4 > SIZE_MAX / height) {
+			blog(LOG_ERROR, "[obs-gstreamer-master] Invalid dimensions for reusable CPU frame slot");
+			gst_master_pipeline_destroy(hub);
+			return NULL;
+		}
+
+		struct cpu_frame_slot *slot = g_new0(struct cpu_frame_slot, 1);
+		g_atomic_ref_count_init(&slot->ref_count);
+		slot->size = (gsize)width * 4 * height;
+		slot->data = g_try_malloc(slot->size);
+		if (!slot->data) {
+			blog(LOG_ERROR, "[obs-gstreamer-master] Failed to allocate reusable CPU frame slot");
+			cpu_frame_slot_unref(slot);
+			gst_master_pipeline_destroy(hub);
+			return NULL;
+		}
+		hub->cpu_frame_slot = slot;
+	}
+
 	GstAppSinkCallbacks sink_cbs;
 	memset(&sink_cbs, 0, sizeof(sink_cbs));
 	sink_cbs.new_sample = video_new_sample_cb;
@@ -2040,6 +2115,8 @@ void gst_master_pipeline_destroy(gst_master_pipeline_t *hub)
 	}
 	g_free(hub->colorimetry_str);
 	hub->colorimetry_str = NULL;
+	cpu_frame_slot_unref(hub->cpu_frame_slot);
+	hub->cpu_frame_slot = NULL;
 
 	GPtrArray *subs = hub->subscribers;
 	if (subs)
