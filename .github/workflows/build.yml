@@ -66,8 +66,7 @@ jobs:
             $installed = $true
           } else {
             $targets = @(
-              @{ Version = "1.28.7"; Retries = 2 },
-              @{ Version = "1.26.6"; Retries = 1 }
+              @{ Version = "1.28.7"; Retries = 2 }
             )
             $installed = $false
 
@@ -346,11 +345,11 @@ jobs:
           path: obs-gstreamer-obs30-win64.zip
 
   # =========================================================================
-  # Target 2: Linux (x86_64) Native (Latest OBS Studio 30+)
+  # Target 2: Linux (x86_64) Native (Latest OBS Studio 32+)
   # =========================================================================
   build-linux:
-    name: "Linux (Ubuntu 24.04 x86_64, OBS 32+ Qt 6)"
-    runs-on: ubuntu-24.04
+    name: "Linux (Ubuntu 26.04 x86_64, OBS 32+ Qt 6)"
+    runs-on: ubuntu-26.04
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -364,6 +363,8 @@ jobs:
             libobs-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
             libgstreamer-plugins-bad1.0-dev libgstrtspserver-1.0-dev \
             libsoup-3.0-dev qt6-base-dev
+          pkg-config --atleast-version=1.28.0 gstreamer-1.0
+          pkg-config --modversion gstreamer-1.0
           pip3 install --upgrade meson
           # Strip rogue -std=gnu17 from libobs.pc which causes cc1plus command-line error on g++
           sudo sed -i 's/-std=gnu[0-9]*//g' /usr/lib/*/pkgconfig/libobs.pc /usr/lib/pkgconfig/libobs.pc /usr/share/pkgconfig/libobs.pc 2>/dev/null || true
