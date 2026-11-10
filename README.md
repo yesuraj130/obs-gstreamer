@@ -98,10 +98,9 @@ configuration, which OBS saves and restores with that collection.
 
 ### Master Hub frame handoff
 
-The raw Output and Encoder Callback methods wrap OBS RGBA frame memory in a
-GStreamer buffer instead of copying the pixels. This is experimental and relies
-on the OBS frame remaining valid while GStreamer consumes it; verify stability
-and frame integrity in the target OBS/GStreamer runtime.
+The raw Output and Encoder Callback methods copy RGBA pixels into one reusable
+CPU frame slot. While GStreamer owns that slot, new CPU frames are dropped
+rather than queued or copied into additional buffers.
 
 On Windows, Render and Filter Callback can wrap OBS D3D11 textures as
 `GstD3D11Memory` and use `d3d11convert` plus `qsvh264enc` when those GStreamer
@@ -113,6 +112,8 @@ source active but does not guarantee that an off-air scene is rendered.
 
 Build
 ---
+
+Building requires OBS Studio 32.2.2 or newer and GStreamer 1.28 or newer.
 
 ```shell
 $ meson --buildtype=release build
