@@ -84,6 +84,8 @@ struct answer_ctx {
 };
 
 struct gstreamer_webrtc {
+	gatomicrefcount ref_count;
+	bool destroy_started;
 	obs_output_t *output;
 	obs_data_t *settings;
 	struct obs_video_info ovi;
@@ -108,11 +110,41 @@ struct gstreamer_webrtc {
 	GThread *loop_thread;
 
 	GMutex sessions_lock;
+	GMutex source_lock;
 	GHashTable *sessions;
 	guint session_counter;
 	guint bus_watch_id;
 	struct packet_counter pay_counter;
 };
+
+static struct gstreamer_webrtc *gstreamer_webrtc_ref(struct gstreamer_webrtc *webrtc)
+{
+	g_atomic_ref_count_inc(&webrtc->ref_count);
+	return webrtc;
+}
+
+static void gstreamer_webrtc_unref(gpointer data)
+{
+	struct gstreamer_webrtc *webrtc = data;
+	if (!webrtc || !g_atomic_ref_count_dec(&webrtc->ref_count))
+		return;
+
+	if (webrtc->sessions)
+		g_hash_table_destroy(webrtc->sessions);
+	g_mutex_clear(&webrtc->sessions_lock);
+	g_mutex_clear(&webrtc->source_lock);
+	g_free(webrtc->name);
+	g_free(webrtc->stun_server);
+	g_free(webrtc->turn_server);
+	g_free(webrtc->web_root);
+	g_free(webrtc);
+}
+
+static void gstreamer_webrtc_closure_unref(gpointer data, GClosure *closure)
+{
+	UNUSED_PARAMETER(closure);
+	gstreamer_webrtc_unref(data);
+}
 
 static void webrtc_frame_cb(GstBuffer *buf, bool is_keyframe, gpointer user_data)
 {
@@ -341,20 +373,42 @@ static gpointer webrtc_loop_thread_func(gpointer user_data)
 	return NULL;
 }
 
-static guint webrtc_idle_add(struct gstreamer_webrtc *webrtc, GSourceFunc function, gpointer data)
+static guint webrtc_idle_add(struct gstreamer_webrtc *webrtc, GSourceFunc function, gpointer data,
+	GDestroyNotify notify)
 {
 	GSource *source = g_idle_source_new();
-	g_source_set_callback(source, function, data, NULL);
-	guint id = g_source_attach(source, (webrtc && webrtc->loop_context) ? webrtc->loop_context : NULL);
+	g_source_set_callback(source, function, data, notify);
+	g_mutex_lock(&webrtc->source_lock);
+	GMainContext *context = webrtc->loop_context
+		? g_main_context_ref(webrtc->loop_context) : NULL;
+	g_mutex_unlock(&webrtc->source_lock);
+	if (!context) {
+		g_source_destroy(source);
+		g_source_unref(source);
+		return 0;
+	}
+	guint id = g_source_attach(source, context);
+	g_main_context_unref(context);
 	g_source_unref(source);
 	return id;
 }
 
-static guint webrtc_timeout_add_seconds(struct gstreamer_webrtc *webrtc, guint interval, GSourceFunc function, gpointer data)
+static guint webrtc_timeout_add_seconds(struct gstreamer_webrtc *webrtc, guint interval,
+	GSourceFunc function, gpointer data, GDestroyNotify notify)
 {
 	GSource *source = g_timeout_source_new_seconds(interval);
-	g_source_set_callback(source, function, data, NULL);
-	guint id = g_source_attach(source, (webrtc && webrtc->loop_context) ? webrtc->loop_context : NULL);
+	g_source_set_callback(source, function, data, notify);
+	g_mutex_lock(&webrtc->source_lock);
+	GMainContext *context = webrtc->loop_context
+		? g_main_context_ref(webrtc->loop_context) : NULL;
+	g_mutex_unlock(&webrtc->source_lock);
+	if (!context) {
+		g_source_destroy(source);
+		g_source_unref(source);
+		return 0;
+	}
+	guint id = g_source_attach(source, context);
+	g_main_context_unref(context);
 	g_source_unref(source);
 	return id;
 }
@@ -363,12 +417,17 @@ static void webrtc_source_remove(struct gstreamer_webrtc *webrtc, guint tag)
 {
 	if (!tag)
 		return;
-	if (webrtc && webrtc->loop_context) {
-		GSource *source = g_main_context_find_source_by_id(webrtc->loop_context, tag);
+	if (webrtc) {
+		g_mutex_lock(&webrtc->source_lock);
+		GMainContext *context = webrtc->loop_context
+			? g_main_context_ref(webrtc->loop_context) : NULL;
+		g_mutex_unlock(&webrtc->source_lock);
+		if (!context)
+			return;
+		GSource *source = g_main_context_find_source_by_id(context, tag);
 		if (source)
 			g_source_destroy(source);
-	} else {
-		g_source_remove(tag);
+		g_main_context_unref(context);
 	}
 }
 
@@ -383,6 +442,7 @@ static void answer_ctx_unref(gpointer data)
 	struct answer_ctx *ctx = data;
 	if (ctx && g_atomic_ref_count_dec(&ctx->ref_count)) {
 		g_free(ctx->session_id);
+		gstreamer_webrtc_unref(ctx->webrtc);
 		g_free(ctx);
 	}
 }
@@ -437,6 +497,14 @@ struct idle_teardown {
 	char *id;
 };
 
+static void idle_teardown_free(gpointer data)
+{
+	struct idle_teardown *ctx = data;
+	g_free(ctx->id);
+	gstreamer_webrtc_unref(ctx->webrtc);
+	g_free(ctx);
+}
+
 static void remove_session_locked(struct gstreamer_webrtc *webrtc, struct whep_session *session);
 
 static gboolean idle_teardown(gpointer user_data)
@@ -467,17 +535,15 @@ static gboolean idle_teardown(gpointer user_data)
 		gst_master_pipeline_unsubscribe(master_pipe, sub_to_unsub);
 	}
 
-	g_free(ctx->id);
-	g_free(ctx);
 	return G_SOURCE_REMOVE;
 }
 
 static void session_teardown_async(struct gstreamer_webrtc *webrtc, const char *id)
 {
 	struct idle_teardown *ctx = g_new0(struct idle_teardown, 1);
-	ctx->webrtc = webrtc;
+	ctx->webrtc = gstreamer_webrtc_ref(webrtc);
 	ctx->id = g_strdup(id);
-	webrtc_idle_add(webrtc, idle_teardown, ctx);
+	webrtc_idle_add(webrtc, idle_teardown, ctx, idle_teardown_free);
 }
 
 static void webrtcbin_connection_state_changed(GstElement *webrtcbin, GParamSpec *pspec, gpointer user_data)
@@ -646,6 +712,16 @@ struct reply_ctx {
 	int status;
 };
 
+static void reply_ctx_free(gpointer data)
+{
+	struct reply_ctx *ctx = data;
+	g_clear_object(&ctx->msg);
+	g_free(ctx->id);
+	g_free(ctx->sdp);
+	gstreamer_webrtc_unref(ctx->webrtc);
+	g_free(ctx);
+}
+
 static gboolean idle_reply(gpointer user_data)
 {
 	struct reply_ctx *ctx = user_data;
@@ -666,8 +742,8 @@ static gboolean idle_reply(gpointer user_data)
 	soup_server_message_set_status(ctx->msg, ctx->status, NULL);
 	soup_server_message_set_response(ctx->msg, "application/sdp", SOUP_MEMORY_COPY,
 		ctx->sdp ? ctx->sdp : "", ctx->sdp ? strlen(ctx->sdp) : 0);
-	compat_soup_server_message_unpause(ctx->webrtc ? ctx->webrtc->server : NULL, ctx->msg);
-	g_object_unref(ctx->msg);
+	if (ctx->webrtc->server)
+		compat_soup_server_message_unpause(ctx->webrtc->server, ctx->msg);
 	if (ctx->status == SOUP_STATUS_CREATED) {
 		if (ctx->webrtc && ctx->webrtc->master_pipe) {
 			gst_master_pipeline_request_keyframe(ctx->webrtc->master_pipe);
@@ -684,9 +760,6 @@ static gboolean idle_reply(gpointer user_data)
 	}
 	g_free(location);
 
-	g_free(ctx->id);
-	g_free(ctx->sdp);
-	g_free(ctx);
 	return G_SOURCE_REMOVE;
 }
 
@@ -694,6 +767,14 @@ struct timeout_ctx {
 	struct gstreamer_webrtc *webrtc;
 	char *id;
 };
+
+static void timeout_ctx_free(gpointer data)
+{
+	struct timeout_ctx *ctx = data;
+	g_free(ctx->id);
+	gstreamer_webrtc_unref(ctx->webrtc);
+	g_free(ctx);
+}
 
 static gboolean answer_timeout(gpointer user_data)
 {
@@ -713,8 +794,6 @@ static gboolean answer_timeout(gpointer user_data)
 		session->timeout_id = 0;
 	g_mutex_unlock(&ctx->webrtc->sessions_lock);
 
-	g_free(ctx->id);
-	g_free(ctx);
 	return G_SOURCE_REMOVE;
 }
 
@@ -759,12 +838,12 @@ static void on_gathering_complete(GstElement *webrtcbin, GParamSpec *pspec, gpoi
 	session->answer_ctx = NULL;
 
 	struct reply_ctx *reply = g_new0(struct reply_ctx, 1);
-	reply->webrtc = ctx->webrtc;
+	reply->webrtc = gstreamer_webrtc_ref(ctx->webrtc);
 	reply->msg = g_object_ref(session->pending_msg);
 	reply->id = g_strdup(session->id);
 	reply->sdp = sdp_text;
 	reply->status = SOUP_STATUS_CREATED;
-	webrtc_idle_add(ctx->webrtc, idle_reply, reply);
+	webrtc_idle_add(ctx->webrtc, idle_reply, reply, reply_ctx_free);
 	g_mutex_unlock(&ctx->webrtc->sessions_lock);
 
 	answer_ctx_unref(session_ctx);
@@ -871,12 +950,12 @@ static void on_answer_created(GstPromise *promise, gpointer user_data)
 		struct whep_session *session = lookup_answer_session_locked(ctx);
 		if (session && !session->replied && session->pending_msg) {
 			struct reply_ctx *reply_ctx = g_new0(struct reply_ctx, 1);
-			reply_ctx->webrtc = ctx->webrtc;
+			reply_ctx->webrtc = gstreamer_webrtc_ref(ctx->webrtc);
 			reply_ctx->msg = g_object_ref(session->pending_msg);
 			reply_ctx->id = g_strdup(session->id);
 			reply_ctx->sdp = NULL;
 			reply_ctx->status = SOUP_STATUS_INTERNAL_SERVER_ERROR;
-			webrtc_idle_add(ctx->webrtc, idle_reply, reply_ctx);
+			webrtc_idle_add(ctx->webrtc, idle_reply, reply_ctx, reply_ctx_free);
 		}
 		g_mutex_unlock(&ctx->webrtc->sessions_lock);
 		answer_ctx_unref(ctx);
@@ -1073,8 +1152,9 @@ static void whep_post(struct gstreamer_webrtc *webrtc, SoupServerMessage *msg)
 	gst_master_pipeline_t *master_pipe = webrtc->master_pipe;
 	g_mutex_unlock(&webrtc->sessions_lock);
 
-	g_signal_connect(session->webrtcbin, "notify::connection-state",
-		G_CALLBACK(webrtcbin_connection_state_changed), webrtc);
+	g_signal_connect_data(session->webrtcbin, "notify::connection-state",
+		G_CALLBACK(webrtcbin_connection_state_changed), gstreamer_webrtc_ref(webrtc),
+		gstreamer_webrtc_closure_unref, 0);
 
 	if (need_subscribe && master_pipe) {
 		blog(LOG_INFO, "[obs-gstreamer-webrtc] WebRTC viewer '%s' connected (viewers=%u): subscribing '%s' to master pipeline",
@@ -1115,11 +1195,11 @@ static void whep_post(struct gstreamer_webrtc *webrtc, SoupServerMessage *msg)
 
 	struct answer_ctx *ctx = g_new0(struct answer_ctx, 1);
 	g_atomic_ref_count_init(&ctx->ref_count);
-	ctx->webrtc = webrtc;
+	ctx->webrtc = gstreamer_webrtc_ref(webrtc);
 	ctx->session_id = g_strdup(session->id);
 
 	struct timeout_ctx *tctx = g_new0(struct timeout_ctx, 1);
-	tctx->webrtc = webrtc;
+	tctx->webrtc = gstreamer_webrtc_ref(webrtc);
 	tctx->id = g_strdup(ctx->session_id);
 	g_mutex_lock(&webrtc->sessions_lock);
 	session = g_hash_table_lookup(webrtc->sessions, ctx->session_id);
@@ -1129,13 +1209,12 @@ static void whep_post(struct gstreamer_webrtc *webrtc, SoupServerMessage *msg)
 		session->answer_ctx = answer_ctx_ref(ctx);
 		session->pending_msg = msg;
 		session->timeout_id = webrtc_timeout_add_seconds(
-			webrtc, ANSWER_TIMEOUT_SECONDS, answer_timeout, tctx);
+			webrtc, ANSWER_TIMEOUT_SECONDS, answer_timeout, tctx, timeout_ctx_free);
 		compat_soup_server_message_pause(webrtc->server, msg);
 	}
 	g_mutex_unlock(&webrtc->sessions_lock);
 	if (!session_webrtcbin) {
-		g_free(tctx->id);
-		g_free(tctx);
+		timeout_ctx_free(tctx);
 		answer_ctx_unref(ctx);
 		gst_webrtc_session_description_free(offer);
 		soup_server_message_set_status(msg, SOUP_STATUS_INTERNAL_SERVER_ERROR, NULL);
@@ -1354,6 +1433,7 @@ struct gstreamer_webrtc *gst_webrtc_branch_start(gst_master_pipeline_t *master_p
 	}
 
 	struct gstreamer_webrtc *webrtc = g_new0(struct gstreamer_webrtc, 1);
+	g_atomic_ref_count_init(&webrtc->ref_count);
 	webrtc->name = g_strdup(name && name[0] ? name : "WebRTC");
 	webrtc->stun_server = (stun_server && stun_server[0]) ? g_strdup(stun_server) : NULL;
 	webrtc->turn_server = (turn_server && turn_server[0]) ? g_strdup(turn_server) : NULL;
@@ -1362,6 +1442,7 @@ struct gstreamer_webrtc *gst_webrtc_branch_start(gst_master_pipeline_t *master_p
 	webrtc->active = true;
 	webrtc->sessions = g_hash_table_new(g_str_hash, g_str_equal);
 	g_mutex_init(&webrtc->sessions_lock);
+	g_mutex_init(&webrtc->source_lock);
 
 	const char *port = (http_port && http_port[0]) ? http_port : "8888";
 
@@ -1490,6 +1571,7 @@ struct gstreamer_webrtc *gstreamer_webrtc_create(obs_output_t *output, obs_data_
 	}
 
 	struct gstreamer_webrtc *webrtc = g_new0(struct gstreamer_webrtc, 1);
+	g_atomic_ref_count_init(&webrtc->ref_count);
 	webrtc->output = output;
 	webrtc->settings = settings;
 	webrtc->ovi = *ovi;
@@ -1501,6 +1583,7 @@ struct gstreamer_webrtc *gstreamer_webrtc_create(obs_output_t *output, obs_data_
 	webrtc->active = true;
 	webrtc->sessions = g_hash_table_new(g_str_hash, g_str_equal);
 	g_mutex_init(&webrtc->sessions_lock);
+	g_mutex_init(&webrtc->source_lock);
 
 	const char *port = obs_data_get_string(settings, "webrtc_http_port");
 	if (!port || !port[0])
@@ -1613,6 +1696,11 @@ void gstreamer_webrtc_destroy(struct gstreamer_webrtc *webrtc)
 		return;
 
 	g_mutex_lock(&webrtc->sessions_lock);
+	if (webrtc->destroy_started) {
+		g_mutex_unlock(&webrtc->sessions_lock);
+		return;
+	}
+	webrtc->destroy_started = true;
 	webrtc->active = false;
 	gst_pipeline_subscriber_t *sub_to_unsub = webrtc->sub;
 	webrtc->sub = NULL;
@@ -1631,7 +1719,6 @@ void gstreamer_webrtc_destroy(struct gstreamer_webrtc *webrtc)
 
 	if (webrtc->server) {
 		soup_server_disconnect(webrtc->server);
-		g_clear_object(&webrtc->server);
 	}
 
 	if (webrtc->loop) {
@@ -1641,27 +1728,30 @@ void gstreamer_webrtc_destroy(struct gstreamer_webrtc *webrtc)
 		g_thread_join(webrtc->loop_thread);
 		webrtc->loop_thread = NULL;
 	}
+	g_mutex_lock(&webrtc->sessions_lock);
+	while (g_hash_table_size(webrtc->sessions) > 0) {
+		GHashTableIter iter;
+		gpointer key, value;
+		g_hash_table_iter_init(&iter, webrtc->sessions);
+		if (!g_hash_table_iter_next(&iter, &key, &value))
+			break;
+		remove_session_locked(webrtc, value);
+	}
+	g_mutex_unlock(&webrtc->sessions_lock);
+	g_clear_object(&webrtc->server);
+
 	if (webrtc->loop) {
 		g_main_loop_unref(webrtc->loop);
 		webrtc->loop = NULL;
 	}
-	if (webrtc->loop_context) {
-		g_main_context_unref(webrtc->loop_context);
-		webrtc->loop_context = NULL;
-	}
+	g_mutex_lock(&webrtc->source_lock);
+	GMainContext *loop_context = webrtc->loop_context;
+	webrtc->loop_context = NULL;
+	g_mutex_unlock(&webrtc->source_lock);
+	if (loop_context)
+		g_main_context_unref(loop_context);
 
 	if (webrtc->pipe) {
-		g_mutex_lock(&webrtc->sessions_lock);
-		while (g_hash_table_size(webrtc->sessions) > 0) {
-			GHashTableIter iter;
-			gpointer key, value;
-			g_hash_table_iter_init(&iter, webrtc->sessions);
-			if (!g_hash_table_iter_next(&iter, &key, &value))
-				break;
-			remove_session_locked(webrtc, value);
-		}
-		g_mutex_unlock(&webrtc->sessions_lock);
-
 		gst_element_set_state(webrtc->pipe, GST_STATE_NULL);
 		g_clear_object(&webrtc->pipe);
 	}
@@ -1670,15 +1760,7 @@ void gstreamer_webrtc_destroy(struct gstreamer_webrtc *webrtc)
 	g_clear_object(&webrtc->tee);
 	g_clear_object(&webrtc->pay0);
 
-	if (webrtc->sessions)
-		g_hash_table_destroy(webrtc->sessions);
-	g_mutex_clear(&webrtc->sessions_lock);
-
-	g_free(webrtc->name);
-	g_free(webrtc->stun_server);
-	g_free(webrtc->turn_server);
-	g_free(webrtc->web_root);
-	g_free(webrtc);
+	gstreamer_webrtc_unref(webrtc);
 }
 
 GstElement *gstreamer_webrtc_appsrc(struct gstreamer_webrtc *webrtc)
