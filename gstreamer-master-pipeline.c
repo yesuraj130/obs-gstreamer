@@ -893,6 +893,7 @@ launch_pipeline:
 	{
 		blog(LOG_ERROR, "[obs-gstreamer-master] Failed to create master pipeline: %s", error->message);
 		g_clear_error(&error);
+		if (pipe) gst_object_unref(pipe);
 		return NULL;
 	}
 
