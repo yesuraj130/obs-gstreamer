@@ -376,19 +376,19 @@ struct gst_hub_branch *gst_custom_branch_start(gst_master_pipeline_t *pipeline,
 
 	if (strstr(user_pipe, "appsrc") != NULL) {
 		launch_str = g_strdup(user_pipe);
-		pipe = gst_parse_launch(launch_str, &err);
+		pipe = gstreamer_parse_launch_checked(launch_str, &err);
 	} else if (custom_pipe_needs_decoder(user_pipe)) {
 		launch_str = g_strdup_printf(
 			"appsrc name=appsrc_video is-live=true format=GST_FORMAT_TIME do-timestamp=true "
 			"caps=\"%s\" ! %s ! decodebin ! videoconvert ! %s",
 			caps_str, parser_str, user_pipe);
-		pipe = gst_parse_launch(launch_str, &err);
+		pipe = gstreamer_parse_launch_checked(launch_str, &err);
 	} else {
 		launch_str = g_strdup_printf(
 			"appsrc name=appsrc_video is-live=true format=GST_FORMAT_TIME do-timestamp=true "
 			"caps=\"%s\" ! %s",
 			caps_str, user_pipe);
-		pipe = gst_parse_launch(launch_str, &err);
+		pipe = gstreamer_parse_launch_checked(launch_str, &err);
 		if (err || !pipe) {
 			if (err) g_clear_error(&err);
 			if (pipe) {
@@ -400,7 +400,7 @@ struct gst_hub_branch *gst_custom_branch_start(gst_master_pipeline_t *pipeline,
 				"appsrc name=appsrc_video is-live=true format=GST_FORMAT_TIME do-timestamp=true "
 				"caps=\"%s\" ! %s ! decodebin ! videoconvert ! %s",
 				caps_str, parser_str, user_pipe);
-			pipe = gst_parse_launch(launch_str, &err);
+			pipe = gstreamer_parse_launch_checked(launch_str, &err);
 		}
 	}
 
@@ -502,7 +502,7 @@ struct gst_hub_branch *gst_render_hub_start_pipeline_branch(const char *name, co
 	}
 
 	GError *err = NULL;
-	GstElement *pipe = gst_parse_launch(pipeline_str, &err);
+	GstElement *pipe = gstreamer_parse_launch_checked(pipeline_str, &err);
 	if (err || !pipe) {
 		if (err) {
 			blog(LOG_ERROR, "[obs-gstreamer-rtspserver] Failed to parse pipeline: %s", err->message);

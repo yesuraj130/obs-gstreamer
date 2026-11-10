@@ -449,7 +449,7 @@ bool gstreamer_output_start(void *p)
 		}
 
 		blog(LOG_INFO, "[obs-gstreamer] Launching custom pipeline: %s", pipe_string);
-		data->pipe = gst_parse_launch(pipe_string, &err);
+		data->pipe = gstreamer_parse_launch_checked(pipe_string, &err);
 		g_free(pipe_string);
 
 		if (err) {

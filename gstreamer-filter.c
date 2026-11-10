@@ -333,7 +333,7 @@ struct obs_source_frame *gstreamer_filter_video(void *p, struct obs_source_frame
 		blog(LOG_INFO, "[obs-gstreamer-filter] %s: Creating video filter pipeline: %s", get_filter_source_name(data->filter_source), str);
 
 		GError *err = NULL;
-		data->pipe = gst_parse_launch(str, &err);
+		data->pipe = gstreamer_parse_launch_checked(str, &err);
 		g_free(str);
 
 		if (err != NULL)
@@ -526,7 +526,7 @@ struct obs_audio_data *gstreamer_filter_audio(void *p, struct obs_audio_data *au
 		blog(LOG_INFO, "[obs-gstreamer-filter] %s: Creating audio filter pipeline: %s", get_filter_source_name(data->filter_source), str);
 
 		GError *err = NULL;
-		data->pipe = gst_parse_launch(str, &err);
+		data->pipe = gstreamer_parse_launch_checked(str, &err);
 		g_free(str);
 
 		if (err != NULL)
@@ -703,7 +703,7 @@ static void gstreamer_filter_gpu_video_render(void *p, gs_effect_t *effect)
 		blog(LOG_INFO, "[obs-gstreamer-filter] %s: Creating GPU texture filter pipeline: %s", get_filter_source_name(data->filter_source), str);
 
 		GError *err = NULL;
-		data->pipe = gst_parse_launch(str, &err);
+		data->pipe = gstreamer_parse_launch_checked(str, &err);
 		g_free(str);
 
 		if (err != NULL)

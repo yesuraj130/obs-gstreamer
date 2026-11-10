@@ -596,7 +596,7 @@ static void create_pipeline(struct gstreamer_source_data *data, obs_data_t *sett
 	
 	blog(LOG_INFO, "[obs-gstreamer-source] Launching pipeline (override_internal=%d): %s", override_internal, pipeline_str);
 
-	data->pipe = gst_parse_launch(pipeline_str, &err);
+	data->pipe = gstreamer_parse_launch_checked(pipeline_str, &err);
 	g_free(pipeline_str);
 
 	if (err != NULL)

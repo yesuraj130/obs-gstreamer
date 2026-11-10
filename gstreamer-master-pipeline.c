@@ -3,6 +3,7 @@
  */
 
 #include "gstreamer-master-pipeline.h"
+#include "gstreamer-helper.h"
 #include <obs-module.h>
 #include <util/platform.h>
 #include <gst/gst.h>
@@ -995,7 +996,7 @@ launch_pipeline:
 		gst_video_format_to_string(hub->appsrc_format),
 		pipe_desc);
 	GError *error = NULL;
-	GstElement *pipe = gst_parse_launch(pipe_desc, &error);
+	GstElement *pipe = gstreamer_parse_launch_checked(pipe_desc, &error);
 	g_free(pipe_desc);
 
 	if (error)

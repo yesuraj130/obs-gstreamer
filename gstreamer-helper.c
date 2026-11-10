@@ -7,6 +7,27 @@ extern void obs_add_main_rendered_callback(void (*draw)(void *param), void *para
 extern void obs_remove_main_rendered_callback(void (*draw)(void *param), void *param) __attribute__((weak));
 #endif
 
+GstElement *gstreamer_parse_launch_checked(const gchar *description, GError **error)
+{
+	GError *parse_error = NULL;
+	GstElement *pipeline = gst_parse_launch(description, &parse_error);
+	if (!pipeline && !parse_error)
+		g_set_error_literal(&parse_error, GST_CORE_ERROR, GST_CORE_ERROR_FAILED,
+			"Pipeline description produced no pipeline");
+
+	if (parse_error) {
+		if (pipeline)
+			gst_object_unref(pipeline);
+		if (error)
+			*error = parse_error;
+		else
+			g_error_free(parse_error);
+		return NULL;
+	}
+
+	return pipeline;
+}
+
 GstVideoFormat obs_to_gst_video_format(enum video_format format)
 {
 	switch (format)

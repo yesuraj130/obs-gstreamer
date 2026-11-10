@@ -14,6 +14,7 @@ static inline const char *obs_source_get_name_safe(obs_source_t *source, const c
 GstVideoFormat obs_to_gst_video_format(enum video_format format);
 const char *obs_to_gst_video_format_str(enum video_format format);
 enum video_format gst_to_obs_video_format(GstVideoFormat format);
+GstElement *gstreamer_parse_launch_checked(const gchar *description, GError **error);
 
 typedef void (*obs_main_rendered_callback_fn)(void (*draw)(void *param), void *param);
 obs_main_rendered_callback_fn obs_resolve_add_main_rendered_callback(void);

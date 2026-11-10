@@ -28,6 +28,7 @@
 #include <util/dstr.h>
 #include <gst/gst.h>
 #include <gst/app/app.h>
+#include "gstreamer-helper.h"
 
 struct gstreamer_encoder_data {
 	GstElement *pipe;
@@ -214,7 +215,7 @@ void *gstreamer_encoder_create_h264(obs_data_t *settings,
 
 	GError *err = NULL;
 
-	data->pipe = gst_parse_launch(pipe_string, &err);
+	data->pipe = gstreamer_parse_launch_checked(pipe_string, &err);
 
 	g_free(encoder_string);
 	g_free(pipe_string);
@@ -317,7 +318,7 @@ void *gstreamer_encoder_create_h265(obs_data_t *settings,
 
 	GError *err = NULL;
 
-	data->pipe = gst_parse_launch(pipe_string, &err);
+	data->pipe = gstreamer_parse_launch_checked(pipe_string, &err);
 
 	g_free(encoder_string);
 	g_free(pipe_string);

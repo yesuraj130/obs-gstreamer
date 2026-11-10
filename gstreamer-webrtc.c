@@ -1476,7 +1476,7 @@ struct gstreamer_webrtc *gst_webrtc_branch_start(gst_master_pipeline_t *master_p
 			"t. ! queue leaky=downstream max-size-buffers=2 ! fakesink sync=false");
 
 	GError *err = NULL;
-	webrtc->pipe = gst_parse_launch(launch, &err);
+	webrtc->pipe = gstreamer_parse_launch_checked(launch, &err);
 	g_free(launch);
 	if (err || !webrtc->pipe) {
 		blog(LOG_ERROR, "[obs-gstreamer-webrtc] Failed to create WebRTC pipeline for '%s': %s",
@@ -1617,7 +1617,7 @@ struct gstreamer_webrtc *gstreamer_webrtc_create(obs_output_t *output, obs_data_
 		gst_format, ovi->output_width, ovi->output_height, ovi->fps_num, ovi->fps_den, fps);
 
 	GError *err = NULL;
-	webrtc->pipe = gst_parse_launch(launch, &err);
+	webrtc->pipe = gstreamer_parse_launch_checked(launch, &err);
 	g_free(launch);
 
 	if (err || !webrtc->pipe) {
