@@ -1367,6 +1367,7 @@ static void destroy_gl_texture_slot(gst_master_pipeline_t *hub)
 		if (slot->read_fbo) { gl->DeleteFramebuffers(1, &slot->read_fbo); slot->read_fbo = 0; }
 		if (slot->draw_fbo) { gl->DeleteFramebuffers(1, &slot->draw_fbo); slot->draw_fbo = 0; }
 		if (slot->texture) { gl->DeleteTextures(1, &slot->texture); slot->texture = 0; }
+		slot->read_attachment_texture = 0;
 		g_atomic_int_set(&slot->in_use, 0);
 	}
 	hub->gl_texture_ready = false;
@@ -1382,6 +1383,12 @@ static bool init_gl_texture_slot(gst_master_pipeline_t *hub)
 	if (!gl) return false;
 
 	gst_gl_texture_slot_t *slot = &hub->gl_slot;
+	GLint previous_texture = 0;
+	GLint previous_read_fbo = 0;
+	GLint previous_draw_fbo = 0;
+	gl->GetIntegerv(GL_TEXTURE_BINDING_2D, &previous_texture);
+	gl->GetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previous_read_fbo);
+	gl->GetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &previous_draw_fbo);
 	gl->GenTextures(1, &slot->texture);
 	gl->BindTexture(GL_TEXTURE_2D, slot->texture);
 	gl->TexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
@@ -1391,9 +1398,20 @@ static bool init_gl_texture_slot(gst_master_pipeline_t *hub)
 	gl->TexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, hub->width, hub->height, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
 	gl->GenFramebuffers(1, &slot->read_fbo);
 	gl->GenFramebuffers(1, &slot->draw_fbo);
-	gl->BindTexture(GL_TEXTURE_2D, 0);
+	if (slot->draw_fbo && slot->texture) {
+		gl->BindFramebuffer(GL_DRAW_FRAMEBUFFER, slot->draw_fbo);
+		gl->FramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+			GL_TEXTURE_2D, slot->texture, 0);
+	}
+	GLenum draw_status = slot->draw_fbo
+		? gl->CheckFramebufferStatus(GL_DRAW_FRAMEBUFFER)
+		: 0;
+	gl->BindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)previous_read_fbo);
+	gl->BindFramebuffer(GL_DRAW_FRAMEBUFFER, (GLuint)previous_draw_fbo);
+	gl->BindTexture(GL_TEXTURE_2D, (GLuint)previous_texture);
 
-	if (!slot->texture || !slot->read_fbo || !slot->draw_fbo || gl->GetError() != GL_NO_ERROR)
+	if (!slot->texture || !slot->read_fbo || !slot->draw_fbo ||
+	    draw_status != GL_FRAMEBUFFER_COMPLETE || gl->GetError() != GL_NO_ERROR)
 	{
 		destroy_gl_texture_slot(hub);
 		blog(LOG_ERROR, "[obs-gstreamer-master] Failed to allocate OpenGL RGB texture slot");
@@ -1460,18 +1478,19 @@ static bool push_gl_texture(gst_master_pipeline_t *hub, gs_texture_t *texture, u
 	gl->GetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previous_read_fbo);
 	gl->GetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &previous_draw_fbo);
 	gl->BindFramebuffer(GL_READ_FRAMEBUFFER, slot->read_fbo);
-	gl->FramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex_id, 0);
-	gl->BindFramebuffer(GL_DRAW_FRAMEBUFFER, slot->draw_fbo);
-	gl->FramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, slot->texture, 0);
-	if (gl->CheckFramebufferStatus(GL_READ_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE ||
-	    gl->CheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
-	{
-		gl->BindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)previous_read_fbo);
-		gl->BindFramebuffer(GL_DRAW_FRAMEBUFFER, (GLuint)previous_draw_fbo);
-		g_atomic_int_set(&slot->in_use, 0);
-		blog(LOG_ERROR, "[obs-gstreamer-master] OpenGL texture copy framebuffer is incomplete");
-		return false;
+	if (slot->read_attachment_texture != tex_id) {
+		gl->FramebufferTexture2D(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+			GL_TEXTURE_2D, tex_id, 0);
+		if (gl->CheckFramebufferStatus(GL_READ_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+			gl->BindFramebuffer(GL_READ_FRAMEBUFFER, (GLuint)previous_read_fbo);
+			gl->BindFramebuffer(GL_DRAW_FRAMEBUFFER, (GLuint)previous_draw_fbo);
+			g_atomic_int_set(&slot->in_use, 0);
+			blog(LOG_ERROR, "[obs-gstreamer-master] OpenGL source texture framebuffer is incomplete");
+			return false;
+		}
+		slot->read_attachment_texture = tex_id;
 	}
+	gl->BindFramebuffer(GL_DRAW_FRAMEBUFFER, slot->draw_fbo);
 	gl->BlitFramebuffer(0, (GLint)height, (GLint)width, 0,
 		0, 0, (GLint)width, (GLint)height, GL_COLOR_BUFFER_BIT, GL_NEAREST);
 	GLenum copy_error = gl->GetError();

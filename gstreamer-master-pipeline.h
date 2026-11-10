@@ -64,6 +64,7 @@ typedef struct gst_gl_texture_slot
 	GLuint texture;
 	GLuint read_fbo;
 	GLuint draw_fbo;
+	GLuint read_attachment_texture;
 	volatile gint in_use;
 } gst_gl_texture_slot_t;
 #endif
