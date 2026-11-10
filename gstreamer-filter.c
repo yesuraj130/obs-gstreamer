@@ -37,6 +37,7 @@ struct gstreamer_filter_data
 	uint32_t height;
 	enum video_format format;
 	GstVideoInfo video_info;
+	GstClockTime video_frame_timeout;
 
 	uint32_t sample_rate; // Cached audio state
 	size_t channels;
@@ -50,6 +51,58 @@ struct gstreamer_filter_data
 static inline const char *get_filter_source_name(obs_source_t *source)
 {
 	return obs_source_get_name_safe(source, "gstreamer-filter");
+}
+
+static GstClockTime get_video_frame_timeout(void)
+{
+	struct obs_video_info video_info;
+	if (obs_get_video_info(&video_info) && video_info.fps_num > 0 && video_info.fps_den > 0) {
+		GstClockTime frame_interval = gst_util_uint64_scale_int(
+			GST_SECOND, video_info.fps_den, video_info.fps_num);
+		return MAX((GstClockTime)1, frame_interval / 2);
+	}
+
+	blog(LOG_WARNING, "[obs-gstreamer-filter] Unable to read OBS frame rate; using 16 ms filter timeout");
+	return 16 * GST_MSECOND;
+}
+
+static bool copy_obs_video_frame_to_buffer(const GstVideoInfo *info,
+	struct obs_source_frame *frame, GstBuffer *buffer)
+{
+	GstVideoFrame mapped;
+	if (!gst_video_frame_map(&mapped, info, buffer, GST_MAP_WRITE))
+		return false;
+
+	bool copied = true;
+	for (guint plane = 0; plane < GST_VIDEO_INFO_N_PLANES(info); plane++) {
+		gsize row_bytes = 0;
+		for (guint component = 0; component < GST_VIDEO_INFO_N_COMPONENTS(info); component++) {
+			if (GST_VIDEO_INFO_COMP_PLANE(info, component) == plane) {
+				gsize component_row_bytes =
+					(gsize)GST_VIDEO_INFO_COMP_WIDTH(info, component) *
+					GST_VIDEO_FORMAT_INFO_PSTRIDE(info->finfo, component);
+				row_bytes = MAX(row_bytes, component_row_bytes);
+			}
+		}
+
+		guint rows = gst_get_plane_height(info, plane);
+		gint dst_stride = GST_VIDEO_FRAME_PLANE_STRIDE(&mapped, plane);
+		if (!frame->data[plane] || frame->linesize[plane] < row_bytes ||
+		    dst_stride < 0 || (gsize)dst_stride < row_bytes) {
+			copied = false;
+			break;
+		}
+
+		guint8 *dst = GST_VIDEO_FRAME_PLANE_DATA(&mapped, plane);
+		for (guint row = 0; row < rows; row++) {
+			memcpy(dst + (gsize)row * dst_stride,
+				frame->data[plane] + (gsize)row * frame->linesize[plane],
+				row_bytes);
+		}
+	}
+
+	gst_video_frame_unmap(&mapped);
+	return copied;
 }
 
 /* --------------------------------------------------------------------------
@@ -257,7 +310,13 @@ struct obs_source_frame *gstreamer_filter_video(void *p, struct obs_source_frame
 			return frame;
 		}
 
-		gst_video_info_set_format(&data->video_info, gst_format, frame->width, frame->height);
+		if (!gst_video_info_set_format(&data->video_info, gst_format, frame->width, frame->height))
+		{
+			blog(LOG_ERROR, "[obs-gstreamer-filter] %s: Failed to initialize video layout", get_filter_source_name(data->filter_source));
+			data->in_error = true;
+			return frame;
+		}
+		data->video_frame_timeout = get_video_frame_timeout();
 		data->width = frame->width;
 		data->height = frame->height;
 		data->format = frame->format;
@@ -265,7 +324,7 @@ struct obs_source_frame *gstreamer_filter_video(void *p, struct obs_source_frame
 		const gchar *format_str = gst_video_format_to_string(gst_format);
 
 		gchar *str = g_strdup_printf(
-			"appsrc name=appsrc format=time ! video/x-raw, width=%d, height=%d, format=%s, framerate=0/1 ! videoconvert ! "
+			"appsrc name=appsrc format=time max-buffers=1 leaky-type=downstream ! video/x-raw, width=%d, height=%d, format=%s, framerate=0/1 ! videoconvert ! "
 			"%s ! videoconvert ! video/x-raw, width=%d, height=%d, format=%s, framerate=0/1 ! appsink name=appsink sync=false max-buffers=1 drop=true",
 			frame->width, frame->height, format_str,
 			user_pipeline,
@@ -332,56 +391,38 @@ struct obs_source_frame *gstreamer_filter_video(void *p, struct obs_source_frame
 		return frame;
 	}
 
-	// =========================================================================
-	// 1. INGESTION: Feed OBS Video Frame into GStreamer appsrc
-	// =========================================================================
-	// Create a new empty GStreamer buffer to hold the input frame.
-	GstBuffer *in_buffer = gst_buffer_new();
+	// Copy OBS-owned frame data so a slow pipeline cannot retain pointers past the frame callback.
+	GstBuffer *in_buffer = gst_buffer_new_allocate(NULL, GST_VIDEO_INFO_SIZE(&data->video_info), NULL);
 	if (!in_buffer) return frame;
 
-	gsize offsets[GST_VIDEO_MAX_PLANES] = {0};
-	gint strides[GST_VIDEO_MAX_PLANES] = {0};
-	gsize current_offset = 0;
-
-	// OBS frames can be multi-planar (e.g. NV12 has 2 planes: Y and UV; I420 has 3: Y, U, V).
-	// Assuming all planes were contiguous at frame->data[0] can cause memory corruption if planes are allocated separately.
-	// Instead, wrap each plane's pointer into its own GstMemory block.
-	for (guint p = 0; p < GST_VIDEO_INFO_N_PLANES(&data->video_info); p++)
-	{
-		guint plane_height = gst_get_plane_height(&data->video_info, p);
-		gsize plane_size = (gsize)frame->linesize[p] * plane_height;
-
-		// Wrap OBS plane memory as read-only memory block without duplicating buffers
-		GstMemory *mem = gst_memory_new_wrapped(GST_MEMORY_FLAG_READONLY, frame->data[p], plane_size, 0, plane_size, NULL, NULL);
-		gst_buffer_append_memory(in_buffer, mem);
-
-		offsets[p] = current_offset;
-		strides[p] = (gint)frame->linesize[p];
-		current_offset += plane_size;
+	if (!copy_obs_video_frame_to_buffer(&data->video_info, frame, in_buffer)) {
+		blog(LOG_ERROR, "[obs-gstreamer-filter] %s: Failed to copy OBS frame into GStreamer buffer", get_filter_source_name(data->filter_source));
+		gst_buffer_unref(in_buffer);
+		return frame;
 	}
-
-	// Attach explicit video metadata (format, dimensions, offsets, and line strides)
-	// so downstream GStreamer elements know the exact planar layout and row pitch.
-	gst_buffer_add_video_meta_full(in_buffer, GST_VIDEO_FRAME_FLAG_NONE, data->video_info.finfo->format, data->video_info.width, data->video_info.height,
-			GST_VIDEO_INFO_N_PLANES(&data->video_info), offsets, strides);
 
 	// Propagate OBS frame timestamp (PTS) and push into pipeline's appsrc
 	GST_BUFFER_PTS(in_buffer) = frame->timestamp;
-	gst_app_src_push_buffer(GST_APP_SRC(data->appsrc), in_buffer);
+	GstFlowReturn push_ret = gst_app_src_push_buffer(GST_APP_SRC(data->appsrc), in_buffer);
+	if (push_ret != GST_FLOW_OK) {
+		blog(LOG_DEBUG, "[obs-gstreamer-filter] %s: Video appsrc push failed: %s",
+			get_filter_source_name(data->filter_source), gst_flow_get_name(push_ret));
+		return frame;
+	}
 
 	// =========================================================================
-	// 2. EXTRACTION: Pull processed frame from appsink (with 100ms timeout)
+	// 2. EXTRACTION: Pull the processed frame within half an OBS frame interval.
 	// =========================================================================
-	// Use non-blocking try_pull with timeout to avoid deadlocking OBS video thread, if the GStreamer pipeline stalls or drops a frame.
-	GstSample *sample = gst_app_sink_try_pull_sample(GST_APP_SINK(data->appsink), 100 * GST_MSECOND);
+	GstSample *sample = gst_app_sink_try_pull_sample(GST_APP_SINK(data->appsink), data->video_frame_timeout);
 	if (sample == NULL)
 	{ 
-		blog(LOG_ERROR, "[obs-gstreamer-filter] %s: GStreamer pipeline dropped frame.", get_filter_source_name(data->filter_source));
+		blog(LOG_DEBUG, "[obs-gstreamer-filter] %s: GStreamer filter exceeded frame deadline; passing input through",
+			get_filter_source_name(data->filter_source));
 		return frame;
 	}
 
 	GstBuffer *out_buffer = gst_sample_get_buffer(sample);
-	if (out_buffer)
+	if (out_buffer && GST_BUFFER_PTS(out_buffer) == frame->timestamp)
 	{
 		// Derive video info dynamically from sample caps if available
 		const GstVideoInfo *vinfo_ptr = &data->video_info;
@@ -423,6 +464,11 @@ struct obs_source_frame *gstreamer_filter_video(void *p, struct obs_source_frame
 			}
 			gst_video_frame_unmap(&out_vframe);
 		}
+	}
+	else
+	{
+		blog(LOG_DEBUG, "[obs-gstreamer-filter] %s: Discarding unmatched filter output; passing input through",
+			get_filter_source_name(data->filter_source));
 	}
 	gst_sample_unref(sample);
 
