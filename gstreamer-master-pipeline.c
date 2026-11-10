@@ -976,7 +976,15 @@ static GstFlowReturn video_new_sample_cb(GstAppSink *sink, gpointer user_data)
 		for (guint i = 0; i < subs->len; i++)
 		{
 			gst_pipeline_subscriber_t *sub = g_ptr_array_index(subs, i);
-			if (sub && sub->cb) sub->cb(buf, is_keyframe, sub->user_data);
+			if (!sub || !sub->cb) continue;
+			if (sub->waiting_for_keyframe)
+			{
+				if (!is_keyframe) continue;
+				sub->waiting_for_keyframe = false;
+				blog(LOG_INFO, "[obs-gstreamer-master] Subscriber '%s' received its first keyframe",
+					sub->name ? sub->name : "Subscriber");
+			}
+			sub->cb(buf, is_keyframe, sub->user_data);
 		}
 	}
 	g_mutex_unlock(&hub->subscriber_mutex);

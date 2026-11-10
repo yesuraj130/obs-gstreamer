@@ -85,7 +85,6 @@ struct gstreamer_webrtc {
 	gst_master_pipeline_t *master_pipe;
 	gst_pipeline_subscriber_t *sub;
 	bool active;
-	bool waiting_for_keyframe;
 	bool is_h265;
 
 	GstElement *pipe;
@@ -116,16 +115,6 @@ static void webrtc_frame_cb(GstBuffer *buf, bool is_keyframe, gpointer user_data
 	if (!webrtc->active || !webrtc->appsrc || g_hash_table_size(webrtc->sessions) == 0) {
 		g_mutex_unlock(&webrtc->sessions_lock);
 		return;
-	}
-
-	if (webrtc->waiting_for_keyframe) {
-		if (!is_keyframe) {
-			g_mutex_unlock(&webrtc->sessions_lock);
-			return;
-		}
-		webrtc->waiting_for_keyframe = false;
-		blog(LOG_INFO, "[obs-gstreamer-webrtc] Keyframe delivered to '%s', WebRTC viewer playback starting",
-			webrtc->name ? webrtc->name : "WebRTC");
 	}
 
 	GstBuffer *out_buf = gst_buffer_copy(buf);
@@ -890,9 +879,6 @@ static void whep_post(struct gstreamer_webrtc *webrtc, SoupServerMessage *msg)
 	g_hash_table_insert(webrtc->sessions, g_strdup(session->id), session);
 	guint new_count = g_hash_table_size(webrtc->sessions);
 	bool need_subscribe = (webrtc->master_pipe != NULL && webrtc->sub == NULL && webrtc->active);
-	if (need_subscribe) {
-		webrtc->waiting_for_keyframe = true;
-	}
 	gst_master_pipeline_t *master_pipe = webrtc->master_pipe;
 	g_mutex_unlock(&webrtc->sessions_lock);
 
@@ -1167,7 +1153,6 @@ struct gstreamer_webrtc *gst_webrtc_branch_start(gst_master_pipeline_t *master_p
 	webrtc->master_pipe = master_pipe;
 	webrtc->sub = NULL;
 	webrtc->active = true;
-	webrtc->waiting_for_keyframe = true;
 	webrtc->sessions = g_hash_table_new(g_str_hash, g_str_equal);
 	g_mutex_init(&webrtc->sessions_lock);
 
@@ -1546,4 +1531,3 @@ GstElement *gstreamer_webrtc_appsrc(struct gstreamer_webrtc *webrtc)
 }
 
 #endif /* ENABLE_WEBRTC */
-

@@ -33,7 +33,6 @@ struct gst_hub_branch {
 	char *mount_point;
 	bool active;
 	bool is_pipeline;
-	bool waiting_for_keyframe;
 	bool has_first_pts;
 	GstClockTime first_pts;
 	int client_count;
@@ -157,14 +156,13 @@ static void rtsp_frame_cb(GstBuffer *buf, bool is_keyframe, gpointer user_data)
 		return;
 	}
 
-	if (!branch->has_first_pts || branch->waiting_for_keyframe) {
+	if (!branch->has_first_pts) {
 		if (!is_keyframe) {
 			g_mutex_unlock(&branch->lock);
 			return;
 		}
 		branch->first_pts = GST_BUFFER_PTS_IS_VALID(buf) ? GST_BUFFER_PTS(buf) : 0;
 		branch->has_first_pts = true;
-		branch->waiting_for_keyframe = false;
 		blog(LOG_INFO, "[obs-gstreamer-rtspserver] Keyframe delivered to '%s' (first_pts=%" GST_TIME_FORMAT "), client playback starting",
 			branch->name ? branch->name : "branch", GST_TIME_ARGS(branch->first_pts));
 	}
@@ -453,7 +451,6 @@ struct gst_hub_branch *gst_custom_branch_start(gst_master_pipeline_t *pipeline,
 	branch->pipeline = pipeline;
 	branch->pipe = pipe;
 	branch->appsrc = appsrc;
-	branch->waiting_for_keyframe = true;
 	branch->active = true;
 	g_mutex_init(&branch->lock);
 
@@ -618,7 +615,6 @@ static void media_configure_cb(GstRTSPMediaFactory *factory, GstRTSPMedia *media
 	}
 
 	if (branch->client_count == 1) {
-		branch->waiting_for_keyframe = true;
 		branch->has_first_pts = false;
 	}
 
