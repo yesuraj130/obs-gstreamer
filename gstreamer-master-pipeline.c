@@ -2108,7 +2108,33 @@ gst_master_pipeline_t *gst_master_pipeline_create(const char *custom_master_pipe
 
 	if (state_ret == GST_STATE_CHANGE_FAILURE)
 	{
-		blog(LOG_ERROR, "[obs-gstreamer-master] Failed to initialize master pipeline");
+		GstBus *bus = (hub && hub->pipe) ? gst_element_get_bus(hub->pipe) : NULL;
+		if (bus)
+		{
+			GstMessage *msg = gst_bus_pop_filtered(bus, GST_MESSAGE_ERROR);
+			if (msg)
+			{
+				GError *err = NULL;
+				gchar *debug_info = NULL;
+				gst_message_parse_error(msg, &err, &debug_info);
+				blog(LOG_ERROR, "[obs-gstreamer-master] Failed to initialize master pipeline from element '%s': %s (debug: %s)",
+					GST_ELEMENT_NAME(GST_MESSAGE_SRC(msg)),
+					err ? err->message : "State change failure",
+					debug_info ? debug_info : "none");
+				if (err) g_error_free(err);
+				g_free(debug_info);
+				gst_message_unref(msg);
+			}
+			else
+			{
+				blog(LOG_ERROR, "[obs-gstreamer-master] Failed to initialize master pipeline (state change failure)");
+			}
+			gst_object_unref(bus);
+		}
+		else
+		{
+			blog(LOG_ERROR, "[obs-gstreamer-master] Failed to initialize master pipeline");
+		}
 		gst_master_pipeline_destroy(hub);
 		return NULL;
 	}

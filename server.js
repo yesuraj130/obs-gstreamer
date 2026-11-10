@@ -87,6 +87,8 @@ const PLAYIT_CONFIG_PATH = '/app/applet/playit.toml';
 const PLAYIT_BIN = '/usr/local/bin/playit';
 const PLAYIT_CLI_BIN = '/usr/local/bin/playit-cli';
 
+const TUNNEL_CACHE_FILE = '/app/applet/.vnc_tunnel_cache.json';
+
 let tcpTunnelInfo = {
   host: '',
   port: '',
@@ -94,6 +96,8 @@ let tcpTunnelInfo = {
   status: 'connecting',
   provider: 'pinggy',
   claimUrl: '',
+  tailscaleIp: '',
+  isReused: false,
   lastUpdated: null
 };
 
@@ -102,37 +106,120 @@ let playitDaemon = null;
 let playitSetupProc = null;
 let playitPollTimer = null;
 
-function startPinggyTunnel() {
-  if (pinggyProcess) {
-    try { pinggyProcess.kill(); } catch (e) {}
-    pinggyProcess = null;
+function loadTunnelCache() {
+  try {
+    if (fs.existsSync(TUNNEL_CACHE_FILE)) {
+      const data = JSON.parse(fs.readFileSync(TUNNEL_CACHE_FILE, 'utf8'));
+      if (data.tcpTunnelInfo && data.tcpTunnelInfo.full) {
+        tcpTunnelInfo = { ...tcpTunnelInfo, ...data.tcpTunnelInfo, isReused: true };
+      }
+      if (data.webrtcHttpTunnel && data.webrtcHttpTunnel.url) {
+        webrtcHttpTunnel = { ...webrtcHttpTunnel, ...data.webrtcHttpTunnel, isReused: true };
+      }
+    }
+  } catch (e) {
+    console.error('Failed to load tunnel cache:', e.message);
   }
-  // Only run Pinggy if Playit is not already active
-  if (tcpTunnelInfo.provider === 'playit' && tcpTunnelInfo.status === 'online') {
+}
+
+function saveTunnelCache() {
+  try {
+    fs.writeFileSync(TUNNEL_CACHE_FILE, JSON.stringify({
+      tcpTunnelInfo,
+      webrtcHttpTunnel,
+      savedAt: new Date().toISOString()
+    }, null, 2));
+  } catch (e) {
+    console.error('Failed to save tunnel cache:', e.message);
+  }
+}
+
+function updateTailscaleIp() {
+  exec('tailscale ip -4 2>/dev/null', (err, stdout) => {
+    const ip = (stdout || '').trim();
+    if (ip) {
+      tcpTunnelInfo.tailscaleIp = `${ip}:5901`;
+      saveTunnelCache();
+    }
+  });
+}
+
+function startPinggyTunnel(forceReset = false) {
+  loadTunnelCache();
+  updateTailscaleIp();
+
+  // If Playit is active and not forcing reset, stay on Playit
+  if (tcpTunnelInfo.provider === 'playit' && tcpTunnelInfo.status === 'online' && !forceReset) {
     return;
   }
 
-  // Check if ssh binary is installed before attempting to spawn
+  // Check if an SSH Pinggy tunnel is already running in background
+  if (!forceReset) {
+    exec('pgrep -f "ssh.*tcp@a\.pinggy\.io" >/dev/null && echo "1" || echo "0"', (err, stdout) => {
+      const isRunning = stdout && stdout.trim() === '1';
+      if (isRunning && fs.existsSync('/tmp/pinggy_vnc.log')) {
+        const logContent = fs.readFileSync('/tmp/pinggy_vnc.log', 'utf8');
+        const match = logContent.match(/tcp:\/\/([^:\s]+):(\d+)/);
+        if (match) {
+          tcpTunnelInfo.host = match[1];
+          tcpTunnelInfo.port = match[2];
+          tcpTunnelInfo.full = `${match[1]}:${match[2]}`;
+          tcpTunnelInfo.status = 'online';
+          tcpTunnelInfo.provider = 'pinggy';
+          tcpTunnelInfo.isReused = true;
+          tcpTunnelInfo.lastUpdated = new Date().toISOString();
+          saveTunnelCache();
+          addLog(`Reusing active persistent VNC TCP Tunnel (Pinggy): ${tcpTunnelInfo.full}`);
+          return;
+        }
+      }
+      if (isRunning && tcpTunnelInfo.full && tcpTunnelInfo.status === 'online') {
+        tcpTunnelInfo.isReused = true;
+        addLog(`Reusing cached persistent VNC TCP Tunnel (Pinggy): ${tcpTunnelInfo.full}`);
+        return;
+      }
+
+      spawnNewPinggyTunnel();
+    });
+  } else {
+    exec('pkill -9 -f "ssh.*tcp@a\.pinggy\.io" 2>/dev/null || true', () => {
+      if (pinggyProcess) {
+        try { pinggyProcess.kill(); } catch (e) {}
+        pinggyProcess = null;
+      }
+      spawnNewPinggyTunnel();
+    });
+  }
+}
+
+function spawnNewPinggyTunnel() {
   exec('which ssh >/dev/null 2>&1 && echo "1" || echo "0"', (err, stdout) => {
     if (!stdout || stdout.trim() !== '1') {
       tcpTunnelInfo.status = 'offline';
       return;
     }
 
-    addLog('Starting Pinggy TCP tunnel for temporary VNC access...');
+    addLog('Establishing persistent Pinggy TCP tunnel for VNC access...');
     try {
-      const proc = spawn('ssh', [
+      fs.writeFileSync('/tmp/pinggy_vnc.log', '');
+
+      const proc = spawn('setsid', [
+        'ssh',
         '-p', '443',
         '-o', 'StrictHostKeyChecking=no',
         '-o', 'ServerAliveInterval=30',
         '-o', 'ServerAliveCountMax=3',
         '-R', '0:localhost:5901',
         'tcp@a.pinggy.io'
-      ]);
+      ], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        detached: true
+      });
       pinggyProcess = proc;
 
       const parseOutput = (chunk) => {
         const text = chunk.toString();
+        fs.appendFileSync('/tmp/pinggy_vnc.log', text);
         const match = text.match(/tcp:\/\/([^:\s]+):(\d+)/);
         if (match && tcpTunnelInfo.provider !== 'playit') {
           tcpTunnelInfo.host = match[1];
@@ -140,8 +227,10 @@ function startPinggyTunnel() {
           tcpTunnelInfo.full = `${match[1]}:${match[2]}`;
           tcpTunnelInfo.status = 'online';
           tcpTunnelInfo.provider = 'pinggy';
+          tcpTunnelInfo.isReused = false;
           tcpTunnelInfo.lastUpdated = new Date().toISOString();
-          addLog(`Public VNC TCP Tunnel (Pinggy) online: ${tcpTunnelInfo.full}`);
+          saveTunnelCache();
+          addLog(`Public VNC TCP Tunnel (Pinggy) established: ${tcpTunnelInfo.full}`);
         }
       };
 
@@ -151,17 +240,23 @@ function startPinggyTunnel() {
       proc.on('close', () => {
         pinggyProcess = null;
         if (tcpTunnelInfo.provider !== 'playit') {
-          tcpTunnelInfo.status = 'offline';
-          setTimeout(startPinggyTunnel, 10000);
+          exec('pgrep -f "ssh.*tcp@a\.pinggy\.io" >/dev/null && echo "1" || echo "0"', (err2, out2) => {
+            if (!out2 || out2.trim() !== '1') {
+              tcpTunnelInfo.status = 'offline';
+              setTimeout(() => startPinggyTunnel(false), 10000);
+            }
+          });
         }
       });
 
-      proc.on('error', (err) => {
+      proc.on('error', () => {
         pinggyProcess = null;
         if (tcpTunnelInfo.provider !== 'playit') {
           tcpTunnelInfo.status = 'offline';
         }
       });
+
+      proc.unref();
     } catch (e) {
       addLog(`Pinggy spawn error: ${e.message}`);
     }
@@ -194,10 +289,8 @@ function startPlayit() {
     });
 
     if (hasConfig) {
-      // Configuration present -> agent claimed, poll assigned domain & port
       pollPlayitTunnel();
     } else {
-      // Configuration missing -> run setup if playit-cli is installed
       if (!playitSetupProc && fs.existsSync(PLAYIT_CLI_BIN)) {
         addLog('Starting Playit setup to generate permanent claim URL...');
         try {
@@ -220,7 +313,7 @@ function startPlayit() {
             addLog(`Playit setup error: ${err.message}`);
           });
 
-          playitSetupProc.on('close', (code) => {
+          playitSetupProc.on('close', () => {
             playitSetupProc = null;
             if (fs.existsSync(PLAYIT_CONFIG_PATH) && fs.statSync(PLAYIT_CONFIG_PATH).size > 10) {
               addLog('Playit agent successfully claimed! Loading static tunnel...');
@@ -248,7 +341,6 @@ function pollPlayitTunnel() {
 
     exec('timeout 3 /usr/local/bin/playit-cli attach --stdout 2>/dev/null || cat /app/applet/playit.log 2>/dev/null', (err, stdout) => {
       if (!stdout) return;
-      // Search for playit public endpoints: *.gl.joinmc.link:PORT, *.auto.playit.gg:PORT, *.ply.gg:PORT
       const match = stdout.match(/127\.0\.0\.1:5901\s*=>\s*([a-zA-Z0-9_\-\.]+\.[a-zA-Z]{2,}):(\d+)/i) ||
                     stdout.match(/([a-zA-Z0-9_\-]+\.(?:gl\.joinmc\.link|auto\.playit\.gg|craft\.ply\.gg|at\.ply\.gg|playit\.gg)):(\d+)/i);
       if (match) {
@@ -261,9 +353,10 @@ function pollPlayitTunnel() {
           status: 'online',
           provider: 'playit',
           claimUrl: '',
+          isReused: true,
           lastUpdated: new Date().toISOString()
         };
-        // Safely kill temporary Pinggy process once permanent Playit is live
+        saveTunnelCache();
         if (pinggyProcess) {
           try { pinggyProcess.kill(); } catch (e) {}
           pinggyProcess = null;
@@ -307,55 +400,106 @@ function ensureStandaloneWebrtcProxy() {
 
 let webrtcHttpTunnel = {
   url: '',
-  status: 'connecting'
+  status: 'connecting',
+  isReused: false
 };
 let webrtcHttpProc = null;
 
-function startWebrtcHttpTunnel() {
+function startWebrtcHttpTunnel(forceReset = false) {
   ensureStandaloneWebrtcProxy();
-  if (webrtcHttpProc) {
-    try { webrtcHttpProc.kill(); } catch (e) {}
-    webrtcHttpProc = null;
+
+  if (!forceReset) {
+    exec('pgrep -f "ssh.*STANDALONE_WEBRTC_PORT.*a\.pinggy\.io" >/dev/null && echo "1" || echo "0"', (err, stdout) => {
+      const isRunning = stdout && stdout.trim() === '1';
+      if (isRunning && fs.existsSync('/tmp/pinggy_webrtc.log')) {
+        const logContent = fs.readFileSync('/tmp/pinggy_webrtc.log', 'utf8');
+        const match = logContent.match(/https:\/\/([a-zA-Z0-9_\-]+\.(?:free\.pinggy\.link|run\.pinggy-free\.link|a\.free\.pinggy\.link|pinggy\.link))/i);
+        if (match) {
+          webrtcHttpTunnel.url = `https://${match[1]}`;
+          webrtcHttpTunnel.status = 'online';
+          webrtcHttpTunnel.isReused = true;
+          saveTunnelCache();
+          addLog(`Reusing active persistent Public Standalone WebRTC Player URL: ${webrtcHttpTunnel.url}`);
+          return;
+        }
+      }
+      if (isRunning && webrtcHttpTunnel.url && webrtcHttpTunnel.status === 'online') {
+        webrtcHttpTunnel.isReused = true;
+        addLog(`Reusing cached Public Standalone WebRTC Player URL: ${webrtcHttpTunnel.url}`);
+        return;
+      }
+
+      spawnNewWebrtcHttpTunnel();
+    });
+  } else {
+    exec('pkill -9 -f "ssh.*STANDALONE_WEBRTC_PORT.*a\.pinggy\.io" 2>/dev/null || true', () => {
+      if (webrtcHttpProc) {
+        try { webrtcHttpProc.kill(); } catch (e) {}
+        webrtcHttpProc = null;
+      }
+      spawnNewWebrtcHttpTunnel();
+    });
   }
+}
+
+function spawnNewWebrtcHttpTunnel() {
   exec('which ssh >/dev/null 2>&1 && echo "1" || echo "0"', (err, stdout) => {
     if (!stdout || stdout.trim() !== '1') return;
     try {
-      const proc = spawn('ssh', [
+      fs.writeFileSync('/tmp/pinggy_webrtc.log', '');
+
+      const proc = spawn('setsid', [
+        'ssh',
         '-p', '443',
         '-o', 'StrictHostKeyChecking=no',
         '-o', 'ServerAliveInterval=30',
         '-o', 'ServerAliveCountMax=3',
         '-R', `0:localhost:${STANDALONE_WEBRTC_PORT}`,
         'a.pinggy.io'
-      ]);
+      ], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        detached: true
+      });
       webrtcHttpProc = proc;
+
       const parseOut = (chunk) => {
         const text = chunk.toString();
+        fs.appendFileSync('/tmp/pinggy_webrtc.log', text);
         const match = text.match(/https:\/\/([a-zA-Z0-9_\-]+\.(?:free\.pinggy\.link|run\.pinggy-free\.link|a\.free\.pinggy\.link|pinggy\.link))/i);
         if (match && !webrtcHttpTunnel.url) {
           webrtcHttpTunnel.url = `https://${match[1]}`;
           webrtcHttpTunnel.status = 'online';
+          webrtcHttpTunnel.isReused = false;
+          saveTunnelCache();
           addLog(`Public Standalone WebRTC Player URL online: ${webrtcHttpTunnel.url}`);
         }
       };
+
       proc.stdout.on('data', parseOut);
       proc.stderr.on('data', parseOut);
+
       proc.on('close', () => {
         webrtcHttpProc = null;
-        webrtcHttpTunnel.url = '';
-        webrtcHttpTunnel.status = 'offline';
-        setTimeout(startWebrtcHttpTunnel, 10000);
+        exec('pgrep -f "ssh.*STANDALONE_WEBRTC_PORT.*a\.pinggy\.io" >/dev/null && echo "1" || echo "0"', (err2, out2) => {
+          if (!out2 || out2.trim() !== '1') {
+            webrtcHttpTunnel.url = '';
+            webrtcHttpTunnel.status = 'offline';
+            setTimeout(() => startWebrtcHttpTunnel(false), 10000);
+          }
+        });
       });
+
       proc.on('error', () => {});
+      proc.unref();
     } catch (e) {}
   });
 }
 
-
-function startTCPTunnel() {
-  startPinggyTunnel();
+function startTCPTunnel(forceReset = false) {
+  loadTunnelCache();
+  startPinggyTunnel(forceReset);
   startPlayit();
-  startWebrtcHttpTunnel();
+  startWebrtcHttpTunnel(forceReset);
 }
 
 // Start public tunnels on server init
@@ -592,6 +736,8 @@ function restartFullPC(callback) {
       cat << 'WEOF' > /usr/local/bin/obs32-wrapper
 #!/bin/sh
 J="/opt/obs-studio-32/AppDir/.junest"
+export GST_PLUGIN_PATH="/usr/lib/x86_64-linux-gnu/gstreamer-1.0:$J/usr/lib/gstreamer-1.0"
+export GST_PLUGIN_SYSTEM_PATH="/usr/lib/x86_64-linux-gnu/gstreamer-1.0:$J/usr/lib/gstreamer-1.0"
 if [ -x "$J/usr/bin/obs" ]; then
   export PYTHONHOME="$J/usr"
   export QT_PLUGIN_PATH="$J/usr/lib/qt6/plugins:$J/usr/lib/qt/plugins"
@@ -599,7 +745,7 @@ if [ -x "$J/usr/bin/obs" ]; then
   export OBS_PLUGINS_DATA_PATH="$J/usr/share/obs/obs-plugins"
   export LIBGL_DRIVERS_PATH="/usr/lib/x86_64-linux-gnu/dri"
   exec "$J/usr/lib/ld-linux-x86-64.so.2" \
-    --library-path "/usr/local/lib/x86_64-linux-gnu:/usr/local/lib:$J/usr/lib:$J/usr/lib/libproxy:$J/usr/lib/pulseaudio:$J/usr/lib/obs-scripting:/usr/lib/x86_64-linux-gnu" \
+    --library-path "/usr/local/lib/x86_64-linux-gnu:/usr/local/lib:$J/usr/lib:$J/usr/lib/gstreamer-1.0:$J/usr/lib/libproxy:$J/usr/lib/pulseaudio:$J/usr/lib/obs-scripting:/usr/lib/x86_64-linux-gnu" \
     "$J/usr/bin/obs" "$@"
 else
   exec /opt/obs-studio-32/AppDir/AppRun "$@"
@@ -934,6 +1080,31 @@ const server = http.createServer((req, res) => {
         message: err ? err.message : 'Full PC restart completed'
       }));
     });
+    return;
+  }
+
+  // API Reset VNC IP & Tunnels trigger (only when explicitly requested)
+  if (req.url === '/api/vnc/reset-ip' && req.method === 'POST') {
+    addLog('Resetting VNC IP & generating fresh tunnels on explicit user request...');
+    try {
+      if (fs.existsSync(TUNNEL_CACHE_FILE)) {
+        fs.unlinkSync(TUNNEL_CACHE_FILE);
+      }
+    } catch (e) {}
+    tcpTunnelInfo.full = '';
+    tcpTunnelInfo.status = 'connecting';
+    tcpTunnelInfo.isReused = false;
+    webrtcHttpTunnel.url = '';
+    webrtcHttpTunnel.status = 'connecting';
+    webrtcHttpTunnel.isReused = false;
+
+    startTCPTunnel(true);
+
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      success: true,
+      message: 'VNC IP reset initiated. Fresh tunnel being established.'
+    }));
     return;
   }
 

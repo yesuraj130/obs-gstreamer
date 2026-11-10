@@ -384,6 +384,25 @@
     });
   }
 
+  var btnResetVncIp = document.getElementById('btn-reset-vnc-ip');
+  if (btnResetVncIp) {
+    btnResetVncIp.addEventListener('click', function () {
+      if (confirm('Are you sure you want to generate a new VNC IP? This will reset the public tunnel.')) {
+        if (externalVncAddr) externalVncAddr.textContent = 'Resetting VNC IP...';
+        if (externalVncDot) externalVncDot.className = 'w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse';
+        fetch('/api/vnc/reset-ip', { method: 'POST' })
+          .then(function (res) { return res.json(); })
+          .then(function (data) {
+            log('VNC IP reset requested. Generating new tunnel...', 'info');
+            setTimeout(checkVncStatus, 2000);
+          })
+          .catch(function (err) {
+            log('Reset VNC IP error: ' + err.message, 'error');
+          });
+      }
+    });
+  }
+
   // VNC & OBS Health Check
   function checkVncStatus() {
     fetch('/api/vnc/status')
@@ -408,8 +427,11 @@
 
         if (externalVncAddr && data && data.tcpTunnel) {
           if (data.tcpTunnel.status === 'online' && data.tcpTunnel.full) {
-            var isStatic = data.tcpTunnel.provider === 'playit';
-            externalVncAddr.textContent = data.tcpTunnel.full + (isStatic ? ' (Static)' : '');
+            var tag = data.tcpTunnel.provider === 'playit' ? ' (Static)' : (data.tcpTunnel.isReused ? ' (Reused)' : '');
+            externalVncAddr.textContent = data.tcpTunnel.full + tag;
+            externalVncDot.className = 'w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse';
+          } else if (data.tcpTunnel.tailscaleIp) {
+            externalVncAddr.textContent = data.tcpTunnel.tailscaleIp + ' (Tailscale)';
             externalVncDot.className = 'w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse';
           } else if (data.tcpTunnel.status === 'connecting') {
             externalVncAddr.textContent = 'Exposing public port...';
