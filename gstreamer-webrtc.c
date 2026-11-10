@@ -69,6 +69,7 @@ struct whep_session {
 	GstPad *tee_pad;
 	GstPad *sinkpad;
 	struct packet_counter rtp_counter;
+	gulong rtp_probe_id;
 	SoupServerMessage *pending_msg;
 	guint timeout_id;
 	bool replied;
@@ -479,7 +480,17 @@ static void remove_session_locked(struct gstreamer_webrtc *webrtc, struct whep_s
 		g_signal_handlers_disconnect_by_data(session->webrtcbin, webrtc);
 	}
 
-	// 2. Unlink and release the tee request pad first so live data stops flowing into the queue
+	// 2. Remove the queue probe before releasing its pad.
+	if (session->rtp_probe_id && session->queue) {
+		GstPad *queue_src = gst_element_get_static_pad(session->queue, "src");
+		if (queue_src) {
+			gst_pad_remove_probe(queue_src, session->rtp_probe_id);
+			gst_object_unref(queue_src);
+		}
+		session->rtp_probe_id = 0;
+	}
+
+	// 3. Unlink and release the tee request pad first so live data stops flowing into the queue
 	if (session->tee_pad) {
 		GstPad *queue_sink = session->queue ? gst_element_get_static_pad(session->queue, "sink") : NULL;
 		if (queue_sink) {
@@ -491,7 +502,7 @@ static void remove_session_locked(struct gstreamer_webrtc *webrtc, struct whep_s
 		session->tee_pad = NULL;
 	}
 
-	// 3. Unlink queue from webrtcbin and release webrtcbin sink pad
+	// 4. Unlink queue from webrtcbin and release webrtcbin sink pad
 	if (session->sinkpad) {
 		GstPad *queue_src = session->queue ? gst_element_get_static_pad(session->queue, "src") : NULL;
 		if (queue_src) {
@@ -503,7 +514,7 @@ static void remove_session_locked(struct gstreamer_webrtc *webrtc, struct whep_s
 		session->sinkpad = NULL;
 	}
 
-	// 4. Remove from bin and transition to NULL on a helper thread so the GLib main loop / HTTP server never blocks
+	// 5. Remove from bin and transition to NULL on a helper thread so the GLib main loop / HTTP server never blocks
 	struct cleanup_elements_ctx *c = g_new0(struct cleanup_elements_ctx, 1);
 	if (session->queue) {
 		c->queue = gst_object_ref(session->queue);
@@ -521,6 +532,60 @@ static void remove_session_locked(struct gstreamer_webrtc *webrtc, struct whep_s
 
 	blog(LOG_INFO, "[obs-gstreamer] WebRTC session %s removed", session->id);
 	g_hash_table_steal(webrtc->sessions, session->id);
+	session_free(session);
+}
+
+static void discard_unregistered_session(struct gstreamer_webrtc *webrtc,
+	struct whep_session *session)
+{
+	if (session->rtp_probe_id && session->queue) {
+		GstPad *queue_src = gst_element_get_static_pad(session->queue, "src");
+		if (queue_src) {
+			gst_pad_remove_probe(queue_src, session->rtp_probe_id);
+			gst_object_unref(queue_src);
+		}
+		session->rtp_probe_id = 0;
+	}
+
+	if (session->tee_pad) {
+		GstPad *queue_sink = session->queue
+			? gst_element_get_static_pad(session->queue, "sink") : NULL;
+		if (queue_sink) {
+			gst_pad_unlink(session->tee_pad, queue_sink);
+			gst_object_unref(queue_sink);
+		}
+		if (webrtc->tee)
+			gst_element_release_request_pad(webrtc->tee, session->tee_pad);
+		gst_object_unref(session->tee_pad);
+		session->tee_pad = NULL;
+	}
+
+	if (session->sinkpad) {
+		GstPad *queue_src = session->queue
+			? gst_element_get_static_pad(session->queue, "src") : NULL;
+		if (queue_src) {
+			gst_pad_unlink(queue_src, session->sinkpad);
+			gst_object_unref(queue_src);
+		}
+		if (session->webrtcbin)
+			gst_element_release_request_pad(session->webrtcbin, session->sinkpad);
+		gst_object_unref(session->sinkpad);
+		session->sinkpad = NULL;
+	}
+
+	GstElement **elements[] = { &session->queue, &session->webrtcbin };
+	for (guint i = 0; i < G_N_ELEMENTS(elements); i++) {
+		GstElement *element = *elements[i];
+		if (!element)
+			continue;
+		gst_element_set_state(element, GST_STATE_NULL);
+		if (webrtc->pipe && GST_OBJECT_PARENT(element) == GST_OBJECT(webrtc->pipe))
+			gst_bin_remove(GST_BIN(webrtc->pipe), element);
+		else
+			gst_object_unref(element);
+		*elements[i] = NULL;
+	}
+
 	session_free(session);
 }
 
@@ -796,8 +861,7 @@ static void whep_post(struct gstreamer_webrtc *webrtc, SoupServerMessage *msg)
 	session->webrtcbin = gst_element_factory_make("webrtcbin", session->id);
 	if (!session->queue || !session->webrtcbin) {
 		blog(LOG_ERROR, "[obs-gstreamer] WHEP POST: failed to create queue/webrtcbin -> 500");
-		g_free(session->id);
-		g_free(session);
+		discard_unregistered_session(webrtc, session);
 		soup_server_message_set_status(msg, SOUP_STATUS_INTERNAL_SERVER_ERROR, NULL);
 		return;
 	}
@@ -827,7 +891,33 @@ static void whep_post(struct gstreamer_webrtc *webrtc, SoupServerMessage *msg)
 	gst_bin_add_many(GST_BIN(webrtc->pipe), session->queue,
 		session->webrtcbin, NULL);
 
+	gchar *offer_text = g_strndup(body->data, size);
+	GstSDPMessage *offer_sdp = NULL;
+	GstSDPResult sdp_result = gst_sdp_message_new_from_text(offer_text, &offer_sdp);
+	g_free(offer_text);
+	if (sdp_result != GST_SDP_OK || !offer_sdp) {
+		blog(LOG_WARNING, "[obs-gstreamer] WHEP POST: invalid SDP offer -> 400");
+		discard_unregistered_session(webrtc, session);
+		soup_server_message_set_status(msg, SOUP_STATUS_BAD_REQUEST, NULL);
+		return;
+	}
+	GstWebRTCSessionDescription *offer =
+		gst_webrtc_session_description_new(GST_WEBRTC_SDP_TYPE_OFFER, offer_sdp);
+	if (!offer) {
+		gst_sdp_message_free(offer_sdp);
+		discard_unregistered_session(webrtc, session);
+		soup_server_message_set_status(msg, SOUP_STATUS_INTERNAL_SERVER_ERROR, NULL);
+		return;
+	}
+
 	session->sinkpad = gst_element_request_pad_simple(session->webrtcbin, "sink_%u");
+	if (!session->sinkpad) {
+		blog(LOG_ERROR, "[obs-gstreamer] WHEP POST: failed to request webrtcbin sink pad -> 500");
+		gst_webrtc_session_description_free(offer);
+		discard_unregistered_session(webrtc, session);
+		soup_server_message_set_status(msg, SOUP_STATUS_INTERNAL_SERVER_ERROR, NULL);
+		return;
+	}
 	GstWebRTCRTPTransceiver *transceiver = NULL;
 	g_object_get(session->sinkpad, "transceiver", &transceiver, NULL);
 	if (transceiver) {
@@ -842,38 +932,44 @@ static void whep_post(struct gstreamer_webrtc *webrtc, SoupServerMessage *msg)
 		gst_object_unref(transceiver);
 	}
 	GstPad *queue_src = gst_element_get_static_pad(session->queue, "src");
-	if (gst_pad_link(queue_src, session->sinkpad) != GST_PAD_LINK_OK) {
-		gst_object_unref(queue_src);
+	if (!queue_src || gst_pad_link(queue_src, session->sinkpad) != GST_PAD_LINK_OK) {
+		if (queue_src) gst_object_unref(queue_src);
 		blog(LOG_ERROR, "[obs-gstreamer] WHEP POST: failed to link viewer RTP branch -> 500");
-		g_free(session->id);
-		g_free(session);
+		gst_webrtc_session_description_free(offer);
+		discard_unregistered_session(webrtc, session);
 		soup_server_message_set_status(msg, SOUP_STATUS_INTERNAL_SERVER_ERROR, NULL);
 		return;
 	}
 	gst_object_unref(queue_src);
 	session->tee_pad = gst_element_request_pad_simple(webrtc->tee, "src_%u");
 	GstPad *queue_sink = gst_element_get_static_pad(session->queue, "sink");
-	if (gst_pad_link(session->tee_pad, queue_sink) != GST_PAD_LINK_OK) {
-		gst_object_unref(queue_sink);
+	if (!session->tee_pad || !queue_sink ||
+	    gst_pad_link(session->tee_pad, queue_sink) != GST_PAD_LINK_OK) {
+		if (queue_sink) gst_object_unref(queue_sink);
 		blog(LOG_ERROR, "[obs-gstreamer] WHEP POST: failed to link tee -> viewer queue -> 500");
-		g_free(session->id);
-		g_free(session);
+		gst_webrtc_session_description_free(offer);
+		discard_unregistered_session(webrtc, session);
 		soup_server_message_set_status(msg, SOUP_STATUS_INTERNAL_SERVER_ERROR, NULL);
 		return;
 	}
 	gst_object_unref(queue_sink);
 	session->rtp_counter.label = session->id;
 	GstPad *branch_src = gst_element_get_static_pad(session->queue, "src");
-	gst_pad_add_probe(branch_src, GST_PAD_PROBE_TYPE_BUFFER, rtp_packet_probe,
-		&session->rtp_counter, NULL);
-	gst_object_unref(branch_src);
+	if (branch_src) {
+		session->rtp_probe_id = gst_pad_add_probe(branch_src, GST_PAD_PROBE_TYPE_BUFFER,
+			rtp_packet_probe, &session->rtp_counter, NULL);
+		gst_object_unref(branch_src);
+	}
 	blog(LOG_INFO, "[obs-gstreamer] WHEP POST %s: RTP branch linked before offer", session->id);
-	gst_element_sync_state_with_parent(session->queue);
-	gst_element_sync_state_with_parent(session->webrtcbin);
+	if (!gst_element_sync_state_with_parent(session->queue) ||
+	    !gst_element_sync_state_with_parent(session->webrtcbin)) {
+		blog(LOG_ERROR, "[obs-gstreamer] WHEP POST: failed to sync viewer branch -> 500");
+		gst_webrtc_session_description_free(offer);
+		discard_unregistered_session(webrtc, session);
+		soup_server_message_set_status(msg, SOUP_STATUS_INTERNAL_SERVER_ERROR, NULL);
+		return;
+	}
 	blog(LOG_INFO, "[obs-gstreamer] WHEP POST %s: branch synced before remote offer", session->id);
-
-	g_signal_connect(session->webrtcbin, "notify::connection-state",
-		G_CALLBACK(webrtcbin_connection_state_changed), webrtc);
 
 	g_mutex_lock(&webrtc->sessions_lock);
 	g_hash_table_insert(webrtc->sessions, g_strdup(session->id), session);
@@ -881,6 +977,9 @@ static void whep_post(struct gstreamer_webrtc *webrtc, SoupServerMessage *msg)
 	bool need_subscribe = (webrtc->master_pipe != NULL && webrtc->sub == NULL && webrtc->active);
 	gst_master_pipeline_t *master_pipe = webrtc->master_pipe;
 	g_mutex_unlock(&webrtc->sessions_lock);
+
+	g_signal_connect(session->webrtcbin, "notify::connection-state",
+		G_CALLBACK(webrtcbin_connection_state_changed), webrtc);
 
 	if (need_subscribe && master_pipe) {
 		blog(LOG_INFO, "[obs-gstreamer-webrtc] WebRTC viewer '%s' connected (viewers=%u): subscribing '%s' to master pipeline",
@@ -917,14 +1016,7 @@ static void whep_post(struct gstreamer_webrtc *webrtc, SoupServerMessage *msg)
 	// Negotiate: offer -> answer. Canonical WHEP answerer flow:
 	// set-remote-description -> request+link sink pad (elements in NULL)
 	// -> create-answer -> set-local-description -> wait ICE complete.
-	gchar *offer_text = g_strndup(body->data, size);
-	GstSDPMessage *offer_sdp = NULL;
-	gst_sdp_message_new_from_text(offer_text, &offer_sdp);
-	g_free(offer_text);
 	blog(LOG_INFO, "[obs-gstreamer] WHEP POST: offer parsed (%u bytes), starting negotiation", (guint)size);
-
-	GstWebRTCSessionDescription *offer =
-		gst_webrtc_session_description_new(GST_WEBRTC_SDP_TYPE_OFFER, offer_sdp);
 
 	struct answer_ctx *ctx = g_new0(struct answer_ctx, 1);
 	ctx->webrtc = webrtc;
