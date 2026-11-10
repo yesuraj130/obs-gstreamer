@@ -487,8 +487,8 @@ function rebuildPluginAndRestartOBS(callback) {
     fi
     mkdir -p /root/.config/obs-studio/plugins/obs-gstreamer/bin/64bit
     cp -f /app/applet/build/obs-gstreamer.so /root/.config/obs-studio/plugins/obs-gstreamer/bin/64bit/obs-gstreamer.so 2>/dev/null || true
-    cp -f /app/applet/build/obs-gstreamer.so /usr/lib/x86_64-linux-gnu/obs-plugins/obs-gstreamer.so 2>/dev/null || true
     rm -f /opt/obs-studio-32/AppDir/lib/obs-plugins/obs-gstreamer.so 2>/dev/null || true
+    rm -f /opt/obs-studio-32/AppDir/.junest/usr/lib/obs-plugins/obs-gstreamer.so 2>/dev/null || true
     sleep 0.5
     DISPLAY=:1 setsid obs --disable-shutdown-check >/tmp/obs.log 2>&1 < /dev/null &
     sleep 2.5
@@ -599,7 +599,7 @@ if [ -x "$J/usr/bin/obs" ]; then
   export OBS_PLUGINS_DATA_PATH="$J/usr/share/obs/obs-plugins"
   export LIBGL_DRIVERS_PATH="/usr/lib/x86_64-linux-gnu/dri"
   exec "$J/usr/lib/ld-linux-x86-64.so.2" \
-    --library-path "$J/usr/lib:$J/usr/lib/libproxy:$J/usr/lib/pulseaudio:$J/usr/lib/obs-scripting:/usr/lib/x86_64-linux-gnu" \
+    --library-path "/usr/local/lib/x86_64-linux-gnu:/usr/local/lib:$J/usr/lib:$J/usr/lib/libproxy:$J/usr/lib/pulseaudio:$J/usr/lib/obs-scripting:/usr/lib/x86_64-linux-gnu" \
     "$J/usr/bin/obs" "$@"
 else
   exec /opt/obs-studio-32/AppDir/AppRun "$@"
@@ -620,8 +620,8 @@ WEOF
 
     mkdir -p /root/.config/obs-studio/plugins/obs-gstreamer/bin/64bit
     cp -f /app/applet/build/obs-gstreamer.so /root/.config/obs-studio/plugins/obs-gstreamer/bin/64bit/obs-gstreamer.so 2>/dev/null || true
-    cp -f /app/applet/build/obs-gstreamer.so /usr/lib/x86_64-linux-gnu/obs-plugins/obs-gstreamer.so 2>/dev/null || true
     rm -f /opt/obs-studio-32/AppDir/lib/obs-plugins/obs-gstreamer.so 2>/dev/null || true
+    rm -f /opt/obs-studio-32/AppDir/.junest/usr/lib/obs-plugins/obs-gstreamer.so 2>/dev/null || true
 
     # 4. Configure Desktop shortcuts & VNC startup/passwords
     mkdir -p /root/Desktop
