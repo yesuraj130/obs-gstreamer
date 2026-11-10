@@ -103,6 +103,7 @@ version_c = custom_target(
 )
 
 sources = [
+  'gstreamer-helper.c',
   'gstreamer.c',
   'gstreamer-source.c',
   'gstreamer-encoder.c',

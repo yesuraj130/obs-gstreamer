@@ -19,6 +19,7 @@
  */
 
 #include "gstreamer-webrtc.h"
+#include "gstreamer-helper.h"
 #include <plugin-support.h>
 
 #ifndef ENABLE_WEBRTC
@@ -1288,20 +1289,7 @@ void gst_webrtc_branch_stop(struct gstreamer_webrtc *webrtc)
 struct gstreamer_webrtc *gstreamer_webrtc_create(obs_output_t *output, obs_data_t *settings,
 						 struct obs_video_info *ovi, char **error)
 {
-	const char *gst_format = NULL;
-	switch (ovi->output_format) {
-	case VIDEO_FORMAT_I420: gst_format = "I420"; break;
-	case VIDEO_FORMAT_NV12: gst_format = "NV12"; break;
-	case VIDEO_FORMAT_YVYU: gst_format = "YVYU"; break;
-	case VIDEO_FORMAT_YUY2: gst_format = "YUY2"; break;
-	case VIDEO_FORMAT_UYVY: gst_format = "UYVY"; break;
-	case VIDEO_FORMAT_I422: gst_format = "Y42B"; break;
-	case VIDEO_FORMAT_RGBA: gst_format = "RGBA"; break;
-	case VIDEO_FORMAT_BGRA: gst_format = "BGRA"; break;
-	case VIDEO_FORMAT_BGRX: gst_format = "BGRX"; break;
-	case VIDEO_FORMAT_I444: gst_format = "Y444"; break;
-	default: break;
-	}
+	const char *gst_format = obs_to_gst_video_format_str(ovi->output_format);
 
 	if (!gst_format) {
 		if (error)
@@ -1558,5 +1546,4 @@ GstElement *gstreamer_webrtc_appsrc(struct gstreamer_webrtc *webrtc)
 }
 
 #endif /* ENABLE_WEBRTC */
-
 

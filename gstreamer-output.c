@@ -57,34 +57,6 @@ struct gstreamer_output_data {
 	GMutex lock;
 };
 
-static const char *obs_video_format_to_gst_format(enum video_format format)
-{
-	switch (format) {
-	case VIDEO_FORMAT_I420:
-		return "I420";
-	case VIDEO_FORMAT_NV12:
-		return "NV12";
-	case VIDEO_FORMAT_YVYU:
-		return "YVYU";
-	case VIDEO_FORMAT_YUY2:
-		return "YUY2";
-	case VIDEO_FORMAT_UYVY:
-		return "UYVY";
-	case VIDEO_FORMAT_I422:
-		return "Y42B";
-	case VIDEO_FORMAT_RGBA:
-		return "RGBA";
-	case VIDEO_FORMAT_BGRA:
-		return "BGRA";
-	case VIDEO_FORMAT_BGRX:
-		return "BGRX";
-	case VIDEO_FORMAT_I444:
-		return "Y444";
-	default:
-		return NULL;
-	}
-}
-
 static gboolean bus_callback(GstBus *bus, GstMessage *message, gpointer user_data);
 
 static void client_closed_cb(GstRTSPClient *client, gpointer user_data)
@@ -348,13 +320,13 @@ bool gstreamer_output_start(void *p)
 	obs_get_video_info(&data->ovi);
 	data->rtsp_server = obs_data_get_bool(data->settings, "rtsp_server");
 	data->webrtc_output = obs_data_get_bool(data->settings, "webrtc_output");
-	const char *gst_format = obs_video_format_to_gst_format(data->ovi.output_format);
+	const char *gst_format = obs_to_gst_video_format_str(data->ovi.output_format);
 	if (!gst_format) {
 		blog(LOG_ERROR, "[obs-gstreamer] Unhandled video output format: %d", data->ovi.output_format);
 		return false;
 	}
 	gst_video_info_init(&data->raw_video_info);
-	GstVideoFormat raw_format = gst_video_format_from_string(gst_format);
+	GstVideoFormat raw_format = obs_to_gst_video_format(data->ovi.output_format);
 	if (raw_format == GST_VIDEO_FORMAT_UNKNOWN ||
 	    !gst_video_info_set_format(&data->raw_video_info, raw_format,
 		    data->ovi.output_width, data->ovi.output_height)) {
