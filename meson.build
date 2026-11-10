@@ -121,7 +121,7 @@ sources = [
 
 deps = [
   obs_dep,
-  dependency('gstreamer-1.0', version : '>=1.16.0'),
+  dependency('gstreamer-1.0', version : '>=1.28.0'),
   dependency('gstreamer-video-1.0'),
   dependency('gstreamer-audio-1.0'),
   dependency('gstreamer-app-1.0'),

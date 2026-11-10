@@ -452,11 +452,7 @@ static GstFlowReturn audio_new_sample(GstAppSink *appsink, gpointer user_data)
 /* --------------------------------------------------------------------------
  * Pipeline Creation & Launch
  * -------------------------------------------------------------------------- */
-#ifdef GST_VIDEO_FORMAT_I420_10LE
-	#define DEFAULT_INTERNAL_VIDEO_PIPELINE "videoconvert name=video ! video/x-raw, format={I420,NV12,BGRA,BGRx,RGBx,RGBA,YUY2,YVYU,UYVY,I420_10LE,P010_10LE,I420_12LE,Y444_12LE} ! appsink name=video_appsink"
-#else
-	#define DEFAULT_INTERNAL_VIDEO_PIPELINE "videoconvert name=video ! video/x-raw, format={I420,NV12,BGRA,BGRx,RGBx,RGBA,YUY2,YVYU,UYVY} ! appsink name=video_appsink"
-#endif
+#define DEFAULT_INTERNAL_VIDEO_PIPELINE "videoconvert name=video ! video/x-raw, format={I420,NV12,BGRA,BGRx,RGBx,RGBA,YUY2,YVYU,UYVY,I420_10LE,P010_10LE,I420_12LE,Y444_12LE} ! appsink name=video_appsink"
 
 #define DEFAULT_INTERNAL_AUDIO_PIPELINE "audioconvert name=audio ! audioresample ! audio/x-raw, format={U8,S16LE,S32LE,F32LE}, channels={1,2,3,4,5,6,8}, layout=interleaved ! appsink name=audio_appsink async=false"
 #define DEFAULT_INTERNAL_PIPELINE DEFAULT_INTERNAL_VIDEO_PIPELINE " " DEFAULT_INTERNAL_AUDIO_PIPELINE
