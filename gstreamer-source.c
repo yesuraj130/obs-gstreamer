@@ -195,9 +195,9 @@ static bool update_video_format_cache(struct gstreamer_source_data *data, GstCap
 	enum video_range_type range = VIDEO_RANGE_DEFAULT;
 	switch (v_info.colorimetry.range)
 	{
-		case GST_VIDEO_COLOR_RANGE_0_255: range = VIDEO_RANGE_FULL; data->cached_frame.full_range = true; break;
-		case GST_VIDEO_COLOR_RANGE_16_235: range = VIDEO_RANGE_PARTIAL; data->cached_frame.full_range = false; break;
-		default: data->cached_frame.full_range = false; break;
+		case GST_VIDEO_COLOR_RANGE_0_255: range = VIDEO_RANGE_FULL; break;
+		case GST_VIDEO_COLOR_RANGE_16_235: range = VIDEO_RANGE_PARTIAL; break;
+		default: break;
 	}
 
 	enum video_colorspace cs = VIDEO_CS_DEFAULT;
@@ -205,12 +205,35 @@ static bool update_video_format_cache(struct gstreamer_source_data *data, GstCap
 	{
 		case GST_VIDEO_COLOR_MATRIX_BT709: cs = VIDEO_CS_709; break;
 		case GST_VIDEO_COLOR_MATRIX_BT601: cs = VIDEO_CS_601; break;
+		case GST_VIDEO_COLOR_MATRIX_BT2020:
+			if (v_info.colorimetry.transfer == GST_VIDEO_TRANSFER_SMPTE2084)
+				cs = VIDEO_CS_2100_PQ;
+			else if (v_info.colorimetry.transfer == GST_VIDEO_TRANSFER_ARIB_STD_B67)
+				cs = VIDEO_CS_2100_HLG;
+			else {
+				cs = VIDEO_CS_709;
+				blog(LOG_WARNING, "[obs-gstreamer-source] BT.2020 SDR colorimetry has no direct OBS colorspace mapping; using BT.709 matrix");
+			}
+			break;
 		default: break;
+	}
+
+	data->cached_frame.trc = VIDEO_TRC_DEFAULT;
+	if (v_info.colorimetry.transfer == GST_VIDEO_TRANSFER_SRGB) {
+		data->cached_frame.trc = VIDEO_TRC_SRGB;
+		if (cs == VIDEO_CS_709)
+			cs = VIDEO_CS_SRGB;
+	} else if (v_info.colorimetry.transfer == GST_VIDEO_TRANSFER_SMPTE2084) {
+		data->cached_frame.trc = VIDEO_TRC_PQ;
+	} else if (v_info.colorimetry.transfer == GST_VIDEO_TRANSFER_ARIB_STD_B67) {
+		data->cached_frame.trc = VIDEO_TRC_HLG;
 	}
 
 	video_format_get_parameters(cs, range, data->cached_frame.color_matrix, data->cached_frame.color_range_min, data->cached_frame.color_range_max);
 
 	data->cached_frame.format = gst_to_obs_video_format(v_info.finfo->format);
+	data->cached_frame.full_range = range == VIDEO_RANGE_FULL ||
+		(range == VIDEO_RANGE_DEFAULT && !format_is_yuv(data->cached_frame.format));
 	if (data->cached_frame.format == VIDEO_FORMAT_NONE)
 	{
 		blog(LOG_ERROR, "[obs-gstreamer-source] Unknown video format: %s", v_info.finfo ? v_info.finfo->name : "unspecified");
