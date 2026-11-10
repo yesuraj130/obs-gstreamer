@@ -968,7 +968,8 @@ static GstFlowReturn video_new_sample_cb(GstAppSink *sink, gpointer user_data)
 			hub->stagesurf ? "allocated" : "NONE");
 	}
 
-	GPtrArray *subs = (GPtrArray *)g_atomic_pointer_get(&hub->subscribers_atomic);
+	g_mutex_lock(&hub->subscriber_mutex);
+	GPtrArray *subs = hub->subscribers;
 	if (subs)
 	{
 		for (guint i = 0; i < subs->len; i++)
@@ -977,6 +978,7 @@ static GstFlowReturn video_new_sample_cb(GstAppSink *sink, gpointer user_data)
 			if (sub && sub->cb) sub->cb(buf, is_keyframe, sub->user_data);
 		}
 	}
+	g_mutex_unlock(&hub->subscriber_mutex);
 
 	gst_sample_unref(sample);
 	return GST_FLOW_OK;
@@ -1708,22 +1710,15 @@ gst_pipeline_subscriber_t *gst_master_pipeline_subscribe(gst_master_pipeline_t *
 
 	g_mutex_lock(&hub->subscriber_mutex);
 
-	GPtrArray *old_subs = (GPtrArray *)hub->subscribers_atomic;
-	GPtrArray *new_subs = g_ptr_array_new();
-
-	if (old_subs)
+	GPtrArray *subs = hub->subscribers;
+	if (!subs)
 	{
-		for (guint i = 0; i < old_subs->len; i++)
-		{
-			g_ptr_array_add(new_subs, g_ptr_array_index(old_subs, i));
-		}
+		subs = g_ptr_array_new();
+		hub->subscribers = subs;
 	}
-	g_ptr_array_add(new_subs, sub);
-	g_atomic_pointer_set(&hub->subscribers_atomic, new_subs);
+	g_ptr_array_add(subs, sub);
 
 	g_mutex_unlock(&hub->subscriber_mutex);
-
-	if (old_subs) g_ptr_array_free(old_subs, TRUE);
 
 	blog(LOG_INFO, "[obs-gstreamer-master] Subscriber '%s' connected", sub->name);
 	update_active_destinations(hub, 1);
@@ -1744,27 +1739,30 @@ void gst_master_pipeline_unsubscribe(gst_master_pipeline_t *hub, gst_pipeline_su
 
 	g_mutex_lock(&hub->subscriber_mutex);
 
-	GPtrArray *old_subs = (GPtrArray *)hub->subscribers_atomic;
-	GPtrArray *new_subs = g_ptr_array_new();
-
-	if (old_subs)
+	GPtrArray *subs = hub->subscribers;
+	bool removed = false;
+	if (subs)
 	{
-		for (guint i = 0; i < old_subs->len; i++)
+		for (guint i = 0; i < subs->len; i++)
 		{
-			gst_pipeline_subscriber_t *existing = g_ptr_array_index(old_subs, i);
-			if (existing != sub) g_ptr_array_add(new_subs, existing);
+			if (g_ptr_array_index(subs, i) == sub)
+			{
+				g_ptr_array_remove_index(subs, i);
+				removed = true;
+				break;
+			}
 		}
 	}
-	g_atomic_pointer_set(&hub->subscribers_atomic, new_subs);
 
 	g_mutex_unlock(&hub->subscriber_mutex);
 
-	if (old_subs) g_ptr_array_free(old_subs, TRUE);
-
 	blog(LOG_INFO, "[obs-gstreamer-master] Subscriber '%s' disconnected", sub->name ? sub->name : "Subscriber");
-	bfree(sub->name);
-	bfree(sub);
-	update_active_destinations(hub, -1);
+	if (removed)
+	{
+		bfree(sub->name);
+		bfree(sub);
+		update_active_destinations(hub, -1);
+	}
 }
 
 void gst_master_pipeline_request_keyframe(gst_master_pipeline_t *hub)
@@ -2034,7 +2032,7 @@ void gst_master_pipeline_destroy(gst_master_pipeline_t *hub)
 	g_free(hub->colorimetry_str);
 	hub->colorimetry_str = NULL;
 
-	GPtrArray *subs = (GPtrArray *)hub->subscribers_atomic;
+	GPtrArray *subs = hub->subscribers;
 	if (subs)
 	{
 		for (guint i = 0; i < subs->len; i++)

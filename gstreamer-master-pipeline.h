@@ -107,7 +107,7 @@ struct gst_master_pipeline
 	uint64_t texture_drop_count;
 	uint64_t encoded_sample_count;
 
-	gpointer subscribers_atomic;
+	GPtrArray *subscribers;
 	GMutex subscriber_mutex;
 
 	gst_master_state_cb state_cb;
