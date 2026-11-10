@@ -95,9 +95,7 @@ GstVideoFormat obs_to_gst_video_format(enum video_format format)
 	case VIDEO_FORMAT_P010: return GST_VIDEO_FORMAT_P010_10LE;
 	case VIDEO_FORMAT_I210: return GST_VIDEO_FORMAT_I422_10LE;
 	case VIDEO_FORMAT_I412: return GST_VIDEO_FORMAT_Y444_12LE;
-#if LIBOBS_API_MAJOR_VER >= 30
 	case VIDEO_FORMAT_V210: return GST_VIDEO_FORMAT_v210;
-#endif
 	default: return GST_VIDEO_FORMAT_UNKNOWN;
 	}
 }
@@ -133,9 +131,7 @@ enum video_format gst_to_obs_video_format(GstVideoFormat format)
 	case GST_VIDEO_FORMAT_P010_10LE: return VIDEO_FORMAT_P010;
 	case GST_VIDEO_FORMAT_I422_10LE: return VIDEO_FORMAT_I210;
 	case GST_VIDEO_FORMAT_Y444_12LE: return VIDEO_FORMAT_I412;
-#if LIBOBS_API_MAJOR_VER >= 30
 	case GST_VIDEO_FORMAT_v210: return VIDEO_FORMAT_V210;
-#endif
 	default: return VIDEO_FORMAT_NONE;
 	}
 }

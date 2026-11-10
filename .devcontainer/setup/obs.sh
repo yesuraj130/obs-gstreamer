@@ -42,6 +42,11 @@ if [ -d /opt/obs-studio-32/AppDir/.junest/usr/lib ]; then
     sudo ldconfig
 fi
 
+# Ensure OBS 30/32 video formats (VIDEO_FORMAT_V210) are present in video-io.h
+if [ -f /usr/include/obs/media-io/video-io.h ] && ! grep -q "VIDEO_FORMAT_V210" /usr/include/obs/media-io/video-io.h; then
+    sudo sed -i 's/VIDEO_FORMAT_YA2L, \/\/ Little Endian/VIDEO_FORMAT_YA2L, \/\/ Little Endian\n\tVIDEO_FORMAT_V210,/' /usr/include/obs/media-io/video-io.h 2>/dev/null || true
+fi
+
 # Install Move Transition plugin (obs-move-transition by Exeldro)
 if [ ! -f /opt/obs-studio-32/AppDir/.junest/usr/lib/obs-plugins/move-transition.so ]; then
     echo "Installing Move Transition plugin..."
