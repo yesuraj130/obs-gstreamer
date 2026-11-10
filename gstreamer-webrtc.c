@@ -422,9 +422,10 @@ static void session_free(gpointer data)
 	}
 	answer_ctx_unref(session->answer_ctx);
 	session->answer_ctx = NULL;
-	if (session->webrtcbin && session->pending_msg) {
+	if (session->pending_msg) {
 		soup_server_message_set_status(session->pending_msg, SOUP_STATUS_INTERNAL_SERVER_ERROR, NULL);
-		compat_soup_server_message_unpause(session->webrtc ? session->webrtc->server : NULL, session->pending_msg);
+		compat_soup_server_message_unpause(session->webrtc ? session->webrtc->server : NULL,
+			session->pending_msg);
 		session->pending_msg = NULL;
 	}
 	g_free(session->id);
