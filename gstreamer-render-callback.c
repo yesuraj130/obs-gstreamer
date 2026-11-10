@@ -6,56 +6,6 @@
 #include <obs-module.h>
 #include <util/platform.h>
 
-#if defined(__GNUC__) && !defined(_WIN32)
-extern void obs_add_main_rendered_callback(void (*draw)(void *param), void *param) __attribute__((weak));
-extern void obs_remove_main_rendered_callback(void (*draw)(void *param), void *param) __attribute__((weak));
-#endif
-
-#ifdef _WIN32
-#include <windows.h>
-#endif
-
-typedef void (*obs_add_main_rendered_cb_fn)(void (*draw)(void *param), void *param);
-typedef void (*obs_remove_main_rendered_cb_fn)(void (*draw)(void *param), void *param);
-
-static obs_add_main_rendered_cb_fn get_obs_add_main_rendered_callback(void)
-{
-	static obs_add_main_rendered_cb_fn fn = NULL;
-	static bool resolved = false;
-	if (!resolved)
-	{
-#ifdef _WIN32
-		HMODULE hObs = GetModuleHandleW(L"obs.dll");
-		if (!hObs) hObs = GetModuleHandleA("obs.dll");
-		if (hObs)
-			fn = (obs_add_main_rendered_cb_fn)GetProcAddress(hObs, "obs_add_main_rendered_callback");
-#elif defined(__GNUC__)
-		fn = obs_add_main_rendered_callback;
-#endif
-		resolved = true;
-	}
-	return fn;
-}
-
-static obs_remove_main_rendered_cb_fn get_obs_remove_main_rendered_callback(void)
-{
-	static obs_remove_main_rendered_cb_fn fn = NULL;
-	static bool resolved = false;
-	if (!resolved)
-	{
-#ifdef _WIN32
-		HMODULE hObs = GetModuleHandleW(L"obs.dll");
-		if (!hObs) hObs = GetModuleHandleA("obs.dll");
-		if (hObs)
-			fn = (obs_remove_main_rendered_cb_fn)GetProcAddress(hObs, "obs_remove_main_rendered_callback");
-#elif defined(__GNUC__)
-		fn = obs_remove_main_rendered_callback;
-#endif
-		resolved = true;
-	}
-	return fn;
-}
-
 struct gst_render_callback
 {
 	gst_master_pipeline_t *pipeline;
@@ -152,7 +102,7 @@ static void pipeline_state_change(bool active, void *user_data)
 
 	if (active && !cb->hook_active)
 	{
-		obs_add_main_rendered_cb_fn add_rendered = get_obs_add_main_rendered_callback();
+		obs_main_rendered_callback_fn add_rendered = obs_resolve_add_main_rendered_callback();
 		if (cb->source_type == GST_SOURCE_MAIN_OUTPUT && add_rendered)
 		{
 			add_rendered(render_callback_main_rendered_handler, cb);
@@ -167,7 +117,7 @@ static void pipeline_state_change(bool active, void *user_data)
 	}
 	else if (!active && cb->hook_active)
 	{
-		obs_remove_main_rendered_cb_fn remove_rendered = get_obs_remove_main_rendered_callback();
+		obs_main_rendered_callback_fn remove_rendered = obs_resolve_remove_main_rendered_callback();
 		if (cb->source_type == GST_SOURCE_MAIN_OUTPUT && remove_rendered)
 			remove_rendered(render_callback_main_rendered_handler, cb);
 		else
@@ -254,7 +204,7 @@ void gst_render_callback_destroy(gst_render_callback_t *cb)
 
 	if (cb->hook_active)
 	{
-		obs_remove_main_rendered_cb_fn remove_rendered = get_obs_remove_main_rendered_callback();
+		obs_main_rendered_callback_fn remove_rendered = obs_resolve_remove_main_rendered_callback();
 		if (cb->source_type == GST_SOURCE_MAIN_OUTPUT && remove_rendered)
 			remove_rendered(render_callback_main_rendered_handler, cb);
 		else

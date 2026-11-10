@@ -1,5 +1,12 @@
 #include "gstreamer-helper.h"
 
+#ifdef _WIN32
+#include <windows.h>
+#elif defined(__GNUC__)
+extern void obs_add_main_rendered_callback(void (*draw)(void *param), void *param) __attribute__((weak));
+extern void obs_remove_main_rendered_callback(void (*draw)(void *param), void *param) __attribute__((weak));
+#endif
+
 GstVideoFormat obs_to_gst_video_format(enum video_format format)
 {
 	switch (format)
@@ -62,4 +69,42 @@ enum video_format gst_to_obs_video_format(GstVideoFormat format)
 	case GST_VIDEO_FORMAT_v210: return VIDEO_FORMAT_V210;
 	default: return VIDEO_FORMAT_NONE;
 	}
+}
+
+obs_main_rendered_callback_fn obs_resolve_add_main_rendered_callback(void)
+{
+	static gsize initialized;
+	static obs_main_rendered_callback_fn function;
+	if (g_once_init_enter(&initialized)) {
+#ifdef _WIN32
+		HMODULE obs_module = GetModuleHandleW(L"obs.dll");
+		if (!obs_module)
+			obs_module = GetModuleHandleA("obs.dll");
+		if (obs_module)
+			function = (obs_main_rendered_callback_fn)GetProcAddress(obs_module, "obs_add_main_rendered_callback");
+#elif defined(__GNUC__)
+		function = obs_add_main_rendered_callback;
+#endif
+		g_once_init_leave(&initialized, 1);
+	}
+	return function;
+}
+
+obs_main_rendered_callback_fn obs_resolve_remove_main_rendered_callback(void)
+{
+	static gsize initialized;
+	static obs_main_rendered_callback_fn function;
+	if (g_once_init_enter(&initialized)) {
+#ifdef _WIN32
+		HMODULE obs_module = GetModuleHandleW(L"obs.dll");
+		if (!obs_module)
+			obs_module = GetModuleHandleA("obs.dll");
+		if (obs_module)
+			function = (obs_main_rendered_callback_fn)GetProcAddress(obs_module, "obs_remove_main_rendered_callback");
+#elif defined(__GNUC__)
+		function = obs_remove_main_rendered_callback;
+#endif
+		g_once_init_leave(&initialized, 1);
+	}
+	return function;
 }

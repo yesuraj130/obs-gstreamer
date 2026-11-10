@@ -15,6 +15,10 @@ GstVideoFormat obs_to_gst_video_format(enum video_format format);
 const char *obs_to_gst_video_format_str(enum video_format format);
 enum video_format gst_to_obs_video_format(GstVideoFormat format);
 
+typedef void (*obs_main_rendered_callback_fn)(void (*draw)(void *param), void *param);
+obs_main_rendered_callback_fn obs_resolve_add_main_rendered_callback(void);
+obs_main_rendered_callback_fn obs_resolve_remove_main_rendered_callback(void);
+
 // Calculate plane height using GStreamer's native format metadata
 static inline guint gst_get_plane_height(const GstVideoInfo *info, guint plane)
 {
@@ -66,4 +70,3 @@ static inline obs_source_t *gst_resolve_target_source(gst_source_type_t type, co
 	}
 	return NULL;
 }
-
