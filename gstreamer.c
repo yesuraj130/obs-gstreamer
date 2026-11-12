@@ -72,7 +72,9 @@ bool obs_module_load(void)
 	obs_gstreamer_log_build_info();
 
 	gst_init(NULL, NULL);
-	blog(LOG_INFO, "[obs-gstreamer] GStreamer runtime initialized: %s", gst_version_string());
+	blog(LOG_INFO, "[obs-gstreamer] GStreamer version: compiled with %d.%d.%d, runtime: %s",
+		GST_VERSION_MAJOR, GST_VERSION_MINOR, GST_VERSION_MICRO,
+		gst_version_string());
 
 	struct obs_output_info output_info = {
 		.id = "hjm-gstreamer-output",

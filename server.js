@@ -624,6 +624,10 @@ function rebuildPluginAndRestartOBS(callback) {
     pkill -9 -x ld-linux-x86-64 2>/dev/null || true
     rm -rf /root/.config/obs-studio/.sentinel 2>/dev/null || true
     cd /app/applet
+    export PKG_CONFIG_PATH="/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH"
+    if [ -f /usr/include/obs/media-io/video-io.h ] && ! grep -q "VIDEO_FORMAT_V210" /usr/include/obs/media-io/video-io.h; then
+      sed -i 's/VIDEO_FORMAT_YA2L, \/\/ Little Endian/VIDEO_FORMAT_YA2L, \/\/ Little Endian\n\tVIDEO_FORMAT_V210,/' /usr/include/obs/media-io/video-io.h 2>/dev/null || true
+    fi
     if [ -d build ]; then
       ninja -C build || (rm -rf build && meson setup build -Ddock=enabled && ninja -C build)
     else
@@ -693,6 +697,13 @@ function restartFullPC(callback) {
       fi
     fi
 
+    # Ensure GStreamer 1.28.9 is installed and compiled
+    export PKG_CONFIG_PATH="/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH"
+    if ! pkg-config --atleast-version=1.28.0 gstreamer-1.0 2>/dev/null; then
+      echo "[Setup] Installing GStreamer 1.28.9 from source..."
+      bash /app/applet/.devcontainer/setup/gstreamer.sh || true
+    fi
+
     # 2. Check & install OBS Studio 32.2.2 AppImage
     if [ ! -x /opt/obs-studio-32/AppDir/AppRun ]; then
       echo "[Setup] Downloading and extracting OBS Studio 32.2.2..."
@@ -736,8 +747,8 @@ function restartFullPC(callback) {
       cat << 'WEOF' > /usr/local/bin/obs32-wrapper
 #!/bin/sh
 J="/opt/obs-studio-32/AppDir/.junest"
-export GST_PLUGIN_PATH="/usr/lib/x86_64-linux-gnu/gstreamer-1.0:$J/usr/lib/gstreamer-1.0"
-export GST_PLUGIN_SYSTEM_PATH="/usr/lib/x86_64-linux-gnu/gstreamer-1.0:$J/usr/lib/gstreamer-1.0"
+export GST_PLUGIN_PATH="/usr/local/lib/x86_64-linux-gnu/gstreamer-1.0:/usr/lib/x86_64-linux-gnu/gstreamer-1.0:$J/usr/lib/gstreamer-1.0"
+export GST_PLUGIN_SYSTEM_PATH="/usr/local/lib/x86_64-linux-gnu/gstreamer-1.0:/usr/lib/x86_64-linux-gnu/gstreamer-1.0:$J/usr/lib/gstreamer-1.0"
 if [ -x "$J/usr/bin/obs" ]; then
   export PYTHONHOME="$J/usr"
   export QT_PLUGIN_PATH="$J/usr/lib/qt6/plugins:$J/usr/lib/qt/plugins"
@@ -755,8 +766,25 @@ WEOF
       ln -sf /usr/local/bin/obs32-wrapper /usr/bin/obs
     fi
 
+    # Ensure OBS 32 headers (VIDEO_FORMAT_V210) & system libobs symlinks are active
+    if [ -d /opt/obs-studio-32/AppDir/.junest/usr/lib ]; then
+      cp -f /opt/obs-studio-32/AppDir/.junest/usr/lib/libobs.so.30 /usr/lib/x86_64-linux-gnu/ 2>/dev/null || true
+      cp -f /opt/obs-studio-32/AppDir/.junest/usr/lib/libobs-frontend-api.so.30 /usr/lib/x86_64-linux-gnu/ 2>/dev/null || true
+      cp -f /opt/obs-studio-32/AppDir/.junest/usr/lib/libobs-opengl.so.30 /usr/lib/x86_64-linux-gnu/ 2>/dev/null || true
+      cp -f /opt/obs-studio-32/AppDir/.junest/usr/lib/libobs-scripting.so.30 /usr/lib/x86_64-linux-gnu/ 2>/dev/null || true
+      ln -sf libobs.so.30 /usr/lib/x86_64-linux-gnu/libobs.so
+      ln -sf libobs.so.30 /usr/lib/x86_64-linux-gnu/libobs.so.0
+      ln -sf libobs-frontend-api.so.30 /usr/lib/x86_64-linux-gnu/libobs-frontend-api.so
+      ln -sf libobs-frontend-api.so.30 /usr/lib/x86_64-linux-gnu/libobs-frontend-api.so.0
+      ldconfig
+    fi
+    if [ -f /usr/include/obs/media-io/video-io.h ] && ! grep -q "VIDEO_FORMAT_V210" /usr/include/obs/media-io/video-io.h; then
+      sed -i 's/VIDEO_FORMAT_YA2L, \/\/ Little Endian/VIDEO_FORMAT_YA2L, \/\/ Little Endian\n\tVIDEO_FORMAT_V210,/' /usr/include/obs/media-io/video-io.h 2>/dev/null || true
+    fi
+
     # 3. Check, compile & install obs-gstreamer plugin with Qt6 Dock
     cd /app/applet
+    export PKG_CONFIG_PATH="/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH"
     if [ ! -f /app/applet/build/obs-gstreamer.so ]; then
       echo "[Setup] Building obs-gstreamer plugin with Qt6 Dock..."
       rm -rf build
@@ -765,7 +793,7 @@ WEOF
     fi
 
     mkdir -p /root/.config/obs-studio/plugins/obs-gstreamer/bin/64bit
-    cp -f /app/applet/build/obs-gstreamer.so /root/.config/obs-studio/plugins/obs-gstreamer/bin/64bit/obs-gstreamer.so 2>/dev/null || true
+    cp -f /app/applet/build/obs-gstreamer.so /root/.config/obs-studio/plugins/obs-gstreamer/bin/64bit/obs-gstreamer.so
     rm -f /opt/obs-studio-32/AppDir/lib/obs-plugins/obs-gstreamer.so 2>/dev/null || true
     rm -f /opt/obs-studio-32/AppDir/.junest/usr/lib/obs-plugins/obs-gstreamer.so 2>/dev/null || true
 
@@ -906,10 +934,10 @@ function setVNCResolution(resolution, callback) {
   });
 }
 
-// Ensure custom portrait modes on server boot; auto-provision if environment was reset or incomplete
-exec('which Xtigervnc vncserver websockify startxfce4 >/dev/null 2>&1 && [ -x /opt/obs-studio-32/AppDir/AppRun ] && [ -f /app/applet/build/obs-gstreamer.so ] && echo "1" || echo "0"', (err, stdout) => {
+// Ensure custom portrait modes on server boot; auto-provision if environment was reset or incomplete (including GStreamer 1.28 & installed plugin)
+exec('which Xtigervnc vncserver websockify startxfce4 >/dev/null 2>&1 && [ -x /opt/obs-studio-32/AppDir/AppRun ] && [ -f /app/applet/build/obs-gstreamer.so ] && [ -f /root/.config/obs-studio/plugins/obs-gstreamer/bin/64bit/obs-gstreamer.so ] && (PKG_CONFIG_PATH="/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH" pkg-config --atleast-version=1.28.0 gstreamer-1.0 2>/dev/null) && echo "1" || echo "0"', (err, stdout) => {
   if (stdout && stdout.trim() !== '1') {
-    addLog('Detected fresh/reset or incomplete container on boot — running automatic provisioning...');
+    addLog('Detected fresh/reset or incomplete container on boot (GStreamer 1.28+ or plugin missing) — running automatic provisioning...');
     restartFullPC();
   } else {
     ensureCustomModes();

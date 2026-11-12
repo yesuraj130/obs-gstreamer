@@ -162,15 +162,18 @@ gst_output_callback_t *gst_output_callback_create(gst_source_type_t type, const 
 		obs_view_set_source(cb->view, 0, cb->source);
 		cb->custom_video = obs_view_add(cb->view);
 		obs_output_set_media(obs_out, cb->custom_video, obs_get_audio());
-	}
 
-	struct video_scale_info vsi = {0};
-	vsi.format = VIDEO_FORMAT_RGBA;
-	vsi.width = width;
-	vsi.height = height;
-	vsi.range = VIDEO_RANGE_DEFAULT;
-	vsi.colorspace = VIDEO_CS_DEFAULT;
-	obs_output_set_video_conversion(obs_out, &vsi);
+		if (type == GST_SOURCE_SOURCE)
+		{
+			struct video_scale_info vsi = {0};
+			vsi.format = VIDEO_FORMAT_NV12;
+			vsi.width = width;
+			vsi.height = height;
+			vsi.range = VIDEO_RANGE_DEFAULT;
+			vsi.colorspace = VIDEO_CS_DEFAULT;
+			obs_output_set_video_conversion(obs_out, &vsi);
+		}
+	}
 
 	cb->pipeline = gst_master_pipeline_create(custom_master_pipe, encoder_type, video_codec, bitrate_kbps, keyint_sec, width, height, fps_num, fps_den, false, pipeline_state_change, cb);
 	if (!cb->pipeline)
