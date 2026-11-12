@@ -13,7 +13,7 @@ struct gst_output_callback
 	obs_source_t *source;
 	obs_view_t *view;
 	video_t *custom_video;
-	bool running;
+	volatile gint running;
 };
 
 static const char *output_cb_get_name(void *type_data)
@@ -61,7 +61,7 @@ static bool output_cb_start(void *p)
 	if (!data) return false;
 
 	if (!obs_output_begin_data_capture(data->output, 0)) return false;
-	data->running = true;
+	g_atomic_int_set(&data->running, 1);
 	blog(LOG_INFO, "[obs-gstreamer-output-callback] Data capture started");
 	return true;
 }
@@ -72,15 +72,15 @@ static void output_cb_stop(void *p, uint64_t ts)
 	gst_output_callback_t *data = (gst_output_callback_t *)p;
 	if (!data) return;
 
+	g_atomic_int_set(&data->running, 0);
 	obs_output_end_data_capture(data->output);
-	data->running = false;
 	blog(LOG_INFO, "[obs-gstreamer-output-callback] Data capture stopped");
 }
 
 static void output_cb_raw_video(void *p, struct video_data *frame)
 {
 	gst_output_callback_t *data = (gst_output_callback_t *)p;
-	if (!data || !data->running || !data->pipeline || !frame) return;
+	if (!data || !g_atomic_int_get(&data->running) || !data->pipeline || !frame) return;
 
 	gst_master_pipeline_push_raw_video(data->pipeline, frame);
 }
@@ -118,6 +118,13 @@ static void pipeline_state_change(bool active, void *user_data)
 
 gst_output_callback_t *gst_output_callback_create(gst_source_type_t type, const char *scene_name, const char *item_name, const char *custom_master_pipe, const char *encoder_type, const char *video_codec, int bitrate_kbps, int keyint_sec, uint32_t fps_num, uint32_t fps_den)
 {
+	struct obs_video_info ovi = {};
+	if (!obs_get_video_info(&ovi))
+	{
+		blog(LOG_ERROR, "[obs-gstreamer-output-callback] Failed to query OBS video info");
+		return NULL;
+	}
+
 	obs_output_t *obs_out = obs_output_create("gstreamer-output-callback", "master_output_cb", NULL, NULL);
 	if (!obs_out) return NULL;
 
@@ -130,49 +137,17 @@ gst_output_callback_t *gst_output_callback_create(gst_source_type_t type, const 
 	}
 	cb->source_type = type;
 
-	struct obs_video_info ovi = {};
-	if (!obs_get_video_info(&ovi))
-	{
-		ovi.base_width = 1920;
-		ovi.base_height = 1080;
-		ovi.output_width = 1920;
-		ovi.output_height = 1080;
-		ovi.output_format = VIDEO_FORMAT_NV12;
-	}
-	uint32_t width = ovi.output_width ? ovi.output_width : (ovi.base_width ? ovi.base_width : 1920);
-	uint32_t height = ovi.output_height ? ovi.output_height : (ovi.base_height ? ovi.base_height : 1080);
-	GstVideoFormat raw_format = GST_VIDEO_FORMAT_NV12;
-
+	video_t *target_video = NULL;
 	if (type == GST_SOURCE_MAIN_OUTPUT)
 	{
-		video_t *main_video = obs_get_video();
-		obs_output_set_media(obs_out, main_video, obs_get_audio());
-		if (main_video)
+		target_video = obs_get_video();
+		if (!target_video)
 		{
-			uint32_t vw = video_output_get_width(main_video);
-			uint32_t vh = video_output_get_height(main_video);
-			if (vw > 0 && vh > 0)
-			{
-				width = vw;
-				height = vh;
-			}
-			GstVideoFormat detected = obs_to_gst_video_format(video_output_get_format(main_video));
-			if (detected != GST_VIDEO_FORMAT_UNKNOWN)
-			{
-				raw_format = detected;
-			}
-			else
-			{
-				struct video_scale_info vsi = {0};
-				vsi.format = VIDEO_FORMAT_NV12;
-				vsi.width = width;
-				vsi.height = height;
-				vsi.range = VIDEO_RANGE_DEFAULT;
-				vsi.colorspace = VIDEO_CS_DEFAULT;
-				obs_output_set_video_conversion(obs_out, &vsi);
-				raw_format = GST_VIDEO_FORMAT_NV12;
-			}
+			blog(LOG_ERROR, "[obs-gstreamer-output-callback] Main OBS video output is unavailable");
+			obs_output_release(obs_out);
+			return NULL;
 		}
+		obs_output_set_media(obs_out, target_video, obs_get_audio());
 	}
 	else
 	{
@@ -186,56 +161,61 @@ gst_output_callback_t *gst_output_callback_create(gst_source_type_t type, const 
 
 		cb->view = obs_view_create();
 		obs_view_set_source(cb->view, 0, cb->source);
-		cb->custom_video = obs_view_add(cb->view);
-		obs_output_set_media(obs_out, cb->custom_video, obs_get_audio());
 
 		if (type == GST_SOURCE_SOURCE)
 		{
 			uint32_t sw = obs_source_get_width(cb->source);
 			uint32_t sh = obs_source_get_height(cb->source);
-			if (sw > 0 && sh > 0)
+			if (sw > 0 && sh > 0 && (sw != ovi.output_width || sh != ovi.output_height))
 			{
-				width = sw;
-				height = sh;
-			}
-			struct video_scale_info vsi = {0};
-			vsi.format = VIDEO_FORMAT_NV12;
-			vsi.width = width;
-			vsi.height = height;
-			vsi.range = VIDEO_RANGE_DEFAULT;
-			vsi.colorspace = VIDEO_CS_DEFAULT;
-			obs_output_set_video_conversion(obs_out, &vsi);
-			raw_format = GST_VIDEO_FORMAT_NV12;
-		}
-		else if (cb->custom_video)
-		{
-			uint32_t vw = video_output_get_width(cb->custom_video);
-			uint32_t vh = video_output_get_height(cb->custom_video);
-			if (vw > 0 && vh > 0)
-			{
-				width = vw;
-				height = vh;
-			}
-			GstVideoFormat detected = obs_to_gst_video_format(video_output_get_format(cb->custom_video));
-			if (detected != GST_VIDEO_FORMAT_UNKNOWN)
-			{
-				raw_format = detected;
+				struct obs_video_info custom_ovi = ovi;
+				custom_ovi.base_width = sw;
+				custom_ovi.base_height = sh;
+				custom_ovi.output_width = sw;
+				custom_ovi.output_height = sh;
+				custom_ovi.output_format = VIDEO_FORMAT_NV12;
+				cb->custom_video = obs_view_add2(cb->view, &custom_ovi);
 			}
 			else
 			{
-				struct video_scale_info vsi = {0};
-				vsi.format = VIDEO_FORMAT_NV12;
-				vsi.width = width;
-				vsi.height = height;
-				vsi.range = VIDEO_RANGE_DEFAULT;
-				vsi.colorspace = VIDEO_CS_DEFAULT;
-				obs_output_set_video_conversion(obs_out, &vsi);
-				raw_format = GST_VIDEO_FORMAT_NV12;
+				cb->custom_video = obs_view_add(cb->view);
 			}
 		}
+		else
+		{
+			cb->custom_video = obs_view_add(cb->view);
+		}
+
+		if (!cb->custom_video)
+		{
+			blog(LOG_ERROR, "[obs-gstreamer-output-callback] Failed to create view video output");
+			obs_output_release(obs_out);
+			return NULL;
+		}
+		target_video = cb->custom_video;
+		obs_output_set_media(obs_out, target_video, obs_get_audio());
 	}
 
-	cb->pipeline = gst_master_pipeline_create_with_format(custom_master_pipe, encoder_type, video_codec, bitrate_kbps, keyint_sec, width, height, fps_num, fps_den, false, raw_format, pipeline_state_change, cb);
+	enum video_format obs_fmt = video_output_get_format(target_video);
+	if (obs_fmt != VIDEO_FORMAT_NV12)
+	{
+		const char *fmt_name = obs_to_gst_video_format_str(obs_fmt);
+		blog(LOG_ERROR, "[obs-gstreamer-output-callback] Expected NV12 video_t format, got %d (%s); refusing conversion fallback",
+			(int)obs_fmt, fmt_name ? fmt_name : "unknown");
+		obs_output_release(obs_out);
+		return NULL;
+	}
+
+	uint32_t width = video_output_get_width(target_video);
+	uint32_t height = video_output_get_height(target_video);
+	if (width == 0 || height == 0)
+	{
+		blog(LOG_ERROR, "[obs-gstreamer-output-callback] Invalid video_t dimensions: %ux%u", width, height);
+		obs_output_release(obs_out);
+		return NULL;
+	}
+
+	cb->pipeline = gst_master_pipeline_create_with_format(custom_master_pipe, encoder_type, video_codec, bitrate_kbps, keyint_sec, width, height, fps_num, fps_den, false, GST_VIDEO_FORMAT_NV12, pipeline_state_change, cb);
 	if (!cb->pipeline)
 	{
 		obs_output_release(obs_out);
@@ -254,16 +234,15 @@ void gst_output_callback_destroy(gst_output_callback_t *cb)
 {
 	if (!cb) return;
 
-	cb->running = false;
+	g_atomic_int_set(&cb->running, 0);
 	gst_master_pipeline_t *pipeline = cb->pipeline;
 	cb->pipeline = NULL;
 	obs_output_t *out = cb->output;
 
 	if (out && obs_output_active(out)) obs_output_stop(out);
-	if (out) obs_output_release(out);
-
 	if (pipeline)
 	{
 		gst_master_pipeline_destroy(pipeline);
 	}
+	if (out) obs_output_release(out);
 }
