@@ -164,8 +164,10 @@ static bool validate_custom_master_appsrc(gst_master_pipeline_t *hub)
 		}
 #endif
 	} else if (caps_use_only_system_memory(features) &&
-		   gst_format == GST_VIDEO_FORMAT_RGBA) {
-		hub->appsrc_format = GST_VIDEO_FORMAT_RGBA;
+		   (gst_format == GST_VIDEO_FORMAT_RGBA ||
+		    (hub->requested_raw_format != GST_VIDEO_FORMAT_UNKNOWN &&
+		     gst_format == hub->requested_raw_format))) {
+		hub->appsrc_format = gst_format;
 		valid = true;
 	}
 
@@ -910,7 +912,9 @@ static GstElement *create_master_encoder_pipeline(gst_master_pipeline_t *hub, co
 			hub->appsrc_format = GST_VIDEO_FORMAT_RGBA;
 #endif
 		if (!hub->gpu_input)
-			hub->appsrc_format = GST_VIDEO_FORMAT_RGBA;
+			hub->appsrc_format = (hub->requested_raw_format != GST_VIDEO_FORMAT_UNKNOWN)
+				? hub->requested_raw_format
+				: GST_VIDEO_FORMAT_RGBA;
 		pipe_desc = g_strdup(custom_master_pipe);
 	}
 	else
@@ -973,16 +977,33 @@ static GstElement *create_master_encoder_pipeline(gst_master_pipeline_t *hub, co
 		}
 #endif
 
-		hub->appsrc_format = GST_VIDEO_FORMAT_RGBA;
-		pipe_desc = g_strdup_printf(
-			"appsrc name=hub_appsrc is-live=true format=GST_FORMAT_TIME do-timestamp=false min-latency=0 max-latency=0 "
-			"max-buffers=1 leaky-type=downstream "
-			"caps=\"video/x-raw, width=%u, height=%u, format=RGBA, framerate=%u/%u, colorimetry=%s\" ! "
-			"videoconvert ! video/x-raw, format=NV12, colorimetry=%s ! "
-			"%s ! %s ! %s, stream-format=byte-stream, alignment=au ! "
-			"appsink name=hub_appsink sync=false drop=false max-buffers=4",
-			hub->width, hub->height, hub->fps_num, hub->fps_den, hub->colorimetry_str, hub->colorimetry_str,
-			enc_str, parse_elem, caps_elem);
+		hub->appsrc_format = (hub->requested_raw_format != GST_VIDEO_FORMAT_UNKNOWN)
+			? hub->requested_raw_format
+			: GST_VIDEO_FORMAT_RGBA;
+		if (hub->appsrc_format == GST_VIDEO_FORMAT_NV12)
+		{
+			pipe_desc = g_strdup_printf(
+				"appsrc name=hub_appsrc is-live=true format=GST_FORMAT_TIME do-timestamp=false min-latency=0 max-latency=0 "
+				"max-buffers=1 leaky-type=downstream "
+				"caps=\"video/x-raw, width=%u, height=%u, format=NV12, framerate=%u/%u, colorimetry=%s\" ! "
+				"%s ! %s ! %s, stream-format=byte-stream, alignment=au ! "
+				"appsink name=hub_appsink sync=false drop=false max-buffers=4",
+				hub->width, hub->height, hub->fps_num, hub->fps_den, hub->colorimetry_str,
+				enc_str, parse_elem, caps_elem);
+		}
+		else
+		{
+			pipe_desc = g_strdup_printf(
+				"appsrc name=hub_appsrc is-live=true format=GST_FORMAT_TIME do-timestamp=false min-latency=0 max-latency=0 "
+				"max-buffers=1 leaky-type=downstream "
+				"caps=\"video/x-raw, width=%u, height=%u, format=%s, framerate=%u/%u, colorimetry=%s\" ! "
+				"videoconvert ! video/x-raw, format=NV12, colorimetry=%s ! "
+				"%s ! %s ! %s, stream-format=byte-stream, alignment=au ! "
+				"appsink name=hub_appsink sync=false drop=false max-buffers=4",
+				hub->width, hub->height, gst_video_format_to_string(hub->appsrc_format),
+				hub->fps_num, hub->fps_den, hub->colorimetry_str, hub->colorimetry_str,
+				enc_str, parse_elem, caps_elem);
+		}
 
 		g_free(enc_str);
 	}
@@ -1743,22 +1764,16 @@ void gst_master_pipeline_push_raw_video(gst_master_pipeline_t *hub, struct video
 	if (!hub || !frame || !frame->data[0] || g_atomic_int_get(&hub->active_destinations) <= 0 || !hub->appsrc) return;
 	if (g_atomic_int_get(&hub->pipeline_failed)) return;
 
-	if (hub->gpu_input || hub->height == 0 || hub->width > SIZE_MAX / 4)
+	const GstVideoInfo *info = &hub->raw_video_info;
+	guint n_planes = GST_VIDEO_INFO_N_PLANES(info);
+	if (hub->gpu_input || n_planes == 0 || n_planes > GST_VIDEO_MAX_PLANES || n_planes > MAX_AV_PLANES)
 	{
-		blog(LOG_ERROR, "[obs-gstreamer-master] Invalid CPU frame dimensions for RGBA input");
-		return;
-	}
-
-	size_t row_size = (size_t)hub->width * 4;
-	if (row_size > G_MAXINT || (size_t)frame->linesize[0] < row_size ||
-	    row_size > SIZE_MAX / hub->height)
-	{
-		blog(LOG_ERROR, "[obs-gstreamer-master] Invalid CPU frame stride or RGBA frame size overflow");
+		blog(LOG_ERROR, "[obs-gstreamer-master] Invalid CPU frame layout for raw video input");
 		return;
 	}
 
 	struct cpu_frame_slot *slot = hub->cpu_frame_slot;
-	if (!slot || slot->size != row_size * hub->height) {
+	if (!slot || slot->size < GST_VIDEO_INFO_SIZE(info)) {
 		blog(LOG_ERROR, "[obs-gstreamer-master] CPU frame slot is unavailable or has an invalid size");
 		return;
 	}
@@ -1770,11 +1785,53 @@ void gst_master_pipeline_push_raw_video(gst_master_pipeline_t *hub, struct video
 		return;
 	}
 
+	gsize offsets[GST_VIDEO_MAX_PLANES] = {0};
+	gint strides[GST_VIDEO_MAX_PLANES] = {0};
+	for (guint plane = 0; plane < n_planes; plane++)
+	{
+		gsize row_bytes = 0;
+		if (info->finfo->format == GST_VIDEO_FORMAT_v210 && plane == 0) {
+			row_bytes = ((gsize)GST_VIDEO_INFO_WIDTH(info) + 5) / 6 * 16;
+		} else {
+			for (guint comp = 0; comp < GST_VIDEO_INFO_N_COMPONENTS(info); comp++) {
+				if (GST_VIDEO_INFO_COMP_PLANE(info, comp) == plane) {
+					gsize comp_row_bytes =
+						(gsize)GST_VIDEO_INFO_COMP_WIDTH(info, comp) *
+						GST_VIDEO_FORMAT_INFO_PSTRIDE(info->finfo, comp);
+					row_bytes = MAX(row_bytes, comp_row_bytes);
+				}
+			}
+		}
+
+		guint rows = gst_get_plane_height(info, plane);
+		gsize dst_offset = GST_VIDEO_INFO_PLANE_OFFSET(info, plane);
+		gint dst_stride = GST_VIDEO_INFO_PLANE_STRIDE(info, plane);
+		if (!frame->data[plane] || frame->linesize[plane] < row_bytes ||
+		    dst_stride < 0 || (gsize)dst_stride < row_bytes ||
+		    (rows > 0 && (dst_offset + (gsize)(rows - 1) * (gsize)dst_stride + row_bytes) > slot->size))
+		{
+			g_atomic_int_set(&slot->in_use, 0);
+			blog(LOG_ERROR, "[obs-gstreamer-master] Invalid plane %u layout (src_linesize=%u, dst_stride=%d, row_bytes=%zu)",
+				plane, frame->linesize[plane], dst_stride, (size_t)row_bytes);
+			return;
+		}
+
+		uint8_t *dst_plane = slot->data + dst_offset;
+		const uint8_t *src_plane = frame->data[plane];
+		uint32_t src_stride = frame->linesize[plane];
+		for (guint y = 0; y < rows; y++)
+			memcpy(dst_plane + (gsize)y * (gsize)dst_stride,
+				src_plane + (gsize)y * src_stride, row_bytes);
+
+		offsets[plane] = dst_offset;
+		strides[plane] = dst_stride;
+	}
+
 	GstBuffer *buf = gst_buffer_new();
 	if (!buf)
 	{
 		g_atomic_int_set(&slot->in_use, 0);
-		blog(LOG_ERROR, "[obs-gstreamer-master] Failed to allocate reusable CPU RGBA frame buffer");
+		blog(LOG_ERROR, "[obs-gstreamer-master] Failed to allocate reusable CPU frame buffer");
 		return;
 	}
 
@@ -1787,18 +1844,13 @@ void gst_master_pipeline_push_raw_video(gst_master_pipeline_t *hub, struct video
 		g_atomic_int_set(&slot->in_use, 0);
 		cpu_frame_slot_unref(memory_slot);
 		gst_buffer_unref(buf);
-		blog(LOG_ERROR, "[obs-gstreamer-master] Failed to create reusable CPU RGBA frame memory");
+		blog(LOG_ERROR, "[obs-gstreamer-master] Failed to create reusable CPU frame memory");
 		return;
 	}
 	gst_buffer_append_memory(buf, memory);
-	for (uint32_t y = 0; y < hub->height; y++)
-		memcpy(slot->data + (size_t)y * row_size,
-			frame->data[0] + (size_t)y * frame->linesize[0], row_size);
 
-	gsize offsets[GST_VIDEO_MAX_PLANES] = {0};
-	gint strides[GST_VIDEO_MAX_PLANES] = {(gint)row_size};
-	if (!gst_buffer_add_video_meta_full(buf, GST_VIDEO_FRAME_FLAG_NONE, GST_VIDEO_FORMAT_RGBA,
-		hub->width, hub->height, 1, offsets, strides))
+	if (!gst_buffer_add_video_meta_full(buf, GST_VIDEO_FRAME_FLAG_NONE, hub->appsrc_format,
+		hub->width, hub->height, n_planes, offsets, strides))
 	{
 		gst_buffer_unref(buf);
 		blog(LOG_ERROR, "[obs-gstreamer-master] Failed to attach video metadata to copied CPU frame");
@@ -1937,6 +1989,11 @@ void gst_master_pipeline_request_keyframe(gst_master_pipeline_t *hub)
 
 gst_master_pipeline_t *gst_master_pipeline_create(const char *custom_master_pipe, const char *encoder_type, const char *video_codec, int bitrate_kbps, int keyint_sec, uint32_t width, uint32_t height, uint32_t fps_num, uint32_t fps_den, bool gpu_input, gst_master_state_cb state_cb, gpointer user_data)
 {
+	return gst_master_pipeline_create_with_format(custom_master_pipe, encoder_type, video_codec, bitrate_kbps, keyint_sec, width, height, fps_num, fps_den, gpu_input, GST_VIDEO_FORMAT_RGBA, state_cb, user_data);
+}
+
+gst_master_pipeline_t *gst_master_pipeline_create_with_format(const char *custom_master_pipe, const char *encoder_type, const char *video_codec, int bitrate_kbps, int keyint_sec, uint32_t width, uint32_t height, uint32_t fps_num, uint32_t fps_den, bool gpu_input, GstVideoFormat raw_format, gst_master_state_cb state_cb, gpointer user_data)
+{
 	gst_master_pipeline_t *hub = bzalloc(sizeof(gst_master_pipeline_t));
 	g_mutex_init(&hub->subscriber_mutex);
 	g_mutex_init(&hub->state_mutex);
@@ -1948,6 +2005,7 @@ gst_master_pipeline_t *gst_master_pipeline_create(const char *custom_master_pipe
 	hub->state_cb = state_cb;
 	hub->state_user_data = user_data;
 	hub->gpu_input = false;
+	hub->requested_raw_format = (raw_format != GST_VIDEO_FORMAT_UNKNOWN) ? raw_format : GST_VIDEO_FORMAT_RGBA;
 	hub->video_codec = bstrdup(video_codec ? video_codec : "h264");
 
 	const char *chosen_enc = gst_master_pipeline_select_encoder(encoder_type, hub->video_codec, gpu_input);
@@ -2141,16 +2199,22 @@ gst_master_pipeline_t *gst_master_pipeline_create(const char *custom_master_pipe
 
 	if (!hub->gpu_input)
 	{
-		if (width == 0 || height == 0 || width > SIZE_MAX / 4 ||
-		    (size_t)width * 4 > SIZE_MAX / height) {
-			blog(LOG_ERROR, "[obs-gstreamer-master] Invalid dimensions for reusable CPU frame slot");
+		gst_video_info_init(&hub->raw_video_info);
+		GstVideoFormat slot_fmt = (hub->appsrc_format != GST_VIDEO_FORMAT_UNKNOWN)
+			? hub->appsrc_format
+			: GST_VIDEO_FORMAT_RGBA;
+		if (width == 0 || height == 0 ||
+		    !gst_video_info_set_format(&hub->raw_video_info, slot_fmt, width, height) ||
+		    GST_VIDEO_INFO_SIZE(&hub->raw_video_info) == 0) {
+			blog(LOG_ERROR, "[obs-gstreamer-master] Invalid dimensions/format for reusable CPU frame slot (%ux%u, format=%s)",
+				width, height, gst_video_format_to_string(slot_fmt));
 			gst_master_pipeline_destroy(hub);
 			return NULL;
 		}
 
 		struct cpu_frame_slot *slot = g_new0(struct cpu_frame_slot, 1);
 		g_atomic_ref_count_init(&slot->ref_count);
-		slot->size = (gsize)width * 4 * height;
+		slot->size = GST_VIDEO_INFO_SIZE(&hub->raw_video_info);
 		slot->data = g_try_malloc(slot->size);
 		if (!slot->data) {
 			blog(LOG_ERROR, "[obs-gstreamer-master] Failed to allocate reusable CPU frame slot");

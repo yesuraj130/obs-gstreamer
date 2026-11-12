@@ -121,7 +121,13 @@ gst_output_callback_t *gst_output_callback_create(gst_source_type_t type, const 
 	obs_output_t *obs_out = obs_output_create("gstreamer-output-callback", "master_output_cb", NULL, NULL);
 	if (!obs_out) return NULL;
 
-	gst_output_callback_t *cb = (gst_output_callback_t *)obs_output_get_type_data(obs_out);
+	gst_output_callback_t *cb = (gst_output_callback_t *)obs_obj_get_data(obs_out);
+	if (!cb)
+	{
+		blog(LOG_ERROR, "[obs-gstreamer-output-callback] Failed to resolve output instance data");
+		obs_output_release(obs_out);
+		return NULL;
+	}
 	cb->source_type = type;
 
 	struct obs_video_info ovi = {};
@@ -129,13 +135,44 @@ gst_output_callback_t *gst_output_callback_create(gst_source_type_t type, const 
 	{
 		ovi.base_width = 1920;
 		ovi.base_height = 1080;
+		ovi.output_width = 1920;
+		ovi.output_height = 1080;
+		ovi.output_format = VIDEO_FORMAT_NV12;
 	}
-	uint32_t width = ovi.base_width ? ovi.base_width : 1920;
-	uint32_t height = ovi.base_height ? ovi.base_height : 1080;
+	uint32_t width = ovi.output_width ? ovi.output_width : (ovi.base_width ? ovi.base_width : 1920);
+	uint32_t height = ovi.output_height ? ovi.output_height : (ovi.base_height ? ovi.base_height : 1080);
+	GstVideoFormat raw_format = GST_VIDEO_FORMAT_NV12;
 
 	if (type == GST_SOURCE_MAIN_OUTPUT)
 	{
-		obs_output_set_media(obs_out, obs_get_video(), obs_get_audio());
+		video_t *main_video = obs_get_video();
+		obs_output_set_media(obs_out, main_video, obs_get_audio());
+		if (main_video)
+		{
+			uint32_t vw = video_output_get_width(main_video);
+			uint32_t vh = video_output_get_height(main_video);
+			if (vw > 0 && vh > 0)
+			{
+				width = vw;
+				height = vh;
+			}
+			GstVideoFormat detected = obs_to_gst_video_format(video_output_get_format(main_video));
+			if (detected != GST_VIDEO_FORMAT_UNKNOWN)
+			{
+				raw_format = detected;
+			}
+			else
+			{
+				struct video_scale_info vsi = {0};
+				vsi.format = VIDEO_FORMAT_NV12;
+				vsi.width = width;
+				vsi.height = height;
+				vsi.range = VIDEO_RANGE_DEFAULT;
+				vsi.colorspace = VIDEO_CS_DEFAULT;
+				obs_output_set_video_conversion(obs_out, &vsi);
+				raw_format = GST_VIDEO_FORMAT_NV12;
+			}
+		}
 	}
 	else
 	{
@@ -147,7 +184,12 @@ gst_output_callback_t *gst_output_callback_create(gst_source_type_t type, const 
 			return NULL;
 		}
 
-		if (type == GST_SOURCE_SOURCE && cb->source)
+		cb->view = obs_view_create();
+		obs_view_set_source(cb->view, 0, cb->source);
+		cb->custom_video = obs_view_add(cb->view);
+		obs_output_set_media(obs_out, cb->custom_video, obs_get_audio());
+
+		if (type == GST_SOURCE_SOURCE)
 		{
 			uint32_t sw = obs_source_get_width(cb->source);
 			uint32_t sh = obs_source_get_height(cb->source);
@@ -156,15 +198,6 @@ gst_output_callback_t *gst_output_callback_create(gst_source_type_t type, const 
 				width = sw;
 				height = sh;
 			}
-		}
-
-		cb->view = obs_view_create();
-		obs_view_set_source(cb->view, 0, cb->source);
-		cb->custom_video = obs_view_add(cb->view);
-		obs_output_set_media(obs_out, cb->custom_video, obs_get_audio());
-
-		if (type == GST_SOURCE_SOURCE)
-		{
 			struct video_scale_info vsi = {0};
 			vsi.format = VIDEO_FORMAT_NV12;
 			vsi.width = width;
@@ -172,10 +205,37 @@ gst_output_callback_t *gst_output_callback_create(gst_source_type_t type, const 
 			vsi.range = VIDEO_RANGE_DEFAULT;
 			vsi.colorspace = VIDEO_CS_DEFAULT;
 			obs_output_set_video_conversion(obs_out, &vsi);
+			raw_format = GST_VIDEO_FORMAT_NV12;
+		}
+		else if (cb->custom_video)
+		{
+			uint32_t vw = video_output_get_width(cb->custom_video);
+			uint32_t vh = video_output_get_height(cb->custom_video);
+			if (vw > 0 && vh > 0)
+			{
+				width = vw;
+				height = vh;
+			}
+			GstVideoFormat detected = obs_to_gst_video_format(video_output_get_format(cb->custom_video));
+			if (detected != GST_VIDEO_FORMAT_UNKNOWN)
+			{
+				raw_format = detected;
+			}
+			else
+			{
+				struct video_scale_info vsi = {0};
+				vsi.format = VIDEO_FORMAT_NV12;
+				vsi.width = width;
+				vsi.height = height;
+				vsi.range = VIDEO_RANGE_DEFAULT;
+				vsi.colorspace = VIDEO_CS_DEFAULT;
+				obs_output_set_video_conversion(obs_out, &vsi);
+				raw_format = GST_VIDEO_FORMAT_NV12;
+			}
 		}
 	}
 
-	cb->pipeline = gst_master_pipeline_create(custom_master_pipe, encoder_type, video_codec, bitrate_kbps, keyint_sec, width, height, fps_num, fps_den, false, pipeline_state_change, cb);
+	cb->pipeline = gst_master_pipeline_create_with_format(custom_master_pipe, encoder_type, video_codec, bitrate_kbps, keyint_sec, width, height, fps_num, fps_den, false, raw_format, pipeline_state_change, cb);
 	if (!cb->pipeline)
 	{
 		obs_output_release(obs_out);
@@ -195,14 +255,15 @@ void gst_output_callback_destroy(gst_output_callback_t *cb)
 	if (!cb) return;
 
 	cb->running = false;
+	gst_master_pipeline_t *pipeline = cb->pipeline;
+	cb->pipeline = NULL;
+	obs_output_t *out = cb->output;
 
-	if (cb->output && obs_output_active(cb->output)) obs_output_stop(cb->output);
-	
-	if (cb->pipeline)
+	if (out && obs_output_active(out)) obs_output_stop(out);
+	if (out) obs_output_release(out);
+
+	if (pipeline)
 	{
-		gst_master_pipeline_destroy(cb->pipeline);
-		cb->pipeline = NULL;
+		gst_master_pipeline_destroy(pipeline);
 	}
-
-	if (cb->output) obs_output_release(cb->output);
 }
