@@ -272,7 +272,7 @@
                             "name": "Default WebRTC",
                             "type": 1,
                             "enabled": true,
-                            "autostart": false,
+                            "autostart": true,
                             "rtsp_port": "8554",
                             "rtsp_mount": "/live",
                             "rtsp_pipeline": "( appsrc name=appsrc_video is-live=true format=GST_FORMAT_TIME do-timestamp=true caps=\"video/x-h264, stream-format=byte-stream, alignment=au\" ! h264parse ! rtph264pay name=pay0 pt=96 config-interval=-1 )",

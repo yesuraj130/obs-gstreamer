@@ -106,6 +106,48 @@ let playitDaemon = null;
 let playitSetupProc = null;
 let playitPollTimer = null;
 
+const TURN_PORT = 3478;
+const TURN_USER = 'obs';
+const TURN_PASS = 'turnpassword';
+
+let turnTunnelInfo = {
+  host: '',
+  port: '',
+  full: '',
+  url: '',
+  status: 'connecting',
+  isReused: false,
+  lastUpdated: null
+};
+let turnTunnelProc = null;
+
+function getTurnConfigPayload() {
+  const hostPort = turnTunnelInfo.full || `127.0.0.1:${TURN_PORT}`;
+  return {
+    iceServers: [
+      {
+        urls: `turn:${hostPort}?transport=tcp`,
+        username: TURN_USER,
+        credential: TURN_PASS
+      }
+    ],
+    iceTransportPolicy: 'relay',
+    publicTurn: turnTunnelInfo.full ? `turn:${turnTunnelInfo.full}?transport=tcp` : '',
+    localTurn: `turn:127.0.0.1:${TURN_PORT}?transport=tcp`
+  };
+}
+
+function writeTurnConfigFiles() {
+  try {
+    const json = JSON.stringify(getTurnConfigPayload(), null, 2);
+    fs.writeFileSync(path.join(WEB_ROOT, 'turn-config.json'), json);
+    const obsWebRoot = '/root/.local/share/obs-gstreamer/webrtc';
+    if (fs.existsSync(obsWebRoot)) {
+      fs.writeFileSync(path.join(obsWebRoot, 'turn-config.json'), json);
+    }
+  } catch (e) {}
+}
+
 function loadTunnelCache() {
   try {
     if (fs.existsSync(TUNNEL_CACHE_FILE)) {
@@ -116,10 +158,14 @@ function loadTunnelCache() {
       if (data.webrtcHttpTunnel && data.webrtcHttpTunnel.url) {
         webrtcHttpTunnel = { ...webrtcHttpTunnel, ...data.webrtcHttpTunnel, isReused: true };
       }
+      if (data.turnTunnelInfo && data.turnTunnelInfo.full) {
+        turnTunnelInfo = { ...turnTunnelInfo, ...data.turnTunnelInfo, isReused: true };
+      }
     }
   } catch (e) {
     console.error('Failed to load tunnel cache:', e.message);
   }
+  writeTurnConfigFiles();
 }
 
 function saveTunnelCache() {
@@ -127,11 +173,13 @@ function saveTunnelCache() {
     fs.writeFileSync(TUNNEL_CACHE_FILE, JSON.stringify({
       tcpTunnelInfo,
       webrtcHttpTunnel,
+      turnTunnelInfo,
       savedAt: new Date().toISOString()
     }, null, 2));
   } catch (e) {
     console.error('Failed to save tunnel cache:', e.message);
   }
+  writeTurnConfigFiles();
 }
 
 function updateTailscaleIp() {
@@ -155,7 +203,7 @@ function startPinggyTunnel(forceReset = false) {
 
   // Check if an SSH Pinggy tunnel is already running in background
   if (!forceReset) {
-    exec('pgrep -f "ssh.*tcp@a\.pinggy\.io" >/dev/null && echo "1" || echo "0"', (err, stdout) => {
+    exec('pgrep -f "ssh.*5901.*tcp@a\\.pinggy\\.io" >/dev/null && echo "1" || echo "0"', (err, stdout) => {
       const isRunning = stdout && stdout.trim() === '1';
       if (isRunning && fs.existsSync('/tmp/pinggy_vnc.log')) {
         const logContent = fs.readFileSync('/tmp/pinggy_vnc.log', 'utf8');
@@ -182,7 +230,7 @@ function startPinggyTunnel(forceReset = false) {
       spawnNewPinggyTunnel();
     });
   } else {
-    exec('pkill -9 -f "ssh.*tcp@a\.pinggy\.io" 2>/dev/null || true', () => {
+    exec('pkill -9 -f "ssh.*5901.*tcp@a\\.pinggy\\.io" 2>/dev/null || true', () => {
       if (pinggyProcess) {
         try { pinggyProcess.kill(); } catch (e) {}
         pinggyProcess = null;
@@ -240,7 +288,7 @@ function spawnNewPinggyTunnel() {
       proc.on('close', () => {
         pinggyProcess = null;
         if (tcpTunnelInfo.provider !== 'playit') {
-          exec('pgrep -f "ssh.*tcp@a\.pinggy\.io" >/dev/null && echo "1" || echo "0"', (err2, out2) => {
+          exec('pgrep -f "ssh.*5901.*tcp@a\\.pinggy\\.io" >/dev/null && echo "1" || echo "0"', (err2, out2) => {
             if (!out2 || out2.trim() !== '1') {
               tcpTunnelInfo.status = 'offline';
               setTimeout(() => startPinggyTunnel(false), 10000);
@@ -373,6 +421,15 @@ function ensureStandaloneWebrtcProxy() {
   if (standaloneServerStarted) return;
   standaloneServerStarted = true;
   const standaloneSrv = http.createServer((req, res) => {
+    if (req.url === '/turn-config.json' || req.url.startsWith('/turn-config.json?')) {
+      res.writeHead(200, {
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*',
+        'Cache-Control': 'no-cache, no-store, must-revalidate'
+      });
+      res.end(JSON.stringify(getTurnConfigPayload()));
+      return;
+    }
     const proxyReq = http.request({
       host: TARGET_HOST,
       port: TARGET_PORT,
@@ -409,7 +466,7 @@ function startWebrtcHttpTunnel(forceReset = false) {
   ensureStandaloneWebrtcProxy();
 
   if (!forceReset) {
-    exec('pgrep -f "ssh.*STANDALONE_WEBRTC_PORT.*a\.pinggy\.io" >/dev/null && echo "1" || echo "0"', (err, stdout) => {
+    exec(`pgrep -f "ssh.*${STANDALONE_WEBRTC_PORT}.*a\\.pinggy\\.io" >/dev/null && echo "1" || echo "0"`, (err, stdout) => {
       const isRunning = stdout && stdout.trim() === '1';
       if (isRunning && fs.existsSync('/tmp/pinggy_webrtc.log')) {
         const logContent = fs.readFileSync('/tmp/pinggy_webrtc.log', 'utf8');
@@ -432,7 +489,7 @@ function startWebrtcHttpTunnel(forceReset = false) {
       spawnNewWebrtcHttpTunnel();
     });
   } else {
-    exec('pkill -9 -f "ssh.*STANDALONE_WEBRTC_PORT.*a\.pinggy\.io" 2>/dev/null || true', () => {
+    exec(`pkill -9 -f "ssh.*${STANDALONE_WEBRTC_PORT}.*a\\.pinggy\\.io" 2>/dev/null || true`, () => {
       if (webrtcHttpProc) {
         try { webrtcHttpProc.kill(); } catch (e) {}
         webrtcHttpProc = null;
@@ -480,7 +537,7 @@ function spawnNewWebrtcHttpTunnel() {
 
       proc.on('close', () => {
         webrtcHttpProc = null;
-        exec('pgrep -f "ssh.*STANDALONE_WEBRTC_PORT.*a\.pinggy\.io" >/dev/null && echo "1" || echo "0"', (err2, out2) => {
+        exec(`pgrep -f "ssh.*${STANDALONE_WEBRTC_PORT}.*a\\.pinggy\\.io" >/dev/null && echo "1" || echo "0"`, (err2, out2) => {
           if (!out2 || out2.trim() !== '1') {
             webrtcHttpTunnel.url = '';
             webrtcHttpTunnel.status = 'offline';
@@ -495,11 +552,164 @@ function spawnNewWebrtcHttpTunnel() {
   });
 }
 
+function ensureCoturn(callback) {
+  exec('ip addr add 10.200.0.1/24 dev eth1 2>/dev/null || true; pgrep -x turnserver >/dev/null && echo "1" || echo "0"', (err, stdout) => {
+    const running = stdout && stdout.trim() === '1';
+    if (running) {
+      writeTurnConfigFiles();
+      if (callback) callback();
+      return;
+    }
+    const startCoturnCmd = `
+      ip addr add 10.200.0.1/24 dev eth1 2>/dev/null || true
+      if ! which turnserver >/dev/null 2>&1; then
+        export DEBIAN_FRONTEND=noninteractive
+        apt-get update && apt-get install -y --no-install-recommends -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" coturn || true
+      fi
+      if which turnserver >/dev/null 2>&1; then
+        cat << 'EOF' > /etc/turnserver.conf
+listening-port=${TURN_PORT}
+listening-ip=127.0.0.1
+listening-ip=10.200.0.1
+relay-ip=127.0.0.1
+external-ip=8.8.8.8/127.0.0.1
+min-port=49152
+max-port=49252
+fingerprint
+lt-cred-mech
+user=${TURN_USER}:${TURN_PASS}
+realm=obs-webrtc
+allow-loopback-peers
+no-multicast-peers
+no-cli
+no-tls
+no-dtls
+log-file=/tmp/coturn.log
+simple-log
+EOF
+        turnserver -c /etc/turnserver.conf -o >/dev/null 2>&1 || true
+      fi
+    `;
+    exec(startCoturnCmd, () => {
+      writeTurnConfigFiles();
+      if (callback) callback();
+    });
+  });
+}
+
+function startTurnTunnel(forceReset = false) {
+  ensureCoturn(() => {
+    if (!forceReset) {
+      exec(`pgrep -f "ssh.*${TURN_PORT}.*tcp@a\\.pinggy\\.io" >/dev/null && echo "1" || echo "0"`, (err, stdout) => {
+        const isRunning = stdout && stdout.trim() === '1';
+        if (isRunning && fs.existsSync('/tmp/pinggy_turn.log')) {
+          const logContent = fs.readFileSync('/tmp/pinggy_turn.log', 'utf8');
+          const match = logContent.match(/tcp:\/\/([^:\s]+):(\d+)/);
+          if (match) {
+            turnTunnelInfo.host = match[1];
+            turnTunnelInfo.port = match[2];
+            turnTunnelInfo.full = `${match[1]}:${match[2]}`;
+            turnTunnelInfo.url = `turn:${match[1]}:${match[2]}?transport=tcp`;
+            turnTunnelInfo.status = 'online';
+            turnTunnelInfo.isReused = true;
+            turnTunnelInfo.lastUpdated = new Date().toISOString();
+            saveTunnelCache();
+            addLog(`Reusing active persistent Coturn TCP Tunnel (Pinggy): ${turnTunnelInfo.url}`);
+            return;
+          }
+        }
+        if (isRunning && turnTunnelInfo.full && turnTunnelInfo.status === 'online') {
+          turnTunnelInfo.isReused = true;
+          writeTurnConfigFiles();
+          addLog(`Reusing cached persistent Coturn TCP Tunnel (Pinggy): ${turnTunnelInfo.url}`);
+          return;
+        }
+        spawnNewTurnTunnel();
+      });
+    } else {
+      exec(`pkill -9 -f "ssh.*${TURN_PORT}.*tcp@a\\.pinggy\\.io" 2>/dev/null || true`, () => {
+        if (turnTunnelProc) {
+          try { turnTunnelProc.kill(); } catch (e) {}
+          turnTunnelProc = null;
+        }
+        spawnNewTurnTunnel();
+      });
+    }
+  });
+}
+
+function spawnNewTurnTunnel() {
+  exec('which ssh >/dev/null 2>&1 && echo "1" || echo "0"', (err, stdout) => {
+    if (!stdout || stdout.trim() !== '1') {
+      turnTunnelInfo.status = 'offline';
+      return;
+    }
+    addLog('Establishing persistent Pinggy TCP tunnel for self-hosted Coturn TURN server (port 3478)...');
+    try {
+      fs.writeFileSync('/tmp/pinggy_turn.log', '');
+
+      const proc = spawn('setsid', [
+        'ssh',
+        '-p', '443',
+        '-o', 'StrictHostKeyChecking=no',
+        '-o', 'ServerAliveInterval=30',
+        '-o', 'ServerAliveCountMax=3',
+        '-R', `0:localhost:${TURN_PORT}`,
+        'tcp@a.pinggy.io'
+      ], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        detached: true
+      });
+      turnTunnelProc = proc;
+
+      const parseOutput = (chunk) => {
+        const text = chunk.toString();
+        fs.appendFileSync('/tmp/pinggy_turn.log', text);
+        const match = text.match(/tcp:\/\/([^:\s]+):(\d+)/);
+        if (match) {
+          turnTunnelInfo.host = match[1];
+          turnTunnelInfo.port = match[2];
+          turnTunnelInfo.full = `${match[1]}:${match[2]}`;
+          turnTunnelInfo.url = `turn:${match[1]}:${match[2]}?transport=tcp`;
+          turnTunnelInfo.status = 'online';
+          turnTunnelInfo.isReused = false;
+          turnTunnelInfo.lastUpdated = new Date().toISOString();
+          saveTunnelCache();
+          addLog(`Public Coturn TURN TCP Tunnel (Pinggy) established: ${turnTunnelInfo.url}`);
+        }
+      };
+
+      proc.stdout.on('data', parseOutput);
+      proc.stderr.on('data', parseOutput);
+
+      proc.on('close', () => {
+        turnTunnelProc = null;
+        exec(`pgrep -f "ssh.*${TURN_PORT}.*tcp@a\\.pinggy\\.io" >/dev/null && echo "1" || echo "0"`, (err2, out2) => {
+          if (!out2 || out2.trim() !== '1') {
+            turnTunnelInfo.status = 'offline';
+            setTimeout(() => startTurnTunnel(false), 10000);
+          }
+        });
+      });
+
+      proc.on('error', () => {
+        turnTunnelProc = null;
+        turnTunnelInfo.status = 'offline';
+      });
+
+      proc.unref();
+    } catch (e) {
+      addLog(`Coturn tunnel spawn error: ${e.message}`);
+    }
+  });
+}
+
 function startTCPTunnel(forceReset = false) {
   loadTunnelCache();
   startPinggyTunnel(forceReset);
   startPlayit();
   startWebrtcHttpTunnel(forceReset);
+  startTurnTunnel(forceReset);
 }
 
 // Start public tunnels on server init
@@ -626,7 +836,7 @@ function rebuildPluginAndRestartOBS(callback) {
     cd /app/applet
     export PKG_CONFIG_PATH="/usr/local/lib/x86_64-linux-gnu/pkgconfig:/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH"
     if [ -f /usr/include/obs/media-io/video-io.h ] && ! grep -q "VIDEO_FORMAT_V210" /usr/include/obs/media-io/video-io.h; then
-      sed -i 's/VIDEO_FORMAT_YA2L, \/\/ Little Endian/VIDEO_FORMAT_YA2L, \/\/ Little Endian\n\tVIDEO_FORMAT_V210,/' /usr/include/obs/media-io/video-io.h 2>/dev/null || true
+      sed -i 's#VIDEO_FORMAT_YA2L, // Little Endian#VIDEO_FORMAT_YA2L, // Little Endian\\n\\tVIDEO_FORMAT_V210,#' /usr/include/obs/media-io/video-io.h 2>/dev/null || true
     fi
     if [ -d build ]; then
       ninja -C build || (rm -rf build && meson setup build -Ddock=enabled && ninja -C build)
@@ -749,6 +959,8 @@ function restartFullPC(callback) {
 J="/opt/obs-studio-32/AppDir/.junest"
 export GST_PLUGIN_PATH="/usr/local/lib/x86_64-linux-gnu/gstreamer-1.0:/usr/lib/x86_64-linux-gnu/gstreamer-1.0:$J/usr/lib/gstreamer-1.0"
 export GST_PLUGIN_SYSTEM_PATH="/usr/local/lib/x86_64-linux-gnu/gstreamer-1.0:/usr/lib/x86_64-linux-gnu/gstreamer-1.0:$J/usr/lib/gstreamer-1.0"
+export OBS_WEBRTC_TURN_SERVER="turn://obs:turnpassword@127.0.0.1:3478?transport=tcp"
+export OBS_WEBRTC_ICE_POLICY="relay"
 if [ -x "$J/usr/bin/obs" ]; then
   export PYTHONHOME="$J/usr"
   export QT_PLUGIN_PATH="$J/usr/lib/qt6/plugins:$J/usr/lib/qt/plugins"
@@ -779,7 +991,7 @@ WEOF
       ldconfig
     fi
     if [ -f /usr/include/obs/media-io/video-io.h ] && ! grep -q "VIDEO_FORMAT_V210" /usr/include/obs/media-io/video-io.h; then
-      sed -i 's/VIDEO_FORMAT_YA2L, \/\/ Little Endian/VIDEO_FORMAT_YA2L, \/\/ Little Endian\n\tVIDEO_FORMAT_V210,/' /usr/include/obs/media-io/video-io.h 2>/dev/null || true
+      sed -i 's#VIDEO_FORMAT_YA2L, // Little Endian#VIDEO_FORMAT_YA2L, // Little Endian\\n\\tVIDEO_FORMAT_V210,#' /usr/include/obs/media-io/video-io.h 2>/dev/null || true
     fi
 
     # 3. Check, compile & install obs-gstreamer plugin with Qt6 Dock
@@ -944,9 +1156,10 @@ exec('which Xtigervnc vncserver websockify startxfce4 >/dev/null 2>&1 && [ -x /o
   }
 });
 
-// Background supervisor to auto-heal desktop services & keep OBS open
+// Background supervisor to auto-heal desktop services, coturn & keep OBS open
 setInterval(() => {
   if (isRestarting || isSettingUp) return;
+  ensureCoturn();
   ensureVNC(() => {
     ensureOBS();
   });
@@ -968,6 +1181,16 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  // Dynamic TURN configuration endpoint for WebRTC WHEP viewers
+  if (req.url === '/turn-config.json' || req.url.startsWith('/turn-config.json?')) {
+    res.writeHead(200, {
+      'Content-Type': 'application/json',
+      'Cache-Control': 'no-cache, no-store, must-revalidate'
+    });
+    res.end(JSON.stringify(getTurnConfigPayload()));
+    return;
+  }
+
   // API Status endpoint for OBS GStreamer WebRTC stream (port 8888)
   if (req.url === '/api/status') {
     checkPort(TARGET_PORT, TARGET_HOST, (err, isOnline, message) => {
@@ -977,6 +1200,7 @@ const server = http.createServer((req, res) => {
         targetHost: TARGET_HOST,
         targetPort: TARGET_PORT,
         publicUrl: webrtcHttpTunnel.url || '',
+        turnTunnel: turnTunnelInfo,
         message: isOnline ? 'GStreamer WebRTC server is listening' : 'GStreamer WebRTC stream offline (not broadcasting on port 8888)',
         timestamp: new Date().toISOString()
       }));
@@ -1042,6 +1266,7 @@ const server = http.createServer((req, res) => {
                 vncPassword: 'vncpassword',
                 tcpTunnel: tcpTunnelInfo,
                 webrtcPublicUrl: webrtcHttpTunnel.url || '',
+                turnTunnel: turnTunnelInfo,
                 currentResolution: currentResolutionMode,
                 logs: setupLogs.slice(-120),
                 timestamp: new Date().toISOString()
@@ -1125,6 +1350,10 @@ const server = http.createServer((req, res) => {
     webrtcHttpTunnel.url = '';
     webrtcHttpTunnel.status = 'connecting';
     webrtcHttpTunnel.isReused = false;
+    turnTunnelInfo.full = '';
+    turnTunnelInfo.url = '';
+    turnTunnelInfo.status = 'connecting';
+    turnTunnelInfo.isReused = false;
 
     startTCPTunnel(true);
 

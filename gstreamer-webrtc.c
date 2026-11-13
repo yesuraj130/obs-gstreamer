@@ -44,18 +44,58 @@
 struct packet_counter {
 	const char *label;
 	uint64_t count;
+	int target_pt;
 };
 
 static GstPadProbeReturn rtp_packet_probe(GstPad *pad, GstPadProbeInfo *info,
 	gpointer user_data)
 {
+	UNUSED_PARAMETER(pad);
 	struct packet_counter *counter = user_data;
+
+	if ((GST_PAD_PROBE_INFO_TYPE(info) & GST_PAD_PROBE_TYPE_EVENT_DOWNSTREAM) &&
+	    counter->target_pt > 0) {
+		GstEvent *ev = GST_PAD_PROBE_INFO_EVENT(info);
+		if (ev && GST_EVENT_TYPE(ev) == GST_EVENT_CAPS) {
+			GstCaps *caps = NULL;
+			gst_event_parse_caps(ev, &caps);
+			if (caps && gst_caps_get_size(caps) > 0) {
+				GstCaps *new_caps = gst_caps_copy(caps);
+				GstStructure *s = gst_caps_get_structure(new_caps, 0);
+				gst_structure_set(s, "payload", G_TYPE_INT, counter->target_pt, NULL);
+				GstEvent *new_ev = gst_event_new_caps(new_caps);
+				gst_caps_unref(new_caps);
+				gst_event_unref(ev);
+				GST_PAD_PROBE_INFO_DATA(info) = new_ev;
+			}
+		}
+		return GST_PAD_PROBE_OK;
+	}
+
 	if (!(GST_PAD_PROBE_INFO_TYPE(info) & GST_PAD_PROBE_TYPE_BUFFER))
 		return GST_PAD_PROBE_OK;
+
+	if (counter->target_pt > 0) {
+		GstBuffer *buf = GST_PAD_PROBE_INFO_BUFFER(info);
+		if (buf && gst_buffer_get_size(buf) >= 12) {
+			buf = gst_buffer_make_writable(buf);
+			GST_PAD_PROBE_INFO_DATA(info) = buf;
+			GstMapInfo map;
+			if (gst_buffer_map(buf, &map, GST_MAP_READWRITE)) {
+				if (map.size >= 12) {
+					map.data[1] = (map.data[1] & 0x80) |
+						      (guint8)(counter->target_pt & 0x7F);
+				}
+				gst_buffer_unmap(buf, &map);
+			}
+		}
+	}
+
 	counter->count++;
 	if (counter->count == 1 || counter->count % 300 == 0)
-		blog(LOG_INFO, "[obs-gstreamer] WebRTC RTP %s packet %llu",
-			counter->label, (unsigned long long)counter->count);
+		blog(LOG_INFO, "[obs-gstreamer] WebRTC RTP %s packet %llu (pt=%d)",
+			counter->label, (unsigned long long)counter->count,
+			counter->target_pt > 0 ? counter->target_pt : 96);
 	return GST_PAD_PROBE_OK;
 }
 
@@ -257,87 +297,169 @@ static const char *default_app_js =
 "  var video = document.getElementById('video');\n"
 "  var status = document.getElementById('status');\n"
 "  var pc = null;\n"
+"  var whepResourceUrl = null;\n"
 "  var attempts = 0;\n"
+"  var reconnectTimer = null;\n"
+"  var manualClose = false;\n"
 "\n"
 "  function setStatus(text) {\n"
 "    status.textContent = text;\n"
 "    console.log('[obs-webrtc]', text);\n"
 "  }\n"
 "\n"
-"  function connect() {\n"
-"    setStatus('connecting\\u2026');\n"
-"    pc = new RTCPeerConnection();\n"
-"    window.__obsWebRTCPeerConnection = pc;\n"
-"    pc.oniceconnectionstatechange = function () {\n"
-"      setStatus('connection: ' + pc.connectionState + '\\nice: ' + pc.iceConnectionState +\n"
-"        '\\nsignaling: ' + pc.signalingState + '\\ntrack: ' + (video.srcObject ? 'yes' : 'no') +\n"
-"        '\\nvideo: ' + video.videoWidth + 'x' + video.videoHeight);\n"
-"    };\n"
-"    pc.onsignalingstatechange = function () {\n"
-"      console.log('[obs-webrtc] signaling state:', pc.signalingState);\n"
-"    };\n"
+"  function deleteSession() {\n"
+"    if (!whepResourceUrl) return;\n"
+"    var url = whepResourceUrl;\n"
+"    whepResourceUrl = null;\n"
+"    try {\n"
+"      fetch(url, { method: 'DELETE', keepalive: true }).catch(function () {});\n"
+"    } catch (e) {}\n"
+"  }\n"
 "\n"
-"    var tc = pc.addTransceiver('video', { direction: 'recvonly' });\n"
-"    if (typeof RTCRtpReceiver !== 'undefined' && RTCRtpReceiver.getCapabilities) {\n"
-"      var caps = RTCRtpReceiver.getCapabilities('video');\n"
-"      if (caps && caps.codecs) {\n"
-"        var h265Codecs = caps.codecs.filter(function (c) {\n"
-"          return c.mimeType && (c.mimeType.toLowerCase() === 'video/h265' || c.mimeType.toLowerCase() === 'video/hevc');\n"
-"        });\n"
-"        if (h265Codecs.length > 0) {\n"
-"          var otherCodecs = caps.codecs.filter(function (c) {\n"
-"            return !c.mimeType || (c.mimeType.toLowerCase() !== 'video/h265' && c.mimeType.toLowerCase() !== 'video/hevc');\n"
-"          });\n"
-"          try {\n"
-"            tc.setCodecPreferences(h265Codecs.concat(otherCodecs));\n"
-"            console.log('[obs-webrtc] Preferred H265/HEVC in browser WebRTC capabilities');\n"
-"          } catch (e) {}\n"
+"  function resolveIceConfig() {\n"
+"    var params = new URLSearchParams(window.location.search || '');\n"
+"    var qTurn = params.get('turn');\n"
+"    if (qTurn && qTurn.trim()) {\n"
+"      var srv = { urls: qTurn.trim() };\n"
+"      if (params.get('user')) srv.username = params.get('user');\n"
+"      if (params.get('pass')) srv.credential = params.get('pass');\n"
+"      return Promise.resolve({ iceServers: [srv], iceTransportPolicy: params.get('policy') || 'all' });\n"
+"    }\n"
+"    return fetch('/turn-config.json', { cache: 'no-store' })\n"
+"      .then(function (r) { return r.ok ? r.json() : null; })\n"
+"      .then(function (cfg) {\n"
+"        if (cfg && Array.isArray(cfg.iceServers) && cfg.iceServers.length > 0) {\n"
+"          return { iceServers: cfg.iceServers, iceTransportPolicy: cfg.iceTransportPolicy || 'all' };\n"
+"        }\n"
+"        return { iceServers: [], iceTransportPolicy: 'all' };\n"
+"      })\n"
+"      .catch(function () { return { iceServers: [], iceTransportPolicy: 'all' }; });\n"
+"  }\n"
+"\n"
+"  function waitForIceGathering(peer, hasTurn, timeoutMs) {\n"
+"    return new Promise(function (resolve) {\n"
+"      if (peer.iceGatheringState === 'complete') {\n"
+"        resolve();\n"
+"        return;\n"
+"      }\n"
+"      var done = false;\n"
+"      var settleTimer = null;\n"
+"      var maxTimer = null;\n"
+"      function finish() {\n"
+"        if (done) return;\n"
+"        done = true;\n"
+"        if (settleTimer) clearTimeout(settleTimer);\n"
+"        if (maxTimer) clearTimeout(maxTimer);\n"
+"        peer.removeEventListener('icegatheringstatechange', onState);\n"
+"        peer.removeEventListener('icecandidate', onCand);\n"
+"        resolve();\n"
+"      }\n"
+"      function onState() {\n"
+"        if (peer.iceGatheringState === 'complete') finish();\n"
+"      }\n"
+"      function onCand(ev) {\n"
+"        if (!ev.candidate) {\n"
+"          finish();\n"
+"        } else if (hasTurn && ev.candidate.candidate && ev.candidate.candidate.indexOf(' typ relay') !== -1) {\n"
+"          if (!settleTimer) settleTimer = setTimeout(finish, 250);\n"
 "        }\n"
 "      }\n"
-"    }\n"
+"      maxTimer = setTimeout(finish, timeoutMs || (hasTurn ? 4000 : 800));\n"
+"      peer.addEventListener('icegatheringstatechange', onState);\n"
+"      peer.addEventListener('icecandidate', onCand);\n"
+"    });\n"
+"  }\n"
 "\n"
-"    pc.ontrack = function (event) {\n"
-"      console.log('[obs-webrtc] ontrack', event.track.kind, event.track.readyState, event.streams);\n"
-"      video.srcObject = event.streams[0] || new MediaStream([event.track]);\n"
-"      video.play().catch(function (err) {\n"
-"        setStatus('playback error: ' + err.message);\n"
-"      });\n"
-"      setStatus('video track received');\n"
-"    };\n"
-"    video.onloadedmetadata = function () {\n"
-"      setStatus('metadata: ' + video.videoWidth + 'x' + video.videoHeight);\n"
-"    };\n"
-"    video.onplaying = function () { setStatus('playing: ' + video.videoWidth + 'x' + video.videoHeight); };\n"
-"    video.onerror = function () { console.error('[obs-webrtc] video error', video.error); };\n"
+"  function connect() {\n"
+"    if (manualClose) return;\n"
+"    clearTimeout(reconnectTimer);\n"
+"    deleteSession();\n"
+"    if (pc) { try { pc.close(); } catch (e) {} pc = null; }\n"
+"    setStatus('connecting\\u2026');\n"
 "\n"
-"    pc.onconnectionstatechange = function () {\n"
-"      setStatus('state: ' + pc.connectionState);\n"
-"      if (pc.connectionState === 'failed' ||\n"
-"          pc.connectionState === 'disconnected' ||\n"
-"          pc.connectionState === 'closed') {\n"
-"        reconnect();\n"
+"    resolveIceConfig().then(function (rtcCfg) {\n"
+"      if (manualClose) return;\n"
+"      var hasTurn = rtcCfg.iceServers && rtcCfg.iceServers.length > 0;\n"
+"      pc = new RTCPeerConnection({ iceServers: rtcCfg.iceServers || [], iceTransportPolicy: rtcCfg.iceTransportPolicy || 'all' });\n"
+"      window.__obsWebRTCPeerConnection = pc;\n"
+"\n"
+"      pc.oniceconnectionstatechange = function () {\n"
+"        setStatus('connection: ' + pc.connectionState + '\\nice: ' + pc.iceConnectionState +\n"
+"          '\\nsignaling: ' + pc.signalingState + '\\ntrack: ' + (video.srcObject ? 'yes' : 'no') +\n"
+"          '\\nvideo: ' + video.videoWidth + 'x' + video.videoHeight);\n"
+"      };\n"
+"      pc.onsignalingstatechange = function () {\n"
+"        console.log('[obs-webrtc] signaling state:', pc.signalingState);\n"
+"      };\n"
+"\n"
+"      var tc = pc.addTransceiver('video', { direction: 'recvonly' });\n"
+"      if (typeof RTCRtpReceiver !== 'undefined' && RTCRtpReceiver.getCapabilities) {\n"
+"        var caps = RTCRtpReceiver.getCapabilities('video');\n"
+"        if (caps && caps.codecs) {\n"
+"          var h265Codecs = caps.codecs.filter(function (c) {\n"
+"            return c.mimeType && (c.mimeType.toLowerCase() === 'video/h265' || c.mimeType.toLowerCase() === 'video/hevc');\n"
+"          });\n"
+"          if (h265Codecs.length > 0) {\n"
+"            var otherCodecs = caps.codecs.filter(function (c) {\n"
+"              return !c.mimeType || (c.mimeType.toLowerCase() !== 'video/h265' && c.mimeType.toLowerCase() !== 'video/hevc');\n"
+"            });\n"
+"            try {\n"
+"              tc.setCodecPreferences(h265Codecs.concat(otherCodecs));\n"
+"              console.log('[obs-webrtc] Preferred H265/HEVC in browser WebRTC capabilities');\n"
+"            } catch (e) {}\n"
+"          }\n"
+"        }\n"
 "      }\n"
-"    };\n"
 "\n"
-"    pc.createOffer().then(function (offer) {\n"
-"      return pc.setLocalDescription(offer);\n"
-"    }).then(function () {\n"
-"      return fetch('/whep', {\n"
-"        method: 'POST',\n"
-"        headers: { 'Content-Type': 'application/sdp' },\n"
-"        body: pc.localDescription.sdp\n"
+"      pc.ontrack = function (event) {\n"
+"        console.log('[obs-webrtc] ontrack', event.track.kind, event.track.readyState, event.streams);\n"
+"        video.srcObject = event.streams[0] || new MediaStream([event.track]);\n"
+"        video.play().catch(function (err) {\n"
+"          setStatus('playback error: ' + err.message);\n"
+"        });\n"
+"        setStatus('video track received');\n"
+"      };\n"
+"      video.onloadedmetadata = function () {\n"
+"        setStatus('metadata: ' + video.videoWidth + 'x' + video.videoHeight);\n"
+"      };\n"
+"      video.onplaying = function () { setStatus('playing: ' + video.videoWidth + 'x' + video.videoHeight); };\n"
+"      video.onerror = function () { console.error('[obs-webrtc] video error', video.error); };\n"
+"\n"
+"      pc.onconnectionstatechange = function () {\n"
+"        setStatus('state: ' + pc.connectionState);\n"
+"        if (pc.connectionState === 'connected') {\n"
+"          attempts = 0;\n"
+"        } else if (pc.connectionState === 'failed' ||\n"
+"            pc.connectionState === 'disconnected' ||\n"
+"            pc.connectionState === 'closed') {\n"
+"          reconnect();\n"
+"        }\n"
+"      };\n"
+"\n"
+"      return pc.createOffer().then(function (offer) {\n"
+"        return pc.setLocalDescription(offer);\n"
+"      }).then(function () {\n"
+"        return waitForIceGathering(pc, hasTurn, hasTurn ? 4000 : 800);\n"
+"      }).then(function () {\n"
+"        return fetch('/whep', {\n"
+"          method: 'POST',\n"
+"          headers: { 'Content-Type': 'application/sdp' },\n"
+"          body: pc.localDescription.sdp\n"
+"        });\n"
+"      }).then(function (response) {\n"
+"        console.log('[obs-webrtc] WHEP response:', response.status);\n"
+"        var loc = response.headers.get('location');\n"
+"        if (loc) whepResourceUrl = loc;\n"
+"        if (!response.ok) {\n"
+"          throw new Error('WHEP POST failed: ' + response.status);\n"
+"        }\n"
+"        return response.text();\n"
+"      }).then(function (answerSdp) {\n"
+"        var validSdp = (answerSdp || '').trim().replace(/\\r?\\n/g, '\\r\\n') + '\\r\\n';\n"
+"        console.log('[obs-webrtc] answer SDP bytes:', validSdp.length);\n"
+"        attempts = 0;\n"
+"        return pc.setRemoteDescription({ type: 'answer', sdp: validSdp });\n"
 "      });\n"
-"    }).then(function (response) {\n"
-"      console.log('[obs-webrtc] WHEP response:', response.status);\n"
-"      if (!response.ok) {\n"
-"        throw new Error('WHEP POST failed: ' + response.status);\n"
-"      }\n"
-"      return response.text();\n"
-"    }).then(function (answerSdp) {\n"
-"      var validSdp = (answerSdp || '').trim().replace(/\\r?\\n/g, '\\r\\n') + '\\r\\n';\n"
-"      console.log('[obs-webrtc] answer SDP bytes:', validSdp.length);\n"
-"      attempts = 0;\n"
-"      return pc.setRemoteDescription({ type: 'answer', sdp: validSdp });\n"
 "    }).catch(function (err) {\n"
 "      setStatus('error: ' + err.message);\n"
 "      reconnect();\n"
@@ -345,15 +467,20 @@ static const char *default_app_js =
 "  }\n"
 "\n"
 "  function reconnect() {\n"
+"    if (manualClose) return;\n"
+"    deleteSession();\n"
 "    if (pc) {\n"
 "      try { pc.close(); } catch (e) {}\n"
 "      pc = null;\n"
 "    }\n"
+"    clearTimeout(reconnectTimer);\n"
 "    var delay = Math.min(1000 * Math.pow(2, attempts++), 10000);\n"
-"    setTimeout(connect, delay);\n"
+"    reconnectTimer = setTimeout(connect, delay);\n"
 "  }\n"
 "\n"
 "  window.addEventListener('beforeunload', function () {\n"
+"    manualClose = true;\n"
+"    deleteSession();\n"
 "    if (pc) { try { pc.close(); } catch (e) {} }\n"
 "  });\n"
 "\n"
@@ -936,7 +1063,7 @@ static void on_answer_created(GstPromise *promise, gpointer user_data)
 	GstWebRTCSessionDescription *answer = NULL;
 	if (reply) {
 		gchar *reply_text = gst_structure_to_string(reply);
-		blog(LOG_ERROR, "[obs-gstreamer] WHEP session %s: create-answer reply: %s",
+		blog(LOG_DEBUG, "[obs-gstreamer] WHEP session %s: create-answer reply: %s",
 			ctx->session_id, reply_text);
 		g_free(reply_text);
 		gst_structure_get(reply, "answer", GST_TYPE_WEBRTC_SESSION_DESCRIPTION, &answer, NULL);
@@ -1054,10 +1181,23 @@ static void whep_post(struct gstreamer_webrtc *webrtc, SoupServerMessage *msg)
 	const char *turn = webrtc->turn_server
 		? webrtc->turn_server
 		: (webrtc->settings ? obs_data_get_string(webrtc->settings, "webrtc_turn_server") : NULL);
+	if (!turn || !turn[0] || g_strcmp0(turn, "none") == 0) {
+		const char *env_turn = g_getenv("OBS_WEBRTC_TURN_SERVER");
+		if (env_turn && env_turn[0])
+			turn = env_turn;
+	}
 	if (turn && turn[0] && g_strcmp0(turn, "none") != 0) {
 		g_object_set(session->webrtcbin, "turn-server", turn, NULL);
 		blog(LOG_INFO, "[obs-gstreamer-webrtc] WHEP session %s: configured TURN relay: %s",
 			session->id, turn);
+	}
+
+	const char *ice_policy = g_getenv("OBS_WEBRTC_ICE_POLICY");
+	if (ice_policy && g_ascii_strcasecmp(ice_policy, "relay") == 0) {
+		g_object_set(session->webrtcbin, "ice-transport-policy",
+			GST_WEBRTC_ICE_TRANSPORT_POLICY_RELAY, NULL);
+		blog(LOG_INFO, "[obs-gstreamer-webrtc] WHEP session %s: ICE transport policy set to RELAY",
+			session->id);
 	}
 
 	// Build the RTP branch before applying the browser offer. Keep the
@@ -1075,14 +1215,70 @@ static void whep_post(struct gstreamer_webrtc *webrtc, SoupServerMessage *msg)
 		soup_server_message_set_status(msg, SOUP_STATUS_BAD_REQUEST, NULL);
 		return;
 	}
+	// Find the viewer's offered RTP payload type for H264 / H265
+	int matched_pt = 96;
+	const char *want_enc = webrtc->is_h265 ? "H265" : "H264";
+	guint n_medias = gst_sdp_message_medias_len(offer_sdp);
+	for (guint mi = 0; mi < n_medias; mi++) {
+		const GstSDPMedia *media = gst_sdp_message_get_media(offer_sdp, mi);
+		if (!media || g_strcmp0(gst_sdp_media_get_media(media), "video") != 0)
+			continue;
+		int first_match_pt = 0;
+		int baseline_match_pt = 0;
+		guint n_attrs = gst_sdp_media_attributes_len(media);
+		for (guint ai = 0; ai < n_attrs; ai++) {
+			const GstSDPAttribute *attr = gst_sdp_media_get_attribute(media, ai);
+			if (!attr || !attr->key || !attr->value)
+				continue;
+			if (g_ascii_strcasecmp(attr->key, "rtpmap") == 0) {
+				int pt = 0;
+				char codec_buf[64] = {0};
+				if (sscanf(attr->value, "%d %63[^/]", &pt, codec_buf) == 2 &&
+				    pt > 0 && g_ascii_strcasecmp(codec_buf, want_enc) == 0) {
+					if (!first_match_pt)
+						first_match_pt = pt;
+					for (guint fi = 0; fi < n_attrs; fi++) {
+						const GstSDPAttribute *fa = gst_sdp_media_get_attribute(media, fi);
+						if (!fa || !fa->key || !fa->value ||
+						    g_ascii_strcasecmp(fa->key, "fmtp") != 0)
+							continue;
+						int fmtp_pt = 0;
+						if (sscanf(fa->value, "%d ", &fmtp_pt) == 1 && fmtp_pt == pt) {
+							if (strstr(fa->value, "42e0") || strstr(fa->value, "4200") ||
+							    strstr(fa->value, "42E0")) {
+								if (!baseline_match_pt)
+									baseline_match_pt = pt;
+							}
+						}
+					}
+				}
+			}
+		}
+		if (baseline_match_pt > 0)
+			matched_pt = baseline_match_pt;
+		else if (first_match_pt > 0)
+			matched_pt = first_match_pt;
+		break;
+	}
+	session->rtp_counter.label = session->id;
+	session->rtp_counter.target_pt = matched_pt;
+	blog(LOG_INFO, "[obs-gstreamer-webrtc] WHEP session %s: matched %s RTP payload type pt=%d",
+		session->id, want_enc, matched_pt);
+
+	GstSDPMessage *offer_sdp_copy = NULL;
+	gst_sdp_message_copy(offer_sdp, &offer_sdp_copy);
 	GstWebRTCSessionDescription *offer =
 		gst_webrtc_session_description_new(GST_WEBRTC_SDP_TYPE_OFFER, offer_sdp);
 	if (!offer) {
+		if (offer_sdp_copy)
+			gst_sdp_message_free(offer_sdp_copy);
 		gst_sdp_message_free(offer_sdp);
 		discard_unregistered_session(webrtc, session);
 		soup_server_message_set_status(msg, SOUP_STATUS_INTERNAL_SERVER_ERROR, NULL);
 		return;
 	}
+	if (offer_sdp_copy)
+		gst_sdp_message_free(offer_sdp_copy);
 
 	session->sinkpad = gst_element_request_pad_simple(session->webrtcbin, "sink_%u");
 	if (!session->sinkpad) {
@@ -1095,10 +1291,11 @@ static void whep_post(struct gstreamer_webrtc *webrtc, SoupServerMessage *msg)
 	GstWebRTCRTPTransceiver *transceiver = NULL;
 	g_object_get(session->sinkpad, "transceiver", &transceiver, NULL);
 	if (transceiver) {
-		const char *rtp_caps_str = webrtc->is_h265
-			? "application/x-rtp,media=video,encoding-name=H265,clock-rate=90000"
-			: "application/x-rtp,media=video,encoding-name=H264,clock-rate=90000";
+		gchar *rtp_caps_str = g_strdup_printf(
+			"application/x-rtp,media=video,encoding-name=%s,clock-rate=90000,payload=%d",
+			want_enc, matched_pt);
 		GstCaps *codec_caps = gst_caps_from_string(rtp_caps_str);
+		g_free(rtp_caps_str);
 		g_object_set(transceiver, "direction",
 			GST_WEBRTC_RTP_TRANSCEIVER_DIRECTION_SENDONLY,
 			"codec-preferences", codec_caps, NULL);
@@ -1106,6 +1303,11 @@ static void whep_post(struct gstreamer_webrtc *webrtc, SoupServerMessage *msg)
 		gst_object_unref(transceiver);
 	}
 	GstPad *queue_src = gst_element_get_static_pad(session->queue, "src");
+	if (queue_src) {
+		session->rtp_probe_id = gst_pad_add_probe(queue_src,
+			GST_PAD_PROBE_TYPE_BUFFER | GST_PAD_PROBE_TYPE_EVENT_DOWNSTREAM,
+			rtp_packet_probe, &session->rtp_counter, NULL);
+	}
 	if (!queue_src || gst_pad_link(queue_src, session->sinkpad) != GST_PAD_LINK_OK) {
 		if (queue_src) gst_object_unref(queue_src);
 		blog(LOG_ERROR, "[obs-gstreamer] WHEP POST: failed to link viewer RTP branch -> 500");
@@ -1127,13 +1329,6 @@ static void whep_post(struct gstreamer_webrtc *webrtc, SoupServerMessage *msg)
 		return;
 	}
 	gst_object_unref(queue_sink);
-	session->rtp_counter.label = session->id;
-	GstPad *branch_src = gst_element_get_static_pad(session->queue, "src");
-	if (branch_src) {
-		session->rtp_probe_id = gst_pad_add_probe(branch_src, GST_PAD_PROBE_TYPE_BUFFER,
-			rtp_packet_probe, &session->rtp_counter, NULL);
-		gst_object_unref(branch_src);
-	}
 	blog(LOG_INFO, "[obs-gstreamer] WHEP POST %s: RTP branch linked before offer", session->id);
 	if (!gst_element_sync_state_with_parent(session->queue) ||
 	    !gst_element_sync_state_with_parent(session->webrtcbin)) {
@@ -1356,12 +1551,22 @@ static void seed_web_root(const char *root)
 		return;
 	}
 
+	const char *seed_ver = "2";
+	char *ver_file = g_build_filename(root, ".seed_version", NULL);
+	char *cur_ver = NULL;
+	gboolean need_upgrade = TRUE;
+	if (g_file_get_contents(ver_file, &cur_ver, NULL, NULL)) {
+		if (cur_ver && g_str_has_prefix(cur_ver, seed_ver))
+			need_upgrade = FALSE;
+		g_free(cur_ver);
+	}
+
 	const char *names[] = { "index.html", "style.css", "app.js" };
 	const char *bodies[] = { default_index_html, default_style_css, default_app_js };
 
 	for (int i = 0; i < (int)G_N_ELEMENTS(names); i++) {
 		char *file = g_build_filename(root, names[i], NULL);
-		if (!g_file_test(file, G_FILE_TEST_EXISTS)) {
+		if (need_upgrade || !g_file_test(file, G_FILE_TEST_EXISTS)) {
 			GError *e = NULL;
 			g_file_set_contents(file, bodies[i], -1, &e);
 			if (e) {
@@ -1372,6 +1577,11 @@ static void seed_web_root(const char *root)
 		}
 		g_free(file);
 	}
+
+	if (need_upgrade) {
+		g_file_set_contents(ver_file, seed_ver, -1, NULL);
+	}
+	g_free(ver_file);
 }
 
 // ---------------------------------------------------------------------------

@@ -1770,6 +1770,7 @@ static void on_frontend_event(enum obs_frontend_event event, void *private_data)
 			defaultWebRTC->type = DEST_TYPE_WEBRTC;
 			defaultWebRTC->name = "Default WebRTC";
 			defaultWebRTC->webrtc_port = "8888";
+			defaultWebRTC->autostart = true;
 			defaultHub->destinations.push_back(defaultWebRTC);
 
 			g_master_hubs.push_back(defaultHub);

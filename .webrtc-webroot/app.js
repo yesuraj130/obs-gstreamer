@@ -653,172 +653,246 @@
     }, delay);
   }
 
+  var connectSeq = 0;
+
+  function resolveIceConfig() {
+    var storedUrl = localStorage.getItem('webrtc_turn_url') || '';
+    if (storedUrl === 'turn:openrelay.metered.ca:80') {
+      localStorage.removeItem('webrtc_turn_url');
+      localStorage.removeItem('webrtc_turn_user');
+      localStorage.removeItem('webrtc_turn_pass');
+      storedUrl = '';
+    }
+
+    if (storedUrl && storedUrl.trim()) {
+      var srv = { urls: storedUrl.trim() };
+      var storedUser = localStorage.getItem('webrtc_turn_user') || '';
+      var storedPass = localStorage.getItem('webrtc_turn_pass') || '';
+      if (storedUser.trim()) srv.username = storedUser.trim();
+      if (storedPass.trim()) srv.credential = storedPass.trim();
+      return Promise.resolve({
+        iceServers: [srv],
+        iceTransportPolicy: 'all',
+        source: 'custom'
+      });
+    }
+
+    return fetch('/turn-config.json', { cache: 'no-store' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (cfg) {
+        if (cfg && Array.isArray(cfg.iceServers) && cfg.iceServers.length > 0) {
+          if (inputTurnUrl && !inputTurnUrl.value.trim()) {
+            inputTurnUrl.placeholder = cfg.iceServers[0].urls + ' (auto)';
+          }
+          return {
+            iceServers: cfg.iceServers,
+            iceTransportPolicy: cfg.iceTransportPolicy || 'all',
+            source: 'auto'
+          };
+        }
+        return { iceServers: [], iceTransportPolicy: 'all', source: 'none' };
+      })
+      .catch(function () {
+        return { iceServers: [], iceTransportPolicy: 'all', source: 'none' };
+      });
+  }
+
   // WHEP Connection
   function connectWhep() {
     isTestPattern = false;
     cleanupWebRtc();
     isManualDisconnect = false;
+    var mySeq = ++connectSeq;
 
     setStreamBadge('connecting', 'Connecting...');
     log('Starting WebRTC handshake with /whep...', 'info');
 
-    var iceServers = [{ urls: 'stun:stun.l.google.com:19302' }];
-    var turnUrl = localStorage.getItem('webrtc_turn_url') || 'turn:openrelay.metered.ca:80';
-    var turnUser = localStorage.getItem('webrtc_turn_user') || 'openrelayproject';
-    var turnPass = localStorage.getItem('webrtc_turn_pass') || 'openrelayproject';
-    if (turnUrl && turnUrl.trim()) {
-      var serverObj = { urls: turnUrl.trim() };
-      if (turnUser && turnUser.trim()) serverObj.username = turnUser.trim();
-      if (turnPass && turnPass.trim()) serverObj.credential = turnPass.trim();
-      iceServers.push(serverObj);
-      log('Using free TURN relay server: ' + turnUrl, 'info');
-    }
+    resolveIceConfig().then(function (rtcCfg) {
+      if (mySeq !== connectSeq || isManualDisconnect || isTestPattern) return;
 
-    pc = new RTCPeerConnection({ iceServers: iceServers });
-    window.__obsWebRTCPeerConnection = pc;
-
-    statPcState.textContent = pc.connectionState;
-    statIceState.textContent = pc.iceConnectionState;
-    statSignaling.textContent = pc.signalingState;
-
-    pc.onconnectionstatechange = function () {
-      statPcState.textContent = pc.connectionState;
-      if (pc.connectionState === 'connected') {
-        reconnectAttempts = 0;
-        setStreamBadge('live', 'LIVE');
-        startStatsMonitor();
-      } else if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
-        setStreamBadge('offline', 'DISCONNECTED');
-        scheduleReconnect();
+      var iceServers = (rtcCfg && rtcCfg.iceServers) ? rtcCfg.iceServers : [];
+      var hasTurn = iceServers.length > 0;
+      if (hasTurn) {
+        log('Using ' + (rtcCfg.source === 'custom' ? 'custom' : 'auto coturn') + ' TURN relay: ' + iceServers[0].urls, 'info');
+      } else {
+        log('No TURN relay configured yet; using direct ICE candidates', 'info');
       }
-    };
 
-    pc.oniceconnectionstatechange = function () {
+      pc = new RTCPeerConnection({
+        iceServers: iceServers,
+        iceTransportPolicy: (rtcCfg && rtcCfg.iceTransportPolicy) || 'all'
+      });
+      window.__obsWebRTCPeerConnection = pc;
+
+      statPcState.textContent = pc.connectionState;
       statIceState.textContent = pc.iceConnectionState;
-    };
-    pc.onsignalingstatechange = function () {
       statSignaling.textContent = pc.signalingState;
-    };
 
-    var videoTransceiver = pc.addTransceiver('video', { direction: 'recvonly' });
-    if (typeof RTCRtpReceiver !== 'undefined' && RTCRtpReceiver.getCapabilities) {
-      var caps = RTCRtpReceiver.getCapabilities('video');
-      if (caps && caps.codecs) {
-        var h265Codecs = caps.codecs.filter(function (c) {
-          return c.mimeType && (c.mimeType.toLowerCase() === 'video/h265' || c.mimeType.toLowerCase() === 'video/hevc');
-        });
-        if (h265Codecs.length > 0) {
-          var otherCodecs = caps.codecs.filter(function (c) {
-            return !c.mimeType || (c.mimeType.toLowerCase() !== 'video/h265' && c.mimeType.toLowerCase() !== 'video/hevc');
+      pc.onconnectionstatechange = function () {
+        statPcState.textContent = pc.connectionState;
+        if (pc.connectionState === 'connected') {
+          reconnectAttempts = 0;
+          setStreamBadge('live', 'LIVE');
+          startStatsMonitor();
+        } else if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+          setStreamBadge('offline', 'DISCONNECTED');
+          scheduleReconnect();
+        }
+      };
+
+      pc.oniceconnectionstatechange = function () {
+        statIceState.textContent = pc.iceConnectionState;
+      };
+      pc.onsignalingstatechange = function () {
+        statSignaling.textContent = pc.signalingState;
+      };
+
+      var videoTransceiver = pc.addTransceiver('video', { direction: 'recvonly' });
+      if (typeof RTCRtpReceiver !== 'undefined' && RTCRtpReceiver.getCapabilities) {
+        var caps = RTCRtpReceiver.getCapabilities('video');
+        if (caps && caps.codecs) {
+          var h265Codecs = caps.codecs.filter(function (c) {
+            return c.mimeType && (c.mimeType.toLowerCase() === 'video/h265' || c.mimeType.toLowerCase() === 'video/hevc');
           });
-          try {
-            videoTransceiver.setCodecPreferences(h265Codecs.concat(otherCodecs));
-            log('Preferred H265/HEVC in browser WebRTC capabilities', 'info');
-          } catch (e) {
-            log('setCodecPreferences warning: ' + e.message, 'warn');
+          if (h265Codecs.length > 0) {
+            var otherCodecs = caps.codecs.filter(function (c) {
+              return !c.mimeType || (c.mimeType.toLowerCase() !== 'video/h265' && c.mimeType.toLowerCase() !== 'video/hevc');
+            });
+            try {
+              videoTransceiver.setCodecPreferences(h265Codecs.concat(otherCodecs));
+              log('Preferred H265/HEVC in browser WebRTC capabilities', 'info');
+            } catch (e) {
+              log('setCodecPreferences warning: ' + e.message, 'warn');
+            }
           }
         }
       }
-    }
 
-    pc.ontrack = function (event) {
-      log('WebRTC track received: ' + event.track.kind, 'info');
-      statTracks.textContent = event.track.kind;
+      pc.ontrack = function (event) {
+        log('WebRTC track received: ' + event.track.kind, 'info');
+        statTracks.textContent = event.track.kind;
 
-      // Zero-latency playout & jitter buffer optimization in browser
-      if (pc.getReceivers) {
-        pc.getReceivers().forEach(function (r) {
-          if ('playoutDelayHint' in r) r.playoutDelayHint = 0;
-          if ('jitterBufferTarget' in r) r.jitterBufferTarget = 0;
-        });
-      }
-
-      if (!video.srcObject) {
-        video.srcObject = event.streams[0] || new MediaStream([event.track]);
-      } else {
-        video.srcObject.addTrack(event.track);
-      }
-      video.play().catch(function () {});
-      setStreamBadge('live', 'LIVE');
-      audioVuMeter.classList.remove('hidden');
-    };
-
-    video.onloadedmetadata = function () {
-      var res = video.videoWidth + 'x' + video.videoHeight;
-      statDimensions.textContent = res;
-      badgeResolution.textContent = res;
-      badgeResolution.classList.remove('hidden');
-    };
-
-    function waitForIceGathering(pc, timeoutMs) {
-      return new Promise(function (resolve) {
-        if (pc.iceGatheringState === 'complete') {
-          resolve();
-          return;
+        // Zero-latency playout & jitter buffer optimization in browser
+        if (pc.getReceivers) {
+          pc.getReceivers().forEach(function (r) {
+            if ('playoutDelayHint' in r) r.playoutDelayHint = 0;
+            if ('jitterBufferTarget' in r) r.jitterBufferTarget = 0;
+          });
         }
-        var timer = setTimeout(function () {
-          log('ICE candidate gathering timeout reached, proceeding with SDP offer', 'info');
-          resolve();
-        }, timeoutMs || 1000);
 
-        function checkState() {
-          if (pc.iceGatheringState === 'complete') {
+        if (!video.srcObject) {
+          video.srcObject = event.streams[0] || new MediaStream([event.track]);
+        } else {
+          video.srcObject.addTrack(event.track);
+        }
+        video.play().catch(function () {});
+        setStreamBadge('live', 'LIVE');
+        audioVuMeter.classList.remove('hidden');
+      };
+
+      video.onloadedmetadata = function () {
+        var res = video.videoWidth + 'x' + video.videoHeight;
+        statDimensions.textContent = res;
+        badgeResolution.textContent = res;
+        badgeResolution.classList.remove('hidden');
+      };
+
+      function waitForIceGathering(peer, timeoutMs) {
+        return new Promise(function (resolve) {
+          if (peer.iceGatheringState === 'complete') {
+            resolve();
+            return;
+          }
+          var finished = false;
+          var settleTimer = null;
+          var relaySeen = false;
+          var timer = setTimeout(function () {
+            log('ICE gathering timeout reached (' + (relaySeen ? 'relay ready' : 'no relay yet') + '), proceeding with SDP offer', 'info');
+            finish();
+          }, timeoutMs || 4000);
+
+          function finish() {
+            if (finished) return;
+            finished = true;
             clearTimeout(timer);
-            pc.removeEventListener('icegatheringstatechange', checkState);
+            if (settleTimer) clearTimeout(settleTimer);
+            peer.removeEventListener('icegatheringstatechange', checkState);
+            peer.removeEventListener('icecandidate', onCand);
             resolve();
           }
-        }
-        pc.addEventListener('icegatheringstatechange', checkState);
-      });
-    }
 
-    pc.createOffer()
-      .then(function (offer) {
-        return pc.setLocalDescription(offer);
-      })
-      .then(function () {
-        return waitForIceGathering(pc, 800);
-      })
-      .then(function () {
-        log('Sending SDP offer to /whep (' + pc.localDescription.sdp.length + ' bytes)...', 'info');
-        return fetch('/whep', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/sdp',
-            'Accept': 'application/sdp'
-          },
-          body: pc.localDescription.sdp
-        });
-      })
-      .then(function (response) {
-        var contentType = response.headers.get('content-type') || '';
-        var loc = response.headers.get('location');
-        if (loc) window.__whepResourceUrl = loc;
-        if (!response.ok) {
-          return response.text().then(function (body) {
-            throw new Error('OBS GStreamer stream offline (status ' + response.status + ')');
-          });
-        }
-        return response.text().then(function (answerSdp) {
-          var check = (answerSdp || '').trim();
-          if (contentType.includes('text/html') || check.startsWith('<') || !check.startsWith('v=')) {
-            throw new Error('Stream offline (gateway returned HTML instead of SDP answer)');
+          function checkState() {
+            if (peer.iceGatheringState === 'complete') finish();
           }
-          var validSdp = check.replace(/\r?\n/g, '\r\n') + '\r\n';
-          log('Received SDP answer (' + validSdp.length + ' bytes). Setting remote description...', 'info');
-          return pc.setRemoteDescription({ type: 'answer', sdp: validSdp });
+
+          function onCand(ev) {
+            if (!ev.candidate) {
+              finish();
+            } else if (ev.candidate.candidate && ev.candidate.candidate.indexOf(' typ relay') !== -1) {
+              if (!relaySeen) {
+                relaySeen = true;
+                log('Gathered TURN relay ICE candidate', 'info');
+              }
+              if (!settleTimer) settleTimer = setTimeout(finish, 250);
+            }
+          }
+
+          peer.addEventListener('icegatheringstatechange', checkState);
+          peer.addEventListener('icecandidate', onCand);
         });
-      })
-      .then(function () {
-        log('Remote description set. WebRTC stream active!', 'info');
-      })
-      .catch(function (err) {
-        log(err.message, 'warn');
-        setStreamBadge('offline', 'OFFLINE');
-        overlayTitle.textContent = 'OBS WebRTC Stream Offline';
-        overlayDesc.textContent = 'OBS Studio is running on the Remote Desktop. Switch to the "OBS Desktop (VNC)" tab to configure and start the stream!';
-        scheduleReconnect();
-      });
+      }
+
+      return pc.createOffer()
+        .then(function (offer) {
+          return pc.setLocalDescription(offer);
+        })
+        .then(function () {
+          return waitForIceGathering(pc, hasTurn ? 4000 : 800);
+        })
+        .then(function () {
+          if (mySeq !== connectSeq || !pc || !pc.localDescription) {
+            throw new Error('Connection superseded');
+          }
+          log('Sending SDP offer to /whep (' + pc.localDescription.sdp.length + ' bytes)...', 'info');
+          return fetch('/whep', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/sdp',
+              'Accept': 'application/sdp'
+            },
+            body: pc.localDescription.sdp
+          });
+        })
+        .then(function (response) {
+          var contentType = response.headers.get('content-type') || '';
+          var loc = response.headers.get('location');
+          if (loc) window.__whepResourceUrl = loc;
+          if (!response.ok) {
+            return response.text().then(function () {
+              throw new Error('OBS GStreamer stream offline (status ' + response.status + ')');
+            });
+          }
+          return response.text().then(function (answerSdp) {
+            var check = (answerSdp || '').trim();
+            if (contentType.includes('text/html') || check.startsWith('<') || !check.startsWith('v=')) {
+              throw new Error('Stream offline (gateway returned HTML instead of SDP answer)');
+            }
+            var validSdp = check.replace(/\r?\n/g, '\r\n') + '\r\n';
+            log('Received SDP answer (' + validSdp.length + ' bytes). Setting remote description...', 'info');
+            return pc.setRemoteDescription({ type: 'answer', sdp: validSdp });
+          });
+        })
+        .then(function () {
+          log('Remote description set. WebRTC stream active!', 'info');
+        });
+    }).catch(function (err) {
+      if (mySeq !== connectSeq) return;
+      log(err.message, 'warn');
+      setStreamBadge('offline', 'OFFLINE');
+      overlayTitle.textContent = 'OBS WebRTC Stream Offline';
+      overlayDesc.textContent = 'OBS Studio is running on the Remote Desktop. Switch to the "OBS Desktop (VNC)" tab to configure and start the stream!';
+      scheduleReconnect();
+    });
   }
 
   // Built-in Test Pattern Generator (WebRTC Loopback)
@@ -1045,15 +1119,35 @@
   var btnSaveTurn = document.getElementById('btn-save-turn');
 
   if (inputTurnUrl) {
-    inputTurnUrl.value = localStorage.getItem('webrtc_turn_url') || 'turn:openrelay.metered.ca:80';
-    inputTurnUser.value = localStorage.getItem('webrtc_turn_user') || 'openrelayproject';
-    inputTurnPass.value = localStorage.getItem('webrtc_turn_pass') || 'openrelayproject';
+    var cachedTurnUrl = localStorage.getItem('webrtc_turn_url') || '';
+    if (cachedTurnUrl === 'turn:openrelay.metered.ca:80') {
+      localStorage.removeItem('webrtc_turn_url');
+      localStorage.removeItem('webrtc_turn_user');
+      localStorage.removeItem('webrtc_turn_pass');
+      cachedTurnUrl = '';
+    }
+    inputTurnUrl.value = cachedTurnUrl;
+    inputTurnUser.value = cachedTurnUrl ? (localStorage.getItem('webrtc_turn_user') || '') : '';
+    inputTurnPass.value = cachedTurnUrl ? (localStorage.getItem('webrtc_turn_pass') || '') : '';
+    if (!cachedTurnUrl) {
+      inputTurnUrl.placeholder = 'Auto-configured via /turn-config.json (leave blank)';
+    }
 
     btnSaveTurn.addEventListener('click', function () {
-      localStorage.setItem('webrtc_turn_url', inputTurnUrl.value.trim());
-      localStorage.setItem('webrtc_turn_user', inputTurnUser.value.trim());
-      localStorage.setItem('webrtc_turn_pass', inputTurnPass.value.trim());
-      log('Saved TURN configuration. Reconnecting WebRTC...', 'info');
+      var val = inputTurnUrl.value.trim();
+      if (val) {
+        localStorage.setItem('webrtc_turn_url', val);
+        localStorage.setItem('webrtc_turn_user', inputTurnUser.value.trim());
+        localStorage.setItem('webrtc_turn_pass', inputTurnPass.value.trim());
+        log('Saved custom TURN configuration. Reconnecting WebRTC...', 'info');
+      } else {
+        localStorage.removeItem('webrtc_turn_url');
+        localStorage.removeItem('webrtc_turn_user');
+        localStorage.removeItem('webrtc_turn_pass');
+        inputTurnUser.value = '';
+        inputTurnPass.value = '';
+        log('Cleared custom TURN override; using auto /turn-config.json. Reconnecting WebRTC...', 'info');
+      }
       if (activeView === 'webrtc' && !isTestPattern) {
         connectWhep();
       }
