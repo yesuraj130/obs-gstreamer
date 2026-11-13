@@ -407,7 +407,7 @@ static gchar *build_encoder_element_str(const char *enc_name, int gop_size, int 
 	if (g_strcmp0(enc_name, "x264enc") == 0)
 	{
 		g_string_append_printf(str,
-			" tune=zerolatency speed-preset=ultrafast bframes=0 key-int-max=%d bitrate=%d",
+			" tune=zerolatency sliced-threads=false speed-preset=ultrafast bframes=0 key-int-max=%d bitrate=%d",
 			gop_size, bitrate_kbps);
 		return g_string_free(str, FALSE);
 	}

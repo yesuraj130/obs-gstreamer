@@ -1,0 +1,28 @@
+{
+  "tcpTunnelInfo": {
+    "host": "vjtfa-2600-1900-0-3e02--101.run.pinggy-free.link",
+    "port": "38051",
+    "full": "vjtfa-2600-1900-0-3e02--101.run.pinggy-free.link:38051",
+    "status": "online",
+    "provider": "pinggy",
+    "claimUrl": "",
+    "tailscaleIp": "",
+    "isReused": true,
+    "lastUpdated": "2026-11-13T05:00:20.794Z"
+  },
+  "webrtcHttpTunnel": {
+    "url": "https://ccwyl-2600-1900-0-3e02--101.run.pinggy-free.link",
+    "status": "online",
+    "isReused": true
+  },
+  "turnTunnelInfo": {
+    "host": "twquw-2600-1900-0-3e02--101.run.pinggy-free.link",
+    "port": "46739",
+    "full": "twquw-2600-1900-0-3e02--101.run.pinggy-free.link:46739",
+    "url": "turn:twquw-2600-1900-0-3e02--101.run.pinggy-free.link:46739?transport=tcp",
+    "status": "online",
+    "isReused": true,
+    "lastUpdated": "2026-11-13T05:00:20.831Z"
+  },
+  "savedAt": "2026-11-13T05:00:20.831Z"
+}

@@ -780,14 +780,6 @@
         log('WebRTC track received: ' + event.track.kind, 'info');
         statTracks.textContent = event.track.kind;
 
-        // Zero-latency playout & jitter buffer optimization in browser
-        if (pc.getReceivers) {
-          pc.getReceivers().forEach(function (r) {
-            if ('playoutDelayHint' in r) r.playoutDelayHint = 0;
-            if ('jitterBufferTarget' in r) r.jitterBufferTarget = 0;
-          });
-        }
-
         video.muted = true;
         if (!video.srcObject) {
           video.srcObject = event.streams[0] || new MediaStream([event.track]);

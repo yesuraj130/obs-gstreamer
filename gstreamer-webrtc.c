@@ -1233,8 +1233,8 @@ static void whep_post(struct gstreamer_webrtc *webrtc, SoupServerMessage *msg)
 		return;
 	}
 
-	g_object_set(session->queue, "leaky", 2 /* downstream */, "max-size-buffers", 2,
-		"max-size-time", (guint64)0, "max-size-bytes", (guint)0, NULL);
+	g_object_set(session->queue, "leaky", 2 /* downstream */, "max-size-buffers", 1024,
+		"max-size-time", (guint64)(500 * GST_MSECOND), "max-size-bytes", (guint)0, NULL);
 	g_object_set(session->webrtcbin, "bundle-policy", GST_WEBRTC_BUNDLE_POLICY_MAX_BUNDLE,
 		"latency", (guint)0, NULL);
 
@@ -1777,19 +1777,19 @@ struct gstreamer_webrtc *gst_webrtc_branch_start(gst_master_pipeline_t *master_p
 
 	gchar *launch = webrtc->is_h265
 		? g_strdup(
-			"appsrc name=appsrc_video is-live=true format=GST_FORMAT_TIME do-timestamp=true "
+			"appsrc name=appsrc_video is-live=true format=GST_FORMAT_TIME do-timestamp=true max-buffers=2 leaky-type=downstream "
 			"caps=\"video/x-h265, stream-format=byte-stream, alignment=au\" "
-			"! h265parse "
-			"! rtph265pay name=pay0 config-interval=-1 aggregate-mode=zero-latency "
+			"! h265parse config-interval=-1 "
+			"! rtph265pay name=pay0 config-interval=-1 mtu=1200 aggregate-mode=zero-latency "
 			"! tee name=t "
-			"t. ! queue leaky=downstream max-size-buffers=2 ! fakesink sync=false")
+			"t. ! queue leaky=downstream max-size-buffers=512 ! fakesink sync=false")
 		: g_strdup(
-			"appsrc name=appsrc_video is-live=true format=GST_FORMAT_TIME do-timestamp=true "
+			"appsrc name=appsrc_video is-live=true format=GST_FORMAT_TIME do-timestamp=true max-buffers=2 leaky-type=downstream "
 			"caps=\"video/x-h264, stream-format=byte-stream, alignment=au\" "
-			"! h264parse "
-			"! rtph264pay name=pay0 config-interval=-1 aggregate-mode=zero-latency "
+			"! h264parse config-interval=-1 "
+			"! rtph264pay name=pay0 config-interval=-1 mtu=1200 aggregate-mode=zero-latency "
 			"! tee name=t "
-			"t. ! queue leaky=downstream max-size-buffers=2 ! fakesink sync=false");
+			"t. ! queue leaky=downstream max-size-buffers=512 ! fakesink sync=false");
 
 	GError *err = NULL;
 	webrtc->pipe = gstreamer_parse_launch_checked(launch, &err);
