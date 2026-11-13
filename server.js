@@ -553,7 +553,7 @@ function spawnNewWebrtcHttpTunnel() {
 }
 
 function ensureCoturn(callback) {
-  exec('ip addr add 10.200.0.1/24 dev eth1 2>/dev/null || true; pgrep -x turnserver >/dev/null && echo "1" || echo "0"', (err, stdout) => {
+  exec('ip addr add 10.200.0.1/24 dev eth1 2>/dev/null || true; ip addr add 198.51.100.1/24 dev eth1 2>/dev/null || true; pgrep -x turnserver >/dev/null && echo "1" || echo "0"', (err, stdout) => {
     const running = stdout && stdout.trim() === '1';
     if (running) {
       writeTurnConfigFiles();
@@ -562,6 +562,7 @@ function ensureCoturn(callback) {
     }
     const startCoturnCmd = `
       ip addr add 10.200.0.1/24 dev eth1 2>/dev/null || true
+      ip addr add 198.51.100.1/24 dev eth1 2>/dev/null || true
       if ! which turnserver >/dev/null 2>&1; then
         export DEBIAN_FRONTEND=noninteractive
         apt-get update && apt-get install -y --no-install-recommends -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" coturn || true
@@ -571,6 +572,7 @@ function ensureCoturn(callback) {
 listening-port=${TURN_PORT}
 listening-ip=127.0.0.1
 listening-ip=10.200.0.1
+listening-ip=198.51.100.1
 relay-ip=127.0.0.1
 external-ip=8.8.8.8/127.0.0.1
 min-port=49152
@@ -712,8 +714,13 @@ function startTCPTunnel(forceReset = false) {
   startTurnTunnel(forceReset);
 }
 
-// Start public tunnels on server init
+// Start public tunnels on server init and keep them alive if 60m free session expires
 startTCPTunnel();
+setInterval(() => {
+  startPinggyTunnel(false);
+  startWebrtcHttpTunnel(false);
+  startTurnTunnel(false);
+}, 30000);
 
 function checkPort(port, host, callback) {
   const socket = new net.Socket();

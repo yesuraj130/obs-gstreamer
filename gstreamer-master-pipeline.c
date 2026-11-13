@@ -902,7 +902,7 @@ static GstElement *create_master_encoder_pipeline(gst_master_pipeline_t *hub, co
 		gchar *enc_str = build_encoder_element_str(chosen_enc, gop_size, bitrate);
 
 		bool is_h265 = hub->video_codec && g_strcmp0(hub->video_codec, "h265") == 0;
-		const char *parse_elem = is_h265 ? "h265parse" : "h264parse";
+		const char *parse_elem = is_h265 ? "h265parse config-interval=-1" : "h264parse config-interval=-1";
 		const char *caps_elem = is_h265 ? "video/x-h265" : "video/x-h264";
 
 #if HAVE_GST_D3D11

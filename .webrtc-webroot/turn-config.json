@@ -1,12 +1,12 @@
 {
   "iceServers": [
     {
-      "urls": "turn:mblza-2600-1900-0-3e05--401.run.pinggy-free.link:39223?transport=tcp",
+      "urls": "turn:monwu-2600-1900-0-3e05--401.run.pinggy-free.link:37727?transport=tcp",
       "username": "obs",
       "credential": "turnpassword"
     }
   ],
   "iceTransportPolicy": "relay",
-  "publicTurn": "turn:mblza-2600-1900-0-3e05--401.run.pinggy-free.link:39223?transport=tcp",
+  "publicTurn": "turn:monwu-2600-1900-0-3e05--401.run.pinggy-free.link:37727?transport=tcp",
   "localTurn": "turn:127.0.0.1:3478?transport=tcp"
 }

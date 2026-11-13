@@ -45,6 +45,7 @@ struct packet_counter {
 	const char *label;
 	uint64_t count;
 	int target_pt;
+	char profile_level_id[16];
 };
 
 static GstPadProbeReturn rtp_packet_probe(GstPad *pad, GstPadProbeInfo *info,
@@ -396,16 +397,23 @@ static const char *default_app_js =
 "      if (typeof RTCRtpReceiver !== 'undefined' && RTCRtpReceiver.getCapabilities) {\n"
 "        var caps = RTCRtpReceiver.getCapabilities('video');\n"
 "        if (caps && caps.codecs) {\n"
-"          var h265Codecs = caps.codecs.filter(function (c) {\n"
-"            return c.mimeType && (c.mimeType.toLowerCase() === 'video/h265' || c.mimeType.toLowerCase() === 'video/hevc');\n"
+"          var h264Pm1 = caps.codecs.filter(function (c) {\n"
+"            var m = c.mimeType ? c.mimeType.toLowerCase() : '';\n"
+"            var f = c.sdpFmtpLine ? c.sdpFmtpLine.toLowerCase() : '';\n"
+"            return m === 'video/h264' && f.indexOf('packetization-mode=1') !== -1 &&\n"
+"                   (f.indexOf('42e0') !== -1 || f.indexOf('4200') !== -1);\n"
 "          });\n"
-"          if (h265Codecs.length > 0) {\n"
-"            var otherCodecs = caps.codecs.filter(function (c) {\n"
-"              return !c.mimeType || (c.mimeType.toLowerCase() !== 'video/h265' && c.mimeType.toLowerCase() !== 'video/hevc');\n"
+"          var h265Codecs = caps.codecs.filter(function (c) {\n"
+"            var m = c.mimeType ? c.mimeType.toLowerCase() : '';\n"
+"            return m === 'video/h265' || m === 'video/hevc';\n"
+"          });\n"
+"          var preferred = h264Pm1.concat(h265Codecs);\n"
+"          if (preferred.length > 0) {\n"
+"            var rest = caps.codecs.filter(function (c) {\n"
+"              return preferred.indexOf(c) === -1;\n"
 "            });\n"
 "            try {\n"
-"              tc.setCodecPreferences(h265Codecs.concat(otherCodecs));\n"
-"              console.log('[obs-webrtc] Preferred H265/HEVC in browser WebRTC capabilities');\n"
+"              tc.setCodecPreferences(preferred.concat(rest));\n"
 "            } catch (e) {}\n"
 "          }\n"
 "        }\n"
@@ -413,6 +421,7 @@ static const char *default_app_js =
 "\n"
 "      pc.ontrack = function (event) {\n"
 "        console.log('[obs-webrtc] ontrack', event.track.kind, event.track.readyState, event.streams);\n"
+"        video.muted = true;\n"
 "        video.srcObject = event.streams[0] || new MediaStream([event.track]);\n"
 "        video.play().catch(function (err) {\n"
 "          setStatus('playback error: ' + err.message);\n"
@@ -420,6 +429,8 @@ static const char *default_app_js =
 "        setStatus('video track received');\n"
 "      };\n"
 "      video.onloadedmetadata = function () {\n"
+"        video.muted = true;\n"
+"        video.play().catch(function () {});\n"
 "        setStatus('metadata: ' + video.videoWidth + 'x' + video.videoHeight);\n"
 "      };\n"
 "      video.onplaying = function () { setStatus('playing: ' + video.videoWidth + 'x' + video.videoHeight); };\n"
@@ -680,9 +691,14 @@ static void webrtcbin_connection_state_changed(GstElement *webrtcbin, GParamSpec
 	GstWebRTCPeerConnectionState state;
 
 	g_object_get(webrtcbin, "connection-state", &state, NULL);
-	blog(LOG_DEBUG, "[obs-gstreamer] WHEP session %s: connection-state %d",
+	blog(LOG_INFO, "[obs-gstreamer-webrtc] WHEP session %s: connection-state %d",
 		GST_ELEMENT_NAME(webrtcbin), (int)state);
 	if (state == GST_WEBRTC_PEER_CONNECTION_STATE_CONNECTED) {
+		if (webrtc && webrtc->pay0) {
+			GstEvent *event = gst_video_event_new_upstream_force_key_unit(
+				GST_CLOCK_TIME_NONE, TRUE, 0);
+			gst_element_send_event(webrtc->pay0, event);
+		}
 		if (webrtc && webrtc->master_pipe) {
 			gst_master_pipeline_request_keyframe(webrtc->master_pipe);
 		}
@@ -1215,8 +1231,9 @@ static void whep_post(struct gstreamer_webrtc *webrtc, SoupServerMessage *msg)
 		soup_server_message_set_status(msg, SOUP_STATUS_BAD_REQUEST, NULL);
 		return;
 	}
-	// Find the viewer's offered RTP payload type for H264 / H265
+	// Find the viewer's offered RTP payload type and profile-level-id for H264 / H265
 	int matched_pt = 96;
+	char matched_profile_level_id[16] = {0};
 	const char *want_enc = webrtc->is_h265 ? "H265" : "H264";
 	guint n_medias = gst_sdp_message_medias_len(offer_sdp);
 	for (guint mi = 0; mi < n_medias; mi++) {
@@ -1224,7 +1241,14 @@ static void whep_post(struct gstreamer_webrtc *webrtc, SoupServerMessage *msg)
 		if (!media || g_strcmp0(gst_sdp_media_get_media(media), "video") != 0)
 			continue;
 		int first_match_pt = 0;
-		int baseline_match_pt = 0;
+		char first_plid[16] = {0};
+		int pm1_match_pt = 0;
+		char pm1_plid[16] = {0};
+		int base_pm1_pt = 0;
+		char base_pm1_plid[16] = {0};
+		int cbase_pm1_pt = 0;
+		char cbase_pm1_plid[16] = {0};
+
 		guint n_attrs = gst_sdp_media_attributes_len(media);
 		for (guint ai = 0; ai < n_attrs; ai++) {
 			const GstSDPAttribute *attr = gst_sdp_media_get_attribute(media, ai);
@@ -1244,26 +1268,60 @@ static void whep_post(struct gstreamer_webrtc *webrtc, SoupServerMessage *msg)
 							continue;
 						int fmtp_pt = 0;
 						if (sscanf(fa->value, "%d ", &fmtp_pt) == 1 && fmtp_pt == pt) {
-							if (strstr(fa->value, "42e0") || strstr(fa->value, "4200") ||
-							    strstr(fa->value, "42E0")) {
-								if (!baseline_match_pt)
-									baseline_match_pt = pt;
+							char plid[16] = {0};
+							const char *plid_pos = strstr(fa->value, "profile-level-id=");
+							if (plid_pos) {
+								sscanf(plid_pos + 17, "%15[^; \r\n]", plid);
+							}
+							if (!first_plid[0] && plid[0])
+								g_strlcpy(first_plid, plid, sizeof(first_plid));
+
+							bool is_pm0 = strstr(fa->value, "packetization-mode=0") != NULL;
+							if (!is_pm0) {
+								if (!pm1_match_pt) {
+									pm1_match_pt = pt;
+									g_strlcpy(pm1_plid, plid, sizeof(pm1_plid));
+								}
+								if (g_ascii_strncasecmp(plid, "42e0", 4) == 0) {
+									if (!cbase_pm1_pt) {
+										cbase_pm1_pt = pt;
+										g_strlcpy(cbase_pm1_plid, plid, sizeof(cbase_pm1_plid));
+									}
+								} else if (g_ascii_strncasecmp(plid, "4200", 4) == 0 ||
+								           g_ascii_strncasecmp(plid, "42c0", 4) == 0) {
+									if (!base_pm1_pt) {
+										base_pm1_pt = pt;
+										g_strlcpy(base_pm1_plid, plid, sizeof(base_pm1_plid));
+									}
+								}
 							}
 						}
 					}
 				}
 			}
 		}
-		if (baseline_match_pt > 0)
-			matched_pt = baseline_match_pt;
-		else if (first_match_pt > 0)
+		if (cbase_pm1_pt > 0) {
+			matched_pt = cbase_pm1_pt;
+			g_strlcpy(matched_profile_level_id, cbase_pm1_plid, sizeof(matched_profile_level_id));
+		} else if (base_pm1_pt > 0) {
+			matched_pt = base_pm1_pt;
+			g_strlcpy(matched_profile_level_id, base_pm1_plid, sizeof(matched_profile_level_id));
+		} else if (pm1_match_pt > 0) {
+			matched_pt = pm1_match_pt;
+			g_strlcpy(matched_profile_level_id, pm1_plid, sizeof(matched_profile_level_id));
+		} else if (first_match_pt > 0) {
 			matched_pt = first_match_pt;
+			g_strlcpy(matched_profile_level_id, first_plid, sizeof(matched_profile_level_id));
+		}
 		break;
 	}
 	session->rtp_counter.label = session->id;
 	session->rtp_counter.target_pt = matched_pt;
-	blog(LOG_INFO, "[obs-gstreamer-webrtc] WHEP session %s: matched %s RTP payload type pt=%d",
-		session->id, want_enc, matched_pt);
+	g_strlcpy(session->rtp_counter.profile_level_id, matched_profile_level_id,
+		sizeof(session->rtp_counter.profile_level_id));
+	blog(LOG_INFO, "[obs-gstreamer-webrtc] WHEP session %s: matched %s RTP payload type pt=%d (profile-level-id=%s)",
+		session->id, want_enc, matched_pt,
+		matched_profile_level_id[0] ? matched_profile_level_id : "default");
 
 	GstSDPMessage *offer_sdp_copy = NULL;
 	gst_sdp_message_copy(offer_sdp, &offer_sdp_copy);
@@ -1381,11 +1439,9 @@ static void whep_post(struct gstreamer_webrtc *webrtc, SoupServerMessage *msg)
 		}
 	}
 
-	blog(LOG_INFO, "[obs-gstreamer] WHEP POST %s: branch added (unlinked), negotiating", session->id);
+	blog(LOG_INFO, "[obs-gstreamer] WHEP POST %s: branch added, negotiating", session->id);
 
-	// Negotiate: offer -> answer. Canonical WHEP answerer flow:
-	// set-remote-description -> request+link sink pad (elements in NULL)
-	// -> create-answer -> set-local-description -> wait ICE complete.
+	// Negotiate: offer -> answer.
 	blog(LOG_INFO, "[obs-gstreamer] WHEP POST: offer parsed (%u bytes), starting negotiation", (guint)size);
 
 	struct answer_ctx *ctx = g_new0(struct answer_ctx, 1);
@@ -1551,7 +1607,7 @@ static void seed_web_root(const char *root)
 		return;
 	}
 
-	const char *seed_ver = "2";
+	const char *seed_ver = "3";
 	char *ver_file = g_build_filename(root, ".seed_version", NULL);
 	char *cur_ver = NULL;
 	gboolean need_upgrade = TRUE;

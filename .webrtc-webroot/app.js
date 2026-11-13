@@ -751,16 +751,24 @@
       if (typeof RTCRtpReceiver !== 'undefined' && RTCRtpReceiver.getCapabilities) {
         var caps = RTCRtpReceiver.getCapabilities('video');
         if (caps && caps.codecs) {
-          var h265Codecs = caps.codecs.filter(function (c) {
-            return c.mimeType && (c.mimeType.toLowerCase() === 'video/h265' || c.mimeType.toLowerCase() === 'video/hevc');
+          var h264Pm1 = caps.codecs.filter(function (c) {
+            var m = c.mimeType ? c.mimeType.toLowerCase() : '';
+            var f = c.sdpFmtpLine ? c.sdpFmtpLine.toLowerCase() : '';
+            return m === 'video/h264' && f.indexOf('packetization-mode=1') !== -1 &&
+                   (f.indexOf('42e0') !== -1 || f.indexOf('4200') !== -1);
           });
-          if (h265Codecs.length > 0) {
+          var h265Codecs = caps.codecs.filter(function (c) {
+            var m = c.mimeType ? c.mimeType.toLowerCase() : '';
+            return m === 'video/h265' || m === 'video/hevc';
+          });
+          var preferred = h264Pm1.concat(h265Codecs);
+          if (preferred.length > 0) {
             var otherCodecs = caps.codecs.filter(function (c) {
-              return !c.mimeType || (c.mimeType.toLowerCase() !== 'video/h265' && c.mimeType.toLowerCase() !== 'video/hevc');
+              return preferred.indexOf(c) === -1;
             });
             try {
-              videoTransceiver.setCodecPreferences(h265Codecs.concat(otherCodecs));
-              log('Preferred H265/HEVC in browser WebRTC capabilities', 'info');
+              videoTransceiver.setCodecPreferences(preferred.concat(otherCodecs));
+              log('Preferred H264 (packetization-mode=1) & H265 in browser WebRTC capabilities', 'info');
             } catch (e) {
               log('setCodecPreferences warning: ' + e.message, 'warn');
             }
@@ -780,6 +788,7 @@
           });
         }
 
+        video.muted = true;
         if (!video.srcObject) {
           video.srcObject = event.streams[0] || new MediaStream([event.track]);
         } else {
@@ -791,6 +800,8 @@
       };
 
       video.onloadedmetadata = function () {
+        video.muted = true;
+        video.play().catch(function () {});
         var res = video.videoWidth + 'x' + video.videoHeight;
         statDimensions.textContent = res;
         badgeResolution.textContent = res;
