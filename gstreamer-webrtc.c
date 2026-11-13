@@ -64,6 +64,8 @@ static GstPadProbeReturn rtp_packet_probe(GstPad *pad, GstPadProbeInfo *info,
 				GstCaps *new_caps = gst_caps_copy(caps);
 				GstStructure *s = gst_caps_get_structure(new_caps, 0);
 				gst_structure_set(s, "payload", G_TYPE_INT, counter->target_pt, NULL);
+				gst_structure_remove_field(s, "profile-level-id");
+				gst_structure_remove_field(s, "level-asymmetry-allowed");
 				GstEvent *new_ev = gst_event_new_caps(new_caps);
 				gst_caps_unref(new_caps);
 				gst_event_unref(ev);
@@ -122,6 +124,7 @@ struct answer_ctx {
 	gatomicrefcount ref_count;
 	struct gstreamer_webrtc *webrtc;
 	char *session_id;
+	int caps_wait_ticks;
 };
 
 struct gstreamer_webrtc {
@@ -975,8 +978,10 @@ static void on_gathering_complete(GstElement *webrtcbin, GParamSpec *pspec, gpoi
 		return;
 	}
 
-	blog(LOG_INFO, "[obs-gstreamer] WHEP session %s: ICE gathering complete, sending 201 answer",
-		session->id);
+	blog(LOG_INFO, "[obs-gstreamer] WHEP session %s: ICE gathering complete, sending 201 answer (has_ssrc=%s, has_fmtp=%s)",
+		session->id,
+		(sdp_text && strstr(sdp_text, "a=ssrc:")) ? "yes" : "no",
+		(sdp_text && strstr(sdp_text, "a=fmtp:")) ? "yes" : "no");
 	session_ctx = session->answer_ctx;
 	session->answer_ctx = NULL;
 
@@ -1022,6 +1027,33 @@ static void on_local_description_set(GstPromise *promise, gpointer user_data)
 	answer_ctx_unref(ctx);
 }
 
+static gboolean poll_sinkpad_caps_before_answer(gpointer user_data)
+{
+	struct answer_ctx *ctx = user_data;
+	g_mutex_lock(&ctx->webrtc->sessions_lock);
+	struct whep_session *session = lookup_answer_session_locked(ctx);
+	if (!session || session->answer_ctx != ctx || !session->webrtcbin) {
+		g_mutex_unlock(&ctx->webrtc->sessions_lock);
+		return G_SOURCE_REMOVE;
+	}
+	bool has_caps = session->sinkpad && gst_pad_has_current_caps(session->sinkpad);
+	ctx->caps_wait_ticks++;
+	if (!has_caps && ctx->caps_wait_ticks < 40) {
+		g_mutex_unlock(&ctx->webrtc->sessions_lock);
+		return G_SOURCE_CONTINUE;
+	}
+	GstElement *webrtcbin = gst_object_ref(session->webrtcbin);
+	g_mutex_unlock(&ctx->webrtc->sessions_lock);
+
+	blog(LOG_INFO, "[obs-gstreamer] WHEP session %s: creating answer (sinkpad_caps=%s, waited=%d ms)",
+		ctx->session_id, has_caps ? "ready" : "timeout", ctx->caps_wait_ticks * 10);
+	GstPromise *p = gst_promise_new_with_change_func(on_answer_created,
+		answer_ctx_ref(ctx), answer_ctx_unref);
+	g_signal_emit_by_name(webrtcbin, "create-answer", NULL, p);
+	gst_object_unref(webrtcbin);
+	return G_SOURCE_REMOVE;
+}
+
 static void on_remote_description_set(GstPromise *promise, gpointer user_data)
 {
 	struct answer_ctx *ctx = user_data;
@@ -1039,6 +1071,7 @@ static void on_remote_description_set(GstPromise *promise, gpointer user_data)
 	struct whep_session *session = lookup_answer_session_locked(ctx);
 	GstElement *queue = session && session->queue ? gst_object_ref(session->queue) : NULL;
 	GstElement *webrtcbin = session && session->webrtcbin ? gst_object_ref(session->webrtcbin) : NULL;
+	bool has_caps = session && session->sinkpad && gst_pad_has_current_caps(session->sinkpad);
 	g_mutex_unlock(&ctx->webrtc->sessions_lock);
 	if (!queue || !webrtcbin) {
 		if (queue) gst_object_unref(queue);
@@ -1049,8 +1082,8 @@ static void on_remote_description_set(GstPromise *promise, gpointer user_data)
 
 	gst_element_sync_state_with_parent(queue);
 	gst_element_sync_state_with_parent(webrtcbin);
-	blog(LOG_INFO, "[obs-gstreamer] WHEP session %s: branch synced to PLAYING",
-		ctx->session_id);
+	blog(LOG_INFO, "[obs-gstreamer] WHEP session %s: branch synced to PLAYING (sinkpad_caps=%s)",
+		ctx->session_id, has_caps ? "ready" : "waiting");
 	GArray *transceivers = NULL;
 	g_signal_emit_by_name(webrtcbin, "get-transceivers", &transceivers);
 	blog(LOG_INFO, "[obs-gstreamer] WHEP session %s: transceivers after offer: %u",
@@ -1062,9 +1095,26 @@ static void on_remote_description_set(GstPromise *promise, gpointer user_data)
 	blog(LOG_INFO, "[obs-gstreamer] WHEP session %s: signaling state before answer: %d",
 		ctx->session_id, (int)signaling_state);
 
-	GstPromise *p = gst_promise_new_with_change_func(on_answer_created,
-		answer_ctx_ref(ctx), answer_ctx_unref);
-	g_signal_emit_by_name(webrtcbin, "create-answer", NULL, p);
+	if (has_caps) {
+		GstPromise *p = gst_promise_new_with_change_func(on_answer_created,
+			answer_ctx_ref(ctx), answer_ctx_unref);
+		g_signal_emit_by_name(webrtcbin, "create-answer", NULL, p);
+	} else {
+		GSource *source = g_timeout_source_new(10);
+		g_source_set_callback(source, poll_sinkpad_caps_before_answer,
+			answer_ctx_ref(ctx), answer_ctx_unref);
+		g_mutex_lock(&ctx->webrtc->source_lock);
+		GMainContext *context = ctx->webrtc->loop_context
+			? g_main_context_ref(ctx->webrtc->loop_context) : NULL;
+		g_mutex_unlock(&ctx->webrtc->source_lock);
+		if (context) {
+			g_source_attach(source, context);
+			g_main_context_unref(context);
+		} else {
+			g_source_destroy(source);
+		}
+		g_source_unref(source);
+	}
 	gst_object_unref(queue);
 	gst_object_unref(webrtcbin);
 	answer_ctx_unref(ctx);
